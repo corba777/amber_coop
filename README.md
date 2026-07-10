@@ -109,6 +109,8 @@ See `CLAUDE.md` for the full engineering map and roadmap.
 Design & code: Artem Zvyagintsev, with an AI pair (Claude).
 QA Lead: Ilya, who cleared the classic quest before it had a name for its
 difficulty and whose canon the tests guard.
+QA and Contributor: [Alexey Belozerov](https://github.com/abelozerov) — playtesting across
+the ocean, latency reports, and the agent-combat tickets that became tests.
 Playtesters: family and friends who filed every ticket in this changelog.
 
 MIT license.
