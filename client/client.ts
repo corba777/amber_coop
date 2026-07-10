@@ -55,6 +55,7 @@ function sendName(): void {
       try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
     }
     if (gate) gate.style.display = "none";
+    releaseNameFocus();
     sendName();
   };
   if (gate && input && go) {
@@ -113,6 +114,11 @@ ws.onmessage = ev => {
     if (snapTime > 0) snapInterval = Math.min(80, Math.max(16, now - snapTime));
     snapTime = now;
     snap = msg.s;
+    if (msg.s.screen === "play") releaseNameFocus();
+    const me = msg.s.players[mySlot];
+    if (msg.s.screen === "play" && me?.present) {
+      reconcile(pred, me.x, me.y, msg.s.room, me.downed);
+    }
     for (const e of msg.s.events) handleEvent(e);
   } else if (msg.t === "full") {
     alert(msg.reason ?? "Server is full.");
@@ -334,7 +340,13 @@ if (touchUI && ("ontouchstart" in window || navigator.maxTouchPoints > 0)) {
 // ----------------------------------------------------------------- canvas
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 canvas.width = W; canvas.height = H;
+canvas.tabIndex = 0;
 const ctx = canvas.getContext("2d")!;
+function releaseNameFocus(): void {
+  (document.getElementById("namein") as HTMLInputElement | null)?.blur();
+  canvas.focus();
+}
+canvas.addEventListener("pointerdown", () => canvas.focus());
 const pipCanvas = document.getElementById("pip") as HTMLCanvasElement | null;
 const pipSize = partnerPipCanvasSize();
 const pipOrigin = partnerPipOrigin();

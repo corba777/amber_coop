@@ -544,6 +544,7 @@ function freshPlay(): Game {
     ok(src.includes("namegate"), `${file}: name gate present`);
     ok(src.includes("copylink"), `${file}: invite-copy button present`);
     ok(src.includes("input.select()"), `${file}: name gate asks on every load (prefilled)`);
+    ok(src.includes("releaseNameFocus"), `${file}: name field releases focus for WASD`);
     ok(src.includes("menu.auto = true"), `${file}: the AUTOPILOT menu path is reachable`);
     ok(src.includes("partnerView") && src.includes("drawPartnerPip"),
        `${file}: stage-2 scry mirror wired (partnerView + drawPartnerPip)`);
@@ -1634,6 +1635,212 @@ function freshPlay(): Game {
   const inp = agent.control(g2);
   ok(inp.r !== true || g2.room === beforeRoom,
      "agent yields the doorway while the human stands on it");
+}
+
+// ------------------------------------------------- 42. stage 4: free roam leave permission
+{
+  console.log("[42] stage 4: npc cannot leave while hero fights or is downed");
+  const { canNpcLeave, heroInCombat } = await import("../shared/core");
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const right = { ...emptyInput(), r: true };
+
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[1].npc = true;
+  g.enemies = [makeEnemy("slime", g.players[0].x + 24, g.players[0].y)];
+  g.players[1].x = W - PLAYER_W - 3;
+  g.players[1].y = 6.5 * TILE;
+  ok(heroInCombat(g, 0), "slime puts the hero in combat");
+  ok(!canNpcLeave(g, 1), "leave permission denied while hero fights");
+  for (let t = 0; t < 30 && g.sims[0].room === 0; t++) step(g, emptyInput(), right, prev);
+  ok(g.sims[0].room === 0, "npc blocked at the doorway during combat");
+
+  const g2 = freshPlay();
+  g2.travelMode = "free";
+  g2.players[1].npc = true;
+  g2.players[0].downed = true;
+  g2.players[0].hp = 0;
+  g2.players[1].x = W - PLAYER_W - 3;
+  g2.players[1].y = 6.5 * TILE;
+  ok(!canNpcLeave(g2, 1), "leave permission denied while hero is downed");
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let t = 0; t < 30 && g2.sims[0].room === 0; t++) step(g2, emptyInput(), right, prev2);
+  ok(g2.sims[0].room === 0, "npc blocked at the doorway while hero is down");
+
+  const g3 = freshPlay();
+  g3.travelMode = "free";
+  g3.players[1].npc = true;
+  g3.players[1].x = W - PLAYER_W - 3;
+  g3.players[1].y = 6.5 * TILE;
+  ok(canNpcLeave(g3, 1), "leave permitted when hero is safe");
+  const prev3: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let t = 0; t < 20 && g3.sims[0].room === 0; t++) step(g3, emptyInput(), right, prev3);
+  ok(g3.sims.length >= 2 && g3.sims[1].room === 1, "npc may split when hero is safe");
+}
+
+// ------------------------------------------------- 43. stage 4: errand abort on rescue failsafe
+{
+  console.log("[43] stage 4: away errand aborts on rescue failsafe");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 0;
+  g.players[1].simIndex = 1;
+  g.players[1].npc = true;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.activeSim = 1;
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "guard" });
+  type Mut = { intent: { action: string }; routeAssists: number };
+  (agent as unknown as Mut).intent = { action: "follow" };
+  agent.control(g);
+  ok(agent.errandLog.length === 1 && agent.errandLog[0].goal === "bow",
+     "fetch errand auto-starts when partner is away without the bow");
+  for (let i = 0; i < 95; i++) agent.control(g);
+  ok(agent.errandLog[0].abortReason === "rescue failsafe",
+     "errand aborts when the alone hero has waited past guard patience");
+  ok(agent.errandLog[0].heroDownsDuring === 1, "errand telemetry counts hero downs");
+  ok(agent.errandLog[0].abortedTick != null, "errand record closed after abort");
+  ok((agent as unknown as Mut).intent.action === "exit",
+     "controller routes back toward the downed hero's room");
+}
+
+// ------------------------------------------------- 44. stage 4: errand declaration + observation
+{
+  console.log("[44] stage 4: errand declares via say + observation");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 1;
+  g.players[1].simIndex = 0;
+  g.activeSim = 0;
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  type Mut = { intent: { action: string } };
+  (agent as unknown as Mut).intent = { action: "idle" };
+  agent.control(g);
+  const quip = agent.takeSay();
+  ok(quip?.includes("bow"), "errand promise lands in the say queue");
+  const obs = JSON.parse(agent.observe(g)) as {
+    errand: { goal: string; room: string; why: string } | null;
+  };
+  ok(obs.errand?.goal === "bow", "observation exposes the active errand goal");
+  ok(obs.errand?.room.includes("Snow"), "observation names the fetch room");
+  ok(obs.errand?.why.length > 0, "observation carries errand why");
+}
+
+// ------------------------------------------------- 45. free roam: lake pacified + cave round-trip safety
+{
+  console.log("[45] free roam lake revisit + cave round-trip do not respawn or hang");
+  const { loadRoom, newRoomSim } = await import("../shared/core");
+
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.cleared[2] = true;
+  loadRoom(g, 2, 8 * TILE, 8 * TILE);
+  ok(g.enemies.every(e => e.dead || g.enemies.length === 0),
+     "pacified Amber Lake stays empty on reload in free roam");
+
+  const gCanon = freshPlay();
+  gCanon.travelMode = "linked";
+  loadRoom(gCanon, 2, 8 * TILE, 8 * TILE);
+  ok(gCanon.enemies.some(e => !e.dead), "linked lake still spawns its slime (canon)");
+
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const g2 = freshPlay();
+  g2.travelMode = "free";
+  g2.players[1].npc = true;
+  g2.sims.push(newRoomSim());
+  g2.sims[1].room = 2;
+  g2.sims[1].tiles[2] = ROOMS[2].tiles.map(r => r);
+  g2.sims[1].enemies = [];
+  g2.cleared[2] = true;
+  g2.players[0].simIndex = 1;
+  g2.players[0].x = 9 * TILE;
+  g2.players[0].y = 3 * TILE;
+  g2.players[1].simIndex = 0;
+  g2.players[1].x = 6 * TILE;
+  g2.players[1].y = 6 * TILE;
+
+  const { AgentPlayer } = await import("../server/agent");
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  type Mut = { intent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "exit", dir: "cave" };
+  let transitions = 0;
+  for (let t = 0; t < 200; t++) {
+    const roomBefore = g2.sims[g2.players[1].simIndex].room;
+    g2.activeSim = g2.players[1].simIndex;
+    const inp = agent.control(g2);
+    step(g2, emptyInput(), inp, prev);
+    if (g2.sims[g2.players[1].simIndex].room !== roomBefore) transitions++;
+  }
+  ok(g2.players.every(p => p.simIndex < g2.sims.length),
+     "sim indices stay valid during cave errand routing");
+  ok(transitions >= 1, "agent actually crossed at least one room boundary");
+  const agentRoom = g2.sims[g2.players[1].simIndex].room;
+  ok(agentRoom >= 0 && agentRoom < ROOMS.length, "agent stays on the world graph after cave routing");
+}
+
+// ------------------------------------------------- 46. free roam: per-viewer transition overlay
+{
+  console.log("[46] free roam transition fade/banner only hits the crosser");
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const right = { ...emptyInput(), r: true };
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[0].x = W - PLAYER_W - 3;
+  g.players[0].y = 6.5 * TILE;
+  for (let t = 0; t < 20 && g.players[0].simIndex === 0; t++) step(g, right, emptyInput(), prev);
+  ok(g.sims[g.players[0].simIndex].room === 1, "hero crossed for overlay test");
+  ok(g.players[0].crossBanner.includes("Forest"), "crosser's per-player banner is set");
+  ok(g.players[0].crossBannerT > 0, "crosser banner timer running");
+  const crosser = toSnapshot(g, ["ARTEM", "BOT"], 0, false);
+  const stayer = toSnapshot(g, ["ARTEM", "BOT"], 1, false);
+  ok(crosser.message.includes("Forest"), "crosser sees their room banner");
+  ok(crosser.fade > 0, "crosser gets transition fade");
+  ok(stayer.messageT === 0, "stayer is not spammed with the partner's room name");
+  ok(stayer.fade === 0, "stayer screen stays bright when only the partner crosses");
+}
+
+// ------------------------------------------------- 47. stale pickup abandoned when bow is already team-owned
+{
+  console.log("[47] stale pickup intent yields when the bow is already yours");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.hasBow = true;
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 7;
+  g.sims[1].tiles[7] = ROOMS[7].tiles.map(r => r);
+  g.players[0].simIndex = 0;
+  g.players[1].simIndex = 1;
+  g.activeSim = 1;
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  type Mut = { intent: { action: string; dir?: string; target?: number };
+               llmIntent: { action: string; target?: number } };
+  const m = agent as unknown as Mut;
+  m.intent = { action: "pickup", target: 0 };
+  m.llmIntent = { action: "pickup", target: 0 };
+  agent.control(g);
+  ok(m.intent.action === "exit",
+     "agent routes onward instead of chasing a bow pickup the team already has");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

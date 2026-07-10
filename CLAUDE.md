@@ -19,6 +19,15 @@ node dist/server.js           # serve on :8081 (PORT env to change)
 PROVIDERS=mock N=5 node dist/bench.js                    # headless agent benchmark
 PROVIDERS=anthropic,ollama N=10 TEMPERAMENT=hunter PLAN_TICKS=90 node dist/bench.js
 ./scripts/deploy-dgx.sh       # rsync + docker compose on spark-a510 (DGX)
+./scripts/publish-dgx.sh      # selftest gate, then deploy-dgx.sh
+```
+
+**DGX release loop (manual):** work on `az_dev`, merge approved trunk, deploy
+from the laptop:
+
+```bash
+git checkout az_dev && git fetch origin && git merge origin/main
+./scripts/publish-dgx.sh
 ```
 
 `.env` (see `.env.example`): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
@@ -139,26 +148,21 @@ and projectiles are sim-local. Remote-revive on transition is LINKED-only
 anchor). Doorway settle: `transitionCd`, npc yield when overlapping the human,
 agent reunite→follow ([41]). Agent bridge (pre-Stage-4): when partner is in
 another room, `observe()` reports `partner.away`, route assist fires like solo,
-and follow does not chase stale coordinates (test [40]). Full errand autonomy —
-declared goals, leave permission, room-aware rescue failsafe — remains Stage 4.
+and follow does not chase stale coordinates (test [40]). **Stage 4 DONE:** declared
+fetch errands (bow / elixir / charm) with `say` + controller `why` in plans.jsonl;
+FREE ROAM leave permission (hero not downed, not in combat — test [42]); room-aware
+errand abort on rescue failsafe (test [43]); errand telemetry in matches.jsonl
+(test [44]).
 
-**Stage 4 — partner autonomy (errands) on the same machinery.** No fake
-timers: the earlier "despawn + ETA" abstraction is superseded — the agent
-simply lives in sims[1] and the human watches the window. Remaining design:
-- The agent declares the errand through its ordinary channels: `say` for the
-  promise ("fetching the bow, hold on"), `why` in plans.jsonl for the record.
-  The objective chain / route compass already knows where things are (bow 6,
-  elixir 12, charm 16).
-- The npc anchor evolves per mode: LINKED keeps the hard anchor; FREE ROAM
-  needs a mechanics-level leave-permission rule. OPEN QUESTION for the author,
-  candidates: npc may leave only when the hero is not downed and not in
-  combat; or an explicit consent prompt to the human. Precedent to follow:
-  personality in the agent, invariants in the core.
-- Rescue failsafe must become room-aware: an away agent's "patience" clock
-  starts when the hero falls, and the errand aborts (route back) on failsafe.
-- Telemetry: errand records in matches.jsonl — declared goal, duration, what
-  was fetched, hero's state during the absence. This is the trust corpus the
-  research line builds on.
+**Stage 4 — DONE.** Partner autonomy (errands) on the same machinery:
+- The agent declares the errand through `say` + `why` (controller logs to plans.jsonl).
+  Route compass targets bow (6), elixir (ELIXIRS), charm (16).
+- FREE ROAM leave permission: npc may leave only when the hero is not downed and
+  not in combat (mechanics-level; test [42]).
+- Room-aware rescue failsafe: away agent's patience starts when the hero falls;
+  active errand aborts on failsafe and routes back (test [43]).
+- Telemetry: `errands` array in matches.jsonl — goal, duration, fetched, hero
+  downs during absence (test [44]).
 
 **Stage 5 (sketch) — the dungeon as the third player.** An LLM director for
 the {dungeon} side with a NON-WINNING utility ("interesting resistance", L4D
