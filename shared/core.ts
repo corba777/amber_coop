@@ -1782,11 +1782,11 @@ function viewerOverlay(g: Game, viewerSlot: number): { message: string; messageT
   if (!coopFree) {
     return { message: g.message, messageT: g.messageT, fade: g.fade };
   }
-  if (g.messageT > 0) {
-    return { message: g.message, messageT: g.messageT, fade: vp.crossFade };
-  }
   if (vp.crossBannerT > 0) {
     return { message: vp.crossBanner, messageT: vp.crossBannerT, fade: vp.crossFade };
+  }
+  if (g.messageT > 0) {
+    return { message: g.message, messageT: g.messageT, fade: vp.crossFade };
   }
   return { message: "", messageT: 0, fade: vp.crossFade };
 }
