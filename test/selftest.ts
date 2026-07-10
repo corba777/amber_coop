@@ -28,12 +28,50 @@ function step(g: Game, i0: Input, i1: Input, prev: [Input, Input]): void {
   prev[1] = { ...i1 };
 }
 
+async function freePort(): Promise<number> {
+  const net = await import("node:net");
+  return new Promise((res, rej) => {
+    const s = net.createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const addr = s.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      s.close(() => res(port));
+    });
+    s.on("error", rej);
+  });
+}
+
+async function spawnTestServer(
+  extra: NodeJS.ProcessEnv = {},
+  omit: string[] = [],
+): Promise<{ proc: import("node:child_process").ChildProcess; port: number }> {
+  const { spawn } = await import("node:child_process");
+  const port = await freePort();
+  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port), ...extra };
+  for (const k of omit) delete env[k];
+  const proc = spawn(process.execPath, ["dist/server.js"], {
+    env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  proc.stderr.on("data", (d: Buffer) => { stderr += d; });
+  await new Promise<void>((res, rej) => {
+    const to = setTimeout(() => rej(new Error(`server didn't start on :${port}`)), 8000);
+    proc.stdout.on("data", (d: Buffer) => {
+      if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
+    });
+    proc.on("exit", c => rej(new Error(`server exited ${c}${stderr ? ": " + stderr.trim() : ""}`)));
+  });
+  return { proc, port };
+}
+
 function freshPlay(): Game {
   const g = newGame();
   g.players[0].present = true;
   g.players[1].present = true;
   g.screen = "play";
   g.fade = 0;
+  g.message = "";
+  g.messageT = 0;
   return g;
 }
 
@@ -148,21 +186,11 @@ function freshPlay(): Game {
 // ------------------------------------------------- 7. WS integration smoke
 {
   console.log("[7] websocket integration smoke (server child + real client)");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18321;
-  const srv = spawn(process.execPath, ["dist/server.js"], {
-    env: { ...process.env, PORT: String(PORT), P2: "llm", LLM_PROVIDER: "mock", PLAN_MS: "50" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const { proc: srv, port: PORT } = await spawnTestServer(
+    { P2: "llm", LLM_PROVIDER: "mock", PLAN_MS: "50" },
+  );
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
     const wsc = new WebSocket(`ws://127.0.0.1:${PORT}`);
     let hello: { slot: number } | null = null;
     let snaps = 0;
@@ -204,22 +232,9 @@ function freshPlay(): Game {
 // ------------------------------------------------- 8. in-game menu flow
 {
   console.log("[8] menu-driven setup over the wire (single + llm/mock)");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18322;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT) };
-  delete env.P2; delete env.LLM_PROVIDER;   // no bypass — real menu path
-  const srv = spawn(process.execPath, ["dist/server.js"], {
-    env, stdio: ["ignore", "pipe", "pipe"],
-  });
+  const { proc: srv, port: PORT } = await spawnTestServer({}, ["P2", "LLM_PROVIDER"]);
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
     const wsc = new WebSocket(`ws://127.0.0.1:${PORT}`);
     const seen = { menu: false, title: false, play: false, agentName: "" };
     let providersOk = false;
@@ -558,20 +573,9 @@ function freshPlay(): Game {
 // ------------------------------------------------- 16. multi-session
 {
   console.log("[16] two games, one server: nobody blocks anybody");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18323;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT) };
-  delete env.P2; delete env.LLM_PROVIDER;
-  const srv = spawn(process.execPath, ["dist/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const { proc: srv, port: PORT } = await spawnTestServer({}, ["P2", "LLM_PROVIDER"]);
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
 
     const mkClient = (): { ws: InstanceType<typeof WebSocket>; state: { room: string; screen: string } } => {
       const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
@@ -609,20 +613,9 @@ function freshPlay(): Game {
 // ------------------------------------------------- 17. room links + names
 {
   console.log("[17] host shares a room link; both heroes carry their names");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18324;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT) };
-  delete env.P2; delete env.LLM_PROVIDER;
-  const srv = spawn(process.execPath, ["dist/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const { proc: srv, port: PORT } = await spawnTestServer({}, ["P2", "LLM_PROVIDER"]);
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
 
     // host: bare URL → own session; picks HUMAN; sends a name
     const host = new WebSocket(`ws://127.0.0.1:${PORT}`);
@@ -874,12 +867,10 @@ function freshPlay(): Game {
 // ------------------------------------------------- 22. hero leaderboard
 {
   console.log("[22] /stats names the heroes, not just the partners");
-  const { spawn } = await import("node:child_process");
   const fs2 = await import("node:fs");
   const os = await import("node:os");
   const pathm = await import("node:path");
   const http = await import("node:http");
-  const PORT = 18325;
   const dir = fs2.mkdtempSync(pathm.join(os.tmpdir(), "amber-logs-"));
   const st = (dmg: number): string =>
     JSON.stringify({ dmgDealt: dmg, bossDmg: 0, kills: 0, dmgTaken: 1, downs: 0, revives: 1, elixirsUsed: 0 });
@@ -887,17 +878,10 @@ function freshPlay(): Game {
     `{"mode":"single","p1name":"ARTEM","partner":"(solo)","outcome":"loss","ticks":500,"p1":${st(9)},"p2":${st(0)}}\n` +
     `{"mode":"human","p1name":"ARTEM","partner":"ILYA","outcome":"win","ticks":900,"p1":${st(30)},"p2":${st(70)}}\n` +
     `{"mode":"llm","p1name":"ILYA","partner":"ANTHROPIC","outcome":"win","ticks":800,"p1":${st(73)},"p2":${st(69)}}\n`);
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT), LOG_DIR: dir };
-  delete env.P2; delete env.LLM_PROVIDER;
-  const srv = spawn(process.execPath, ["dist/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const { proc: srv, port: PORT } = await spawnTestServer(
+    { LOG_DIR: dir }, ["P2", "LLM_PROVIDER"],
+  );
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
     const body = await new Promise<string>((res, rej) => {
       http.get(`http://127.0.0.1:${PORT}/stats.json`, r => {
         let b = ""; r.on("data", (ch: Buffer) => { b += ch; }); r.on("end", () => res(b));
@@ -1025,20 +1009,11 @@ function freshPlay(): Game {
 // ------------------------------------------------- 25. autopilot mode
 {
   console.log("[25] AI autopilot: spectator watches, agent quests, thoughts on screen");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18326;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT), PLAN_MS: "80" };
-  delete env.P2; delete env.LLM_PROVIDER;
-  const srv = spawn(process.execPath, ["dist/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const { proc: srv, port: PORT } = await spawnTestServer(
+    { PLAN_MS: "80" }, ["P2", "LLM_PROVIDER"],
+  );
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
     const S = { screen: "", p0: true, p1: false, thought: null as null | { action: string } };
     ws.on("message", (data: Buffer) => {
@@ -1193,20 +1168,9 @@ function freshPlay(): Game {
 // ------------------------------------------------- 29. dedicated start
 {
   console.log("[29] the start message works even if the input path misbehaves");
-  const { spawn } = await import("node:child_process");
   const WebSocket = (await import("ws")).default;
-  const PORT = 18327;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(PORT) };
-  delete env.P2; delete env.LLM_PROVIDER;
-  const srv = spawn(process.execPath, ["dist/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const { proc: srv, port: PORT } = await spawnTestServer({}, ["P2", "LLM_PROVIDER"]);
   try {
-    await new Promise<void>((res, rej) => {
-      const to = setTimeout(() => rej(new Error("server didn't start")), 8000);
-      srv.stdout.on("data", (d: Buffer) => {
-        if (String(d).includes("AMBER COOP up")) { clearTimeout(to); res(); }
-      });
-      srv.on("exit", c => rej(new Error("server exited " + c)));
-    });
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
     const S = { screen: "" };
     ws.on("message", (data: Buffer) => {
