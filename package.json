@@ -1,0 +1,26 @@
+{
+  "name": "amber-coop",
+  "version": "1.0.0",
+  "description": "Ilya and the Amber Blade \u2014 coop server with human or LLM player 2 (Ollama/OpenAI/Anthropic)",
+  "main": "index.js",
+  "scripts": {
+    "build": "node scripts-build.mjs",
+    "test": "node scripts-build.mjs && node dist/selftest.js",
+    "start": "node dist/server.js",
+    "bench": "node dist/bench.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/three": "^0.185.0",
+    "three": "^0.185.1",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  }
+}

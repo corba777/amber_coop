@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Amber Coop · HD-2D</title>
+<style>
+  :root { --amber: #ffb545; --ink: #0d0c14; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--ink);
+    color: #9a93b8;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px;
+    overflow: hidden;
+    touch-action: none;
+  }
+  #stage {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  #frame {
+    position: relative;
+    flex-shrink: 0;
+    border: 3px solid #2b2838;
+    border-radius: 4px;
+    box-shadow: 0 0 40px rgba(255, 181, 69, 0.08), 0 12px 40px rgba(0,0,0,0.6);
+    line-height: 0;
+  }
+  #pip {
+    display: none;
+    flex-shrink: 0;
+    width: calc(min(92vw, calc((100vh - 130px) * 8 / 7)) * 94 / 256);
+    height: auto;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 2px solid #38324e;
+    border-radius: 4px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+  }
+  #gl {
+    width: min(92vw, calc((100vh - 130px) * 8 / 7));
+    max-width: 768px;
+    height: auto;
+    display: block;
+  }
+  #ui {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    pointer-events: none;
+  }
+  #cap { font-size: 11px; letter-spacing: 0.12em; }
+  #cap b { color: var(--amber); font-weight: 600; }
+  /* touch controls: hidden unless a touch device */
+  #touch {
+    display: none;
+    width: 100%; max-width: 768px;
+    justify-content: space-between;
+    padding: 0 14px 8px;
+    user-select: none; -webkit-user-select: none;
+  }
+  .pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 2px; }
+  .pad button, .act button {
+    background: #1c1930; border: 2px solid #38324e; border-radius: 10px;
+    color: #cfc8ea; font-size: 18px; font-family: inherit;
+    touch-action: none;
+  }
+  .pad button:active, .act button:active { background: #38324e; }
+  .pad .blank { visibility: hidden; }
+  .act { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+  .act #b-b { width: 58px; height: 58px; border-radius: 50%; background: #1a2a38; border-color: #4fb8d8; font-size: 15px; align-self: center; }
+  .act #b-new { height: 28px; font-size: 10px; border-radius: 14px; padding: 0 12px; }
+  .act #b-a { width: 74px; height: 74px; border-radius: 50%; background: #402318; border-color: #c8502e; color: #ffd7c4; font-size: 15px; }
+  .act #b-start { height: 34px; font-size: 11px; border-radius: 17px; padding: 0 16px; }
+</style>
+</head>
+<body>
+  <div id="namegate" style="display:none; position:fixed; inset:0; background:rgba(8,6,16,.94); z-index:10; align-items:center; justify-content:center; flex-direction:column; gap:14px; font-family:ui-monospace,monospace; color:#ffe9c2;">
+    <div style="font-size:20px; font-weight:bold; letter-spacing:2px;">WHO GOES THERE?</div>
+    <input id="namein" maxlength="12" placeholder="your name" autocomplete="off"
+      style="background:#1a1626;border:1px solid #4a4560;color:#fff;font-family:ui-monospace,monospace;font-size:16px;padding:9px 14px;text-transform:uppercase;outline:none;text-align:center;">
+    <button id="namego" style="background:#ffb545;border:0;color:#1a1020;font-family:ui-monospace,monospace;font-weight:bold;font-size:14px;padding:9px 22px;cursor:pointer;">ENTER THE MEADOW</button>
+  </div>
+
+  <div id="stage">
+    <div id="frame"><canvas id="gl" width="768" height="672"></canvas><canvas id="ui"></canvas></div>
+    <canvas id="pip"></canvas>
+  </div>
+    <button id="copylink" style="display:none; margin:8px auto 0; background:#1a1626; border:1px solid #4fb8d8; color:#4fb8d8; font-family:ui-monospace,monospace; font-size:12px; padding:6px 14px; cursor:pointer;">COPY INVITE LINK</button>
+  <div id="cap"><b>AMBER COOP · HD-2D</b> · WASD/arrows move · SPACE sword · X bow · M music · ENTER start</div>
+  <div id="touch">
+    <div class="pad">
+      <button class="blank"></button><button id="b-up">▲</button><button class="blank"></button>
+      <button id="b-left">◀</button><button class="blank"></button><button id="b-right">▶</button>
+      <button class="blank"></button><button id="b-down">▼</button><button class="blank"></button>
+    </div>
+    <div class="act">
+      <button id="b-a">⚔</button>
+      <button id="b-b">🏹</button>
+      <button id="b-start">START</button>
+    </div>
+  </div>
+  <script>
+/*__GAME_JS__*/
+  </script>
+</body>
+</html>

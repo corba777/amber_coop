@@ -1,0 +1,5 @@
+# DGX overlay — Ollama runs on the same host as the container.
+services:
+  amber-coop:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
