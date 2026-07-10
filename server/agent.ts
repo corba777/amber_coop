@@ -10,7 +10,7 @@
 
 import {
   Game, Input, emptyInput, TILE, W, H, COLS, ROWS, SOLID, PLAYER_W, PLAYER_H, ROOMS, Player,
-  simOf,
+  simOf, ELIXIRS, canNpcLeave,
 } from "../shared/core";
 import { LLM } from "./llm";
 
@@ -54,7 +54,8 @@ FREE ROAM mode: you and your partner may be in DIFFERENT rooms at once — the h
 - Pursue the "objective" on your own: use "exit" / "pickup" / "attack" like a solo hero. Splitting up is normal.
 - Team keys still unlock doors for both of you — grab keys and clear wings on your route.
 - If partner is away and downed, hurry toward their room ("exit" along the route toward partner.room).
-- You may "say" what you are fetching ("getting the bow — hold on") — the human reads it in the mirror.`;
+- You may leave only when your partner is safe (not downed, not fighting) — the game enforces this at the doorway.
+- When fetching something for the team (bow, elixir, charm), "say" what you are getting — the human reads it in the mirror.`;
 
 const SOLO_PROMPT = `You are the HERO of a tiny Zelda-like quest — questing ALONE. There is no partner: never choose "follow" or "idle", they mean standing still and the winter never ends.
 Your mission is the "objective"; the "route" field is your compass — it names the exit (or cave mouth) that leads toward the goal.
@@ -74,6 +75,27 @@ export interface AgentOptions {
 }
 
 export type RouteHop = { kind: "exit"; dir: string } | { kind: "cave"; x: number; y: number } | null;
+
+export type ErrandGoal = "bow" | "elixir" | "charm";
+
+export interface ErrandRecord {
+  goal: ErrandGoal;
+  room: number;
+  declaredTick: number;
+  completedTick?: number;
+  abortedTick?: number;
+  abortReason?: string;
+  fetched?: string;
+  heroDownsDuring: number;
+}
+
+interface ActiveErrand {
+  goal: ErrandGoal;
+  targetRoom: number;
+  startedTick: number;
+  say: string;
+  why: string;
+}
 
 /** first hop from room `from` toward room `to`, walking the world graph of
  *  exits and cave teleports — the compass the planner reads off */
@@ -188,6 +210,13 @@ export class AgentPlayer {
   public routeAssists = 0;   // times the controller had to walk the route for a stalled solo planner
   private lastRoom = -1;
   private partnerWasAway = false;
+  private activeErrand: ActiveErrand | null = null;
+  public errandLog: ErrandRecord[] = [];
+  private errandHeroWasDown = false;
+  private routeHopKey: string | null = null;
+  private pickupStall = 0;
+  private pickupLastDist = Infinity;
+  private pickupTargetKey = "";
 
   constructor(
     private llm: LLM,
@@ -208,6 +237,124 @@ export class AgentPlayer {
   /** free roam: partner exists but is in another wing */
   partnerAway(g: Game): boolean {
     return g.travelMode === "free" && g.players[this.mateSlot()].present && !this.partnerInRoom(g);
+  }
+
+  private routeDestination(g: Game): number {
+    return this.activeErrand?.targetRoom ?? this.targetRoom(g);
+  }
+
+  private detectFetchErrand(g: Game): ActiveErrand | null {
+    if (!g.hasBow && g.golemDead) {
+      return { goal: "bow", targetRoom: 6, startedTick: g.ticks,
+        say: "Fetching the bow — hold on", why: "you need it in the snowfield" };
+    }
+    if (g.hardGate && g.emberDead && !g.charmClaimed) {
+      return { goal: "charm", targetRoom: 16, startedTick: g.ticks,
+        say: "Getting the Miner's Charm — hold on", why: "fire arrows crack the glacier" };
+    }
+    const mate = g.players[this.mateSlot()];
+    for (const el of ELIXIRS) {
+      if (!g.elixirs[el.id] && !mate.elixir && !g.players[this.slot].elixir) {
+        return { goal: "elixir", targetRoom: el.room, startedTick: g.ticks,
+          say: "Grabbing an elixir — hold on", why: "insurance if you fall alone" };
+      }
+    }
+    return null;
+  }
+
+  private livePickups(g: Game) {
+    return g.pickups.filter(p => p.t >= 0);
+  }
+
+  private pickupObsolete(g: Game, item: { kind: string } | undefined): boolean {
+    if (!item) return true;
+    if (item.kind === "bow" && g.hasBow) return true;
+    if (item.kind === "charm" && g.charmClaimed) return true;
+    return false;
+  }
+
+  private abandonPickup(g: Game, depth: number, inp: Input): Input {
+    this.pickupStall = 0;
+    this.pickupTargetKey = "";
+    this.intent = { action: "follow" };
+    this.llmIntent = { action: "follow" };
+    if (!g.players[this.mateSlot()].present || this.partnerAway(g)) {
+      this.applyRouteHop(g, this.routeDestination(g));
+    }
+    return depth < 8 ? this.control(g, depth + 1) : inp;
+  }
+
+  private startErrand(g: Game, spec: ActiveErrand): void {
+    this.activeErrand = spec;
+    this.sayQueue = spec.say;
+    this.errandLog.push({
+      goal: spec.goal, room: spec.targetRoom, declaredTick: g.ticks, heroDownsDuring: 0,
+    });
+    if (this.onPlan) {
+      this.onPlan({ t: new Date().toISOString(), llm: "controller", ms: 0, ok: true,
+        action: "errand", say: spec.say, why: spec.why });
+    }
+  }
+
+  private finishErrand(g: Game, reason: "fetched" | "reunited", fetched?: string): void {
+    if (!this.activeErrand) return;
+    const rec = this.errandLog[this.errandLog.length - 1];
+    if (reason === "fetched") {
+      rec.completedTick = g.ticks;
+      rec.fetched = fetched;
+    } else {
+      rec.abortedTick = g.ticks;
+      rec.abortReason = reason;
+    }
+    this.activeErrand = null;
+    this.errandHeroWasDown = false;
+  }
+
+  private abortErrand(g: Game, reason: string): void {
+    if (!this.activeErrand) return;
+    const rec = this.errandLog[this.errandLog.length - 1];
+    rec.abortedTick = g.ticks;
+    rec.abortReason = reason;
+    this.activeErrand = null;
+    this.errandHeroWasDown = false;
+  }
+
+  private errandFetched(g: Game): string | null {
+    if (!this.activeErrand) return null;
+    const { goal } = this.activeErrand;
+    if (goal === "bow" && g.hasBow) return "bow";
+    if (goal === "charm" && g.charmClaimed) return "charm";
+    if (goal === "elixir" &&
+        (g.players[this.slot].elixir || g.players[this.mateSlot()].elixir)) return "elixir";
+    return null;
+  }
+
+  private tickErrandState(g: Game): void {
+    const mate = g.players[this.mateSlot()];
+    if (this.partnerInRoom(g)) {
+      if (this.activeErrand) this.finishErrand(g, "reunited");
+      return;
+    }
+    if (!this.partnerAway(g)) return;
+
+    if (this.activeErrand) {
+      const rec = this.errandLog[this.errandLog.length - 1];
+      if (mate.downed) {
+        if (!this.errandHeroWasDown) { rec.heroDownsDuring++; this.errandHeroWasDown = true; }
+        const patience = this.temperament === "guard" ? 90
+          : this.temperament === "hunter" ? 900 : 600;
+        if (this.mateDownedTicks > patience) this.abortErrand(g, "rescue failsafe");
+      } else {
+        this.errandHeroWasDown = false;
+      }
+      const fetched = this.errandFetched(g);
+      if (fetched) this.finishErrand(g, "fetched", fetched);
+    }
+
+    if (!this.activeErrand) {
+      const spec = this.detectFetchErrand(g);
+      if (spec) this.startErrand(g, spec);
+    }
   }
 
   /** compact, token-cheap observation */
@@ -239,12 +386,17 @@ export class AgentPlayer {
           note: "partner is in another room — pursue your objective; do not follow stale coordinates",
         },
       route: ((): string => {
-        const hop = routeHop(g.room, this.targetRoom(g));
+        const hop = routeHop(g.room, this.routeDestination(g));
         if (!hop) return "you are in the goal room";
         return hop.kind === "exit"
           ? `exit "${hop.dir}" leads toward your goal`
           : `exit "cave" leads toward your goal (the dark cave mouth)`;
       })(),
+      errand: this.activeErrand ? {
+        goal: this.activeErrand.goal,
+        room: ROOMS[this.activeErrand.targetRoom].name,
+        why: this.activeErrand.why,
+      } : null,
       enemies: g.enemies
         .map((e, i) => ({ i, kind: e.kind, x: Math.round(e.x), y: Math.round(e.y),
           hp: e.hp, phase: e.phase, dead: e.dead,
@@ -312,6 +464,11 @@ export class AgentPlayer {
   private applyRouteHop(g: Game, toRoom: number): boolean {
     const hop = routeHop(g.room, toRoom);
     if (!hop) return false;
+    const key = hop.kind === "exit"
+      ? `${g.room}->${toRoom}:exit:${hop.dir}`
+      : `${g.room}->${toRoom}:cave`;
+    if (this.routeHopKey === key && this.intent.action === "exit") return true;
+    this.routeHopKey = key;
     this.routeAssists++;
     this.llmIntent = hop.kind === "exit"
       ? { action: "exit", dir: hop.dir as "left" | "right" | "up" | "down" }
@@ -387,8 +544,12 @@ export class AgentPlayer {
   }
 
   /** 60 Hz: intent → buttons */
-  control(g: Game): Input {
+  control(g: Game, depth = 0): Input {
     const inp = emptyInput();
+    if (depth > 8) {
+      this.intent = { action: "follow" };
+      return inp;
+    }
     const me = g.players[this.slot];
     if (g.screen === "title" || g.screen === "gameover" || g.screen === "win") {
       return inp;   // humans decide when to (re)start
@@ -398,9 +559,14 @@ export class AgentPlayer {
 
     if (g.room !== this.lastRoom) {
       this.lastRoom = g.room;
+      this.routeHopKey = null;
       if (g.travelMode === "free" && this.intent.action === "exit") {
         this.intent = { action: "idle" };
         this.llmIntent = { ...this.llmIntent, action: "idle" };
+        const mateEarly = g.players[this.mateSlot()];
+        if (!mateEarly.present || this.partnerAway(g)) {
+          this.applyRouteHop(g, this.routeDestination(g));
+        }
       }
     }
     if (this.partnerInRoom(g)) {
@@ -411,6 +577,14 @@ export class AgentPlayer {
       }
     } else if (this.partnerAway(g)) {
       this.partnerWasAway = true;
+    }
+    this.tickErrandState(g);
+
+    if (this.partnerAway(g) && this.intent.action === "pickup") {
+      const items = this.livePickups(g);
+      if (this.pickupObsolete(g, items[this.intent.target ?? -1])) {
+        this.applyRouteHop(g, this.routeDestination(g));
+      }
     }
 
     const mate = g.players[this.mateSlot()];
@@ -497,7 +671,7 @@ export class AgentPlayer {
       }
       if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
         if (!mate.present || this.partnerAway(g)) {
-          this.applyRouteHop(g, this.targetRoom(g));
+          this.applyRouteHop(g, this.routeDestination(g));
         }
       }
     }
@@ -508,14 +682,14 @@ export class AgentPlayer {
       if (!e || e.dead) {
         this.intent = this.resumeIntent(g);
         if (this.intent.action === "attack") return inp;   // stale target — wait for replan
-        return this.control(g);
+        return this.control(g, depth + 1);
       }
       if (e.kind === "wraith" && e.phase === 9) {
         const humanPresent = g.players[1 - this.slot].present;
         if (humanPresent) {
           // a yielding foe: the blade stays down — humans choose mercy or not
           this.intent = { action: "follow" };
-          return this.control(g);
+          return this.control(g, depth + 1);
         }
         // alone, the choice is the agent's own — and temperament IS character:
         // the berserker finishes it; guard and companion stand beside it
@@ -566,13 +740,21 @@ export class AgentPlayer {
     }
 
     if (it.action === "pickup") {
-      const items = g.pickups.filter(p => p.t >= 0);
+      const items = this.livePickups(g);
       const p = items[it.target ?? -1];
-      if (!p) {
-        this.intent = this.resumeIntent(g);
-        if (this.intent.action === "pickup") return inp;
-        return this.control(g);
+      if (this.pickupObsolete(g, p)) {
+        return this.abandonPickup(g, depth, inp);
       }
+      const dist = Math.hypot(p.x - mcx, p.y - mcy);
+      const key = `${it.target}:${p.kind}:${p.x},${p.y}`;
+      if (key !== this.pickupTargetKey) {
+        this.pickupTargetKey = key;
+        this.pickupStall = 0;
+        this.pickupLastDist = dist;
+      } else if (dist > this.pickupLastDist - 2) this.pickupStall++;
+      else this.pickupStall = 0;
+      this.pickupLastDist = dist;
+      if (this.pickupStall > 75) return this.abandonPickup(g, depth, inp);
       this.waypointSeek(g, inp, me, p.x, p.y);
       this.meleeGuard(inp, g, me, mcx, mcy);
       return inp;
@@ -588,6 +770,21 @@ export class AgentPlayer {
     }
 
     if (it.action === "exit" && it.dir) {
+      if (g.travelMode === "free" && this.partnerInRoom(g) &&
+          !canNpcLeave(g, this.slot)) {
+        let threat = -1, threatD = Infinity;
+        g.enemies.forEach((e, i) => {
+          if (e.dead) return;
+          const d = Math.hypot(e.x + e.w / 2 - mcx, e.y + e.h / 2 - mcy);
+          if (d < threatD) { threatD = d; threat = i; }
+        });
+        if (threat >= 0) {
+          this.intent = { action: "attack", target: threat, say: this.intent.say };
+          return this.control(g, depth + 1);
+        }
+        this.seek(inp, me, 8 * TILE, 8 * TILE);
+        return inp;
+      }
       if (g.travelMode === "free" && this.partnerInRoom(g) &&
           this.partnerNearDoor(mate, it.dir)) {
         this.seek(inp, me, 8 * TILE, 8 * TILE);
@@ -665,8 +862,9 @@ export class AgentPlayer {
       if (!e || e.dead) return { action: "follow" };
     }
     if (it.action === "pickup") {
-      const items = g.pickups.filter(p => p.t >= 0);
-      if (!items[it.target ?? -1]) return { action: "follow" };
+      const items = this.livePickups(g);
+      const p = items[it.target ?? -1];
+      if (!p || this.pickupObsolete(g, p)) return { action: "follow" };
     }
     return it;
   }

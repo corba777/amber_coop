@@ -148,61 +148,66 @@ class Session {
   }
 
   tick(tickCount: number): void {
-    if (this.agent) {
-      this.game.activeSim = this.game.players[1].simIndex;
-      this.agent.maybePlan(this.game, Date.now());
-      this.rawInputs[1] = this.agent.control(this.game);
-      const quip = this.agent.takeSay();
-      if (quip) {
-        this.game.players[1].say = quip;
-        this.game.players[1].sayT = 180;
+    try {
+      if (this.agent) {
+        this.game.activeSim = this.game.players[1].simIndex;
+        this.agent.maybePlan(this.game, Date.now());
+        this.rawInputs[1] = this.agent.control(this.game);
+        const quip = this.agent.takeSay();
+        if (quip) {
+          this.game.players[1].say = quip;
+          this.game.players[1].sayT = 180;
+        }
       }
-    }
-    const latched: [LatchedInput, LatchedInput] = [
-      latch(this.rawInputs[0], this.prevInputs[0]),
-      latch(this.rawInputs[1], this.prevInputs[1]),
-    ];
-    if (this.pendingStart) {
-      latched[0] = { ...latched[0], stE: true };
-      this.pendingStart = false;
-    }
-    this.prevInputs[0] = { ...this.rawInputs[0] };
-    this.prevInputs[1] = { ...this.rawInputs[1] };
-
-    const before = this.game.screen;
-    update(this.game, latched);
-    if (before === "play" && (this.game.screen === "gameover" || this.game.screen === "win")) {
-      appendLog("matches.jsonl", {
-        t: new Date().toISOString(),
-        sid: this.id,
-        mode: this.mode,
-        p1name: this.names[0] || "ILYA",
-        partner: this.names[1] || "(solo)",
-        temperament: this.mode === "llm" ? this.temperament : null,
-        outcome: this.game.screen === "win" ? "win" : "loss",
-        ending: this.game.ending?.id ?? null,
-        hardGate: this.game.hardGate,
-        ticks: this.game.ticks,
-        p1: this.game.stats[0], p2: this.game.stats[1],
-        plans: this.agent ? this.agent.planCount : 0,
-        parseFailures: this.agent ? this.agent.parseFailures : 0,
-        routeAssists: this.agent ? this.agent.routeAssists : 0,
-        avgLatencyMs: this.agent && this.agent.planCount
-          ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
-      });
-    }
-
-    if (tickCount % 2 === 0) {
-      const events = this.game.events.slice();
-      for (let slot = 0; slot < 2; slot++) {
-        const ws = this.sockets[slot];
-        if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-        const snapObj = toSnapshot(this.game, this.names, slot, false);
-        snapObj.events = events;
-        snapObj.thought = this.agent ? this.lastThought : null;
-        ws.send(JSON.stringify({ t: "state", s: snapObj }));
+      const latched: [LatchedInput, LatchedInput] = [
+        latch(this.rawInputs[0], this.prevInputs[0]),
+        latch(this.rawInputs[1], this.prevInputs[1]),
+      ];
+      if (this.pendingStart) {
+        latched[0] = { ...latched[0], stE: true };
+        this.pendingStart = false;
       }
-      this.game.events = [];
+      this.prevInputs[0] = { ...this.rawInputs[0] };
+      this.prevInputs[1] = { ...this.rawInputs[1] };
+
+      const before = this.game.screen;
+      update(this.game, latched);
+      if (before === "play" && (this.game.screen === "gameover" || this.game.screen === "win")) {
+        appendLog("matches.jsonl", {
+          t: new Date().toISOString(),
+          sid: this.id,
+          mode: this.mode,
+          p1name: this.names[0] || "ILYA",
+          partner: this.names[1] || "(solo)",
+          temperament: this.mode === "llm" ? this.temperament : null,
+          outcome: this.game.screen === "win" ? "win" : "loss",
+          ending: this.game.ending?.id ?? null,
+          hardGate: this.game.hardGate,
+          ticks: this.game.ticks,
+          p1: this.game.stats[0], p2: this.game.stats[1],
+          plans: this.agent ? this.agent.planCount : 0,
+          parseFailures: this.agent ? this.agent.parseFailures : 0,
+          routeAssists: this.agent ? this.agent.routeAssists : 0,
+          errands: this.agent ? this.agent.errandLog : [],
+          avgLatencyMs: this.agent && this.agent.planCount
+            ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
+        });
+      }
+
+      if (tickCount % 2 === 0) {
+        const events = this.game.events.slice();
+        for (let slot = 0; slot < 2; slot++) {
+          const ws = this.sockets[slot];
+          if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+          const snapObj = toSnapshot(this.game, this.names, slot, false);
+          snapObj.events = events;
+          snapObj.thought = this.agent ? this.lastThought : null;
+          ws.send(JSON.stringify({ t: "state", s: snapObj }));
+        }
+        this.game.events = [];
+      }
+    } catch (err) {
+      console.error(`[${this.id}] tick error:`, err);
     }
   }
 }

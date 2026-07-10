@@ -496,6 +496,8 @@ export interface Player {
                         // room transitions belong to heroes while one remains
   simIndex: number;     // which RoomSim this body inhabits (stage 1: always 0)
   transitionCd: number; // ticks before another room edge-cross (anti door ping-pong)
+  crossFade: number;    // free roam: room-transition fade for this viewer only
+  crossBanner: string; crossBannerT: number;
 }
 
 export type GameScreen = "menu" | "lobby" | "title" | "play" | "gameover" | "win";
@@ -637,7 +639,7 @@ export function newPlayer(idx: number): Player {
     hp: 6, maxHp: 6, keys: 0,
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, walk: 0, moving: false,
     downed: false, elixir: false, reviveP: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
-    transitionCd: 0,
+    transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0,
   };
 }
 
@@ -668,6 +670,7 @@ function fillActiveSimRoom(g: Game, index: number): void {
   g.projectiles = [];
   const skipEnemies =
     (spec.keyOnClear && g.cleared[index]) ||
+    (g.travelMode === "free" && g.cleared[index]) ||
     (index === 5 && g.golemDead) ||
     (index === 11 && (g.wraithDead || g.wraithSpared)) ||
     (index === 16 && g.emberDead);
@@ -708,7 +711,15 @@ function fillActiveSimRoom(g: Game, index: number): void {
   }
 }
 
-function transitionBanner(g: Game, index: number): void {
+function transitionBanner(g: Game, index: number, pi?: number): void {
+  const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
+  if (coopFree && pi !== undefined) {
+    const p = g.players[pi];
+    p.crossFade = 1;
+    p.crossBanner = ROOMS[index].name;
+    p.crossBannerT = 120;
+    return;
+  }
   g.fade = 1;
   g.message = ROOMS[index].name;
   g.messageT = 120;
@@ -722,6 +733,21 @@ function markTransition(p: Player): void {
   p.transitionCd = TRANSITION_CD;
 }
 
+/** after a cave teleport, nudge off the mouth so cooldown expiry cannot re-fire */
+function nudgeOffCaveMouth(g: Game, p: Player): void {
+  const spec = ROOMS[g.room];
+  if (!spec.teleport) return;
+  const ptx = Math.floor((p.x + PLAYER_W / 2) / TILE);
+  const pty = Math.floor((p.y + PLAYER_H / 2) / TILE);
+  if (tileAt(g, ptx, pty) === "c") p.y = Math.min(H - PLAYER_H, p.y + TILE / 2);
+}
+
+function clampSimIndices(g: Game): void {
+  for (const p of g.players) {
+    if (p.simIndex < 0 || p.simIndex >= g.sims.length) p.simIndex = 0;
+  }
+}
+
 /** free roam: only the crossing hero moves; partner stays in their room. */
 function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: number): void {
   const p = g.players[pi];
@@ -733,11 +759,14 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
     g.activeSim = p.simIndex;
     fillActiveSimRoom(g, index);
     p.x = px; p.y = py;
-    transitionBanner(g, index);
+    nudgeOffCaveMouth(g, p);
+    transitionBanner(g, index, pi);
     markTransition(p);
     g.activeSim = saved;
     return;
   }
+
+  clampSimIndices(g);
 
   if (other.simIndex === p.simIndex) {
     // split: stayer keeps the current sim; crosser loads the new room elsewhere
@@ -747,23 +776,28 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
     fillActiveSimRoom(g, index);
     p.simIndex = crossSi;
     p.x = px; p.y = py;
+    nudgeOffCaveMouth(g, p);
   } else {
-    const otherSim = g.sims[other.simIndex];
+    const otherSim = g.sims[other.simIndex] ?? g.sims[0];
     if (otherSim.room === index) {
       // merge into one sim — preserve the room the partner already occupies
-      if (other.simIndex !== 0) g.sims[0] = g.sims[other.simIndex];
+      if (other.simIndex !== 0 && g.sims[other.simIndex]) g.sims[0] = g.sims[other.simIndex];
       p.simIndex = 0;
       other.simIndex = 0;
       p.x = px; p.y = py;
+      nudgeOffCaveMouth(g, p);
       if (g.sims.length > 1) g.sims.length = 1;
     } else {
       g.activeSim = p.simIndex;
       fillActiveSimRoom(g, index);
       p.x = px; p.y = py;
+      nudgeOffCaveMouth(g, p);
     }
   }
 
-  transitionBanner(g, index);
+  clampSimIndices(g);
+
+  transitionBanner(g, index, pi);
   markTransition(p);
   g.activeSim = saved;
 }
@@ -873,6 +907,31 @@ export function moveBody(g: Game, b: { x: number; y: number }, w: number, h: num
 export function overlap(ax: number, ay: number, aw: number, ah: number,
                         bx: number, by: number, bw: number, bh: number): boolean {
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+/** hero has a live enemy within melee/chase range — used for FREE ROAM leave permission */
+export function heroInCombat(g: Game, heroPi: number): boolean {
+  const hero = g.players[heroPi];
+  if (!hero.present || hero.downed) return false;
+  const saved = g.activeSim;
+  g.activeSim = hero.simIndex;
+  const hcx = hero.x + PLAYER_W / 2, hcy = hero.y + PLAYER_H / 2;
+  const fighting = g.enemies.some(e =>
+    !e.dead && Math.hypot(e.x + e.w / 2 - hcx, e.y + e.h / 2 - hcy) < 100);
+  g.activeSim = saved;
+  return fighting;
+}
+
+/** FREE ROAM: npc may split only when the human hero is safe (not downed, not in combat) */
+export function canNpcLeave(g: Game, npcPi: number): boolean {
+  if (g.travelMode !== "free") return true;
+  const npc = g.players[npcPi];
+  const heroPi = 1 - npcPi;
+  const hero = g.players[heroPi];
+  if (!npc.present || !npc.npc || !hero.present) return true;
+  if (hero.simIndex !== npc.simIndex) return true;
+  if (hero.downed) return false;
+  return !heroInCombat(g, heroPi);
 }
 
 // ----------------------------------------------------------------- combat
@@ -1245,6 +1304,8 @@ function killEnemy(g: Game, e: Enemy): void {
     g.cleared[g.room] = true;
     g.pickups.push({ kind: "key", x: 8 * TILE, y: 7 * TILE, t: 0 });
     sfx(g, "secret");
+  } else if (g.travelMode === "free" && !alive && !g.cleared[g.room]) {
+    g.cleared[g.room] = true;   // free roam: cleared rooms stay pacified on revisit
   }
 }
 
@@ -1254,6 +1315,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (!p.present) return;
   if (p.invuln > 0) p.invuln--;
   if (p.transitionCd > 0) p.transitionCd--;
+  if (p.crossFade > 0) p.crossFade = Math.max(0, p.crossFade - 0.05);
+  if (p.crossBannerT > 0) p.crossBannerT--;
   if (p.attack > 0) p.attack--;
   if (p.bowCd > 0) p.bowCd--;
   if (p.sayT > 0) p.sayT--;
@@ -1357,7 +1420,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         sfx(g, "key");
       } else if (it.kind === "bow") {
         g.hasBow = true;   // both players get to shoot — coop kindness
-        g.message = "The Hunter's Bow! Everyone presses X now";
+        g.message = "The Hunter's Bow is yours — press X to shoot (team share)";
         g.messageT = 200;
         sfx(g, "secret");
       } else if (it.kind === "container") {
@@ -1467,15 +1530,16 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     return hero.present && !hero.npc && hero.simIndex === p.simIndex &&
       overlap(p.x, p.y, PLAYER_W, PLAYER_H, hero.x, hero.y, PLAYER_W, PLAYER_H);
   })();
+  const leaveBlocked = p.npc && g.travelMode === "free" && !canNpcLeave(g, pi);
   if (anchored) {
     // the companion may press into the doorway all it likes — harmlessly
-  } else if (!jammed && p.transitionCd === 0 && p.x < EDGE && inp.l && spec.exits.left !== undefined) {
+  } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.x < EDGE && inp.l && spec.exits.left !== undefined) {
     roomTransition(g, pi, spec.exits.left, W - PLAYER_W - EDGE, p.y);
-  } else if (!jammed && p.transitionCd === 0 && p.x + PLAYER_W > W - EDGE && inp.r && spec.exits.right !== undefined) {
+  } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.x + PLAYER_W > W - EDGE && inp.r && spec.exits.right !== undefined) {
     roomTransition(g, pi, spec.exits.right, EDGE, p.y);
-  } else if (!jammed && p.transitionCd === 0 && p.y < EDGE && inp.u && spec.exits.up !== undefined) {
+  } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.y < EDGE && inp.u && spec.exits.up !== undefined) {
     roomTransition(g, pi, spec.exits.up, p.x, H - PLAYER_H - EDGE);
-  } else if (!jammed && p.transitionCd === 0 && p.y + PLAYER_H > H - EDGE && inp.d && spec.exits.down !== undefined) {
+  } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.y + PLAYER_H > H - EDGE && inp.d && spec.exits.down !== undefined) {
     roomTransition(g, pi, spec.exits.down, p.x, EDGE);
   }
   p.x = Math.max(0, Math.min(W - PLAYER_W, p.x));
@@ -1585,6 +1649,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
       if (g.messageT > 0) g.messageT--;
 
       const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
+      if (coopFree) clampSimIndices(g);
       if (coopFree) {
         for (let pi = 0; pi < 2; pi++) {
           if (!g.players[pi].present) continue;
@@ -1711,10 +1776,26 @@ function partnerViewFor(g: Game, viewerSlot: number, viewerSimIdx: number): Part
   };
 }
 
+function viewerOverlay(g: Game, viewerSlot: number): { message: string; messageT: number; fade: number } {
+  const vp = g.players[viewerSlot];
+  const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
+  if (!coopFree) {
+    return { message: g.message, messageT: g.messageT, fade: g.fade };
+  }
+  if (g.messageT > 0) {
+    return { message: g.message, messageT: g.messageT, fade: vp.crossFade };
+  }
+  if (vp.crossBannerT > 0) {
+    return { message: vp.crossBanner, messageT: vp.crossBannerT, fade: vp.crossFade };
+  }
+  return { message: "", messageT: 0, fade: vp.crossFade };
+}
+
 export function toSnapshot(g: Game, names: [string, string],
                            viewerSlot = 0, clearEvents = true): Snapshot {
   const simIdx = g.players[viewerSlot]?.simIndex ?? 0;
   const sim = g.sims[simIdx] ?? g.sims[0];
+  const overlay = viewerOverlay(g, viewerSlot);
   const snap: Snapshot = {
     screen: g.screen,
     room: sim.room,
@@ -1729,8 +1810,8 @@ export function toSnapshot(g: Game, names: [string, string],
     })),
     pedestal: sim.pedestal,
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed,
-    message: g.message, messageT: g.messageT,
-    shake: g.shake, ticks: g.ticks, fade: g.fade,
+    message: overlay.message, messageT: overlay.messageT,
+    shake: g.shake, ticks: g.ticks, fade: overlay.fade,
     events: g.events.slice(),
     names,
     stats: [ { ...g.stats[0] }, { ...g.stats[1] } ],
