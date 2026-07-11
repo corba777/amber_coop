@@ -1157,51 +1157,61 @@ function freshPlay(): Game {
   const right = { ...emptyInput(), r: true };
   const left = { ...emptyInput(), l: true };
 
+  const sx = 8 * TILE, sy = 6 * TILE;
+
   // walks exactly like the server: 1.35 px per 60 Hz tick, diagonals normalized
   const pr = P.freshPred();
-  P.reconcile(pr, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);   // first fix
+  P.reconcile(pr, sx, sy, 0, false, -1, sx, sy);      // first fix
   P.stepPred(pr, tiles, right, false, 100);           // 6 ticks
-  ok(Math.abs(pr.x - (8 * TILE + 6 * 1.35)) < 0.6, "matches server speed tick-for-tick");
+  ok(Math.abs(pr.x - (sx + 6 * 1.35)) < 0.6, "matches server speed tick-for-tick");
 
   // walls are walls, even in the future
   const pr2 = P.freshPred();
-  P.reconcile(pr2, 1 * TILE + 2, 6 * TILE, 0, false, -1, 0, tiles);
+  P.reconcile(pr2, 1 * TILE + 2, sy, 0, false, -1, 1 * TILE + 2, sy);
   for (let i = 0; i < 30; i++) P.stepPred(pr2, tiles, left, false, 17);
   ok(pr2.x >= TILE - 1, "prediction collides with the western tree line");
 
   // the core rule holds: swinging freezes movement
   const pr3 = P.freshPred();
-  P.reconcile(pr3, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);
+  P.reconcile(pr3, sx, sy, 0, false, -1, sx, sy);
   P.stepPred(pr3, tiles, right, true, 200);
-  ok(pr3.x === 8 * TILE, "attack freezes predicted movement too");
+  ok(pr3.x === sx, "attack freezes predicted movement too");
 
-  // reconciliation is seq/ack + replay: an UNACKED input replays forward off the
-  // (stale) server truth, so the hero does NOT snap back — the drag is gone
-  const sx = 8 * TILE, sy = 6 * TILE;
+  // reconciliation compares ANCHORS (our predicted pos when we sent seq N vs the
+  // server's pos when it received seq N). Lag cancels, so an agreeing server
+  // costs ZERO correction — no backward drag, and no forward overshoot either.
   const pr4 = P.freshPred();
-  P.reconcile(pr4, sx, sy, 0, false, -1, 0, tiles);   // first fix, live at start
-  P.recordInput(pr4, 1, right, false, 0);             // client sends seq 1 (held right)
-  P.stepPred(pr4, tiles, right, false, 100);          // local prediction runs ahead
-  const predictedX = pr4.x;
-  // snapshot arrives but the server hasn't applied seq 1 yet: ack=0, hero at start
-  P.reconcile(pr4, sx, sy, 0, false, 0, 100, tiles);
-  ok(pr4.x > sx + 5, "unacked input replays forward — no snap back to the stale server pos");
-  ok(Math.abs(pr4.x - predictedX) < 1.5, "replay lands on the local prediction — near-zero correction");
+  P.reconcile(pr4, sx, sy, 0, false, -1, sx, sy);   // first fix, live at start
+  P.recordInput(pr4, 1, 0);                        // sent seq 1 — anchored at sx
+  P.stepPred(pr4, tiles, right, false, 100);       // local prediction runs ahead
+  P.recordInput(pr4, 2, 100);                      // heartbeat re-sends the held state
+  const ranTo = pr4.x;
+  // the server agrees (it stood at sx when seq 1 landed) but its CURRENT position
+  // is a whole RTT stale — that staleness must not move us one pixel
+  P.reconcile(pr4, sx + 2, sy, 0, false, 1, sx, sy);
+  ok(pr4.x === ranTo, "an agreeing server costs zero correction — no drag, no overshoot");
 
-  // once the server acks the input, it is pruned and we anchor to the fresh truth
-  P.reconcile(pr4, sx + 8, sy, 0, false, 1, 120, tiles);
-  ok(pr4.hist.length === 0, "acked inputs are pruned from the history buffer");
+  // the same ack must never be reconciled twice (that is what pushed us off course)
+  P.reconcile(pr4, sx + 2, sy, 0, false, 1, sx, sy);
+  ok(pr4.x === ranTo, "a repeated ack is reconciled only once");
 
-  // a large disagreement (knockback/teleport) still snaps to the server truth
-  P.reconcile(pr4, sx + 200, sy, 0, false, 1, 130, tiles);
-  ok(Math.abs(pr4.x - (sx + 200)) < 0.001, "a large disagreement snaps to the server truth");
+  // genuine divergence (knockback: the server was 10px behind our anchor) is
+  // absorbed gradually
+  P.reconcile(pr4, sx, sy, 0, false, 2, ranTo - 10, sy);
+  ok(Math.abs(pr4.x - (ranTo - 10 * 0.3)) < 0.001, "a real divergence is blended in");
+
+  // a gross divergence is taken in full
+  P.recordInput(pr4, 3, 200);
+  const before3 = pr4.x;
+  P.reconcile(pr4, sx, sy, 0, false, 3, before3 - 50, sy);
+  ok(Math.abs(pr4.x - (before3 - 50)) < 0.001, "a gross divergence is taken in full");
 
   // room change resets the prediction outright
-  P.reconcile(pr4, 50, 50, 3, false, 1, 140, tiles);
+  P.reconcile(pr4, 50, 50, 3, false, 4, 50, 50);
   ok(pr4.x === 50 && pr4.room === 3, "room change resets the prediction");
 
   // a stale (out-of-order) ack must never rewind the hero
-  P.reconcile(pr4, 999, 50, 3, false, 0, 150, tiles);
+  P.reconcile(pr4, 999, 50, 3, false, 2, 999, 50);
   ok(pr4.x === 50, "a stale, out-of-order ack is ignored");
 }
 

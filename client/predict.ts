@@ -4,35 +4,38 @@
  * core's movement math (speed, tri-point collision, 60 Hz), so the prediction
  * barely drifts and headless tests can exercise it.
  *
- * Reconciliation is input-seq + server-ack + replay: each input the client
- * sends carries a seq; the server echoes the last seq it applied as the
- * snapshot `ack`. On a snapshot we anchor to the authoritative position (which
- * already includes knockback and everything up through `ack`) and REPLAY the
- * still-unacked held inputs forward to now. Perfect prediction therefore lands
- * on top of itself — zero correction, no backward drag at high ping. */
+ * Reconciliation compares ANCHORS, it never replays motion. Every input the
+ * client sends carries a seq; when the server receives seq N it records the
+ * hero's position at that instant — the state the held input N first acts on —
+ * and echoes it back as ackX/ackY. The client recorded its own predicted
+ * position at the moment it sent N. Both sides then apply the same held states
+ * for the same durations, so LATENCY CANCELS: the gap between those two anchors
+ * is pure divergence (knockback, collision, server authority), not lag. It is
+ * zero in steady motion and zero through direction changes, so a correct
+ * prediction is never corrected — no backward drag, and (because reconcile adds
+ * no motion of its own) nothing can double-count into an overshoot. */
 
 import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID } from "../shared/core";
 
-/** one sampled held-state, tagged with the seq the server acks and the
- *  wall-clock time it became active */
-export interface InputSample { seq: number; input: Input; attacking: boolean; t: number; }
+/** where our prediction stood when we sent input `seq` — the anchor the server
+ *  answers with its own position for the same seq */
+export interface InputSample { seq: number; px: number; py: number; t: number; }
 
 export interface Pred {
   x: number; y: number; room: number; live: boolean;
-  hist: InputSample[];   // unacked (and recently acked) held inputs, seq-ascending
-  lastAck: number;       // highest ack seen — guards out-of-order snapshots
+  hist: InputSample[];   // anchors for inputs the server has not answered yet
+  lastAck: number;       // highest ack reconciled — guards repeats/out-of-order
 }
 
 export const freshPred = (): Pred => ({ x: 0, y: 0, room: -1, live: false, hist: [], lastAck: -1 });
 
-/** movement bodies only need position + live; keeps stepPred usable on a
- *  throwaway replay accumulator, not just a full Pred */
+/** movement bodies only need position + live */
 type Body = { x: number; y: number; live: boolean };
 
-const HIST_MS = 2000;   // cap history age — bounds memory
-const BLEND = 0.5;      // pull toward the replayed target; high is safe now that
-                        // the target is CURRENT (replayed to now), not stale
-const SNAP = 40;        // px error above which we hard-snap to the server truth
+const HIST_MS = 3000;   // cap history age — bounds memory
+const BLEND = 0.3;      // fraction of a genuine divergence absorbed per snapshot
+const SNAP = 32;        // px divergence above which we take the correction in full
+const DESYNC = 80;      // no-anchor safety net: gross distance to the server pos
 
 function solidAtTiles(tiles: string[], px: number, py: number): boolean {
   if (px < 0 || py < 0 || px >= W || py >= H) return true;
@@ -79,46 +82,51 @@ export function stepPred(b: Body, tiles: string[], inp: Input,
   }
 }
 
-/** remember a held-state we just sent, so the next snapshot can replay from the
- *  ack forward. Call once per input message, with the seq that message carried. */
-export function recordInput(pred: Pred, seq: number, input: Input,
-                            attacking: boolean, tNow: number): void {
-  pred.hist.push({ seq, input: { ...input }, attacking, t: tNow });
+/** drop an anchor for the input we are sending right now: where the prediction
+ *  stands *before* this held state takes effect — the same instant the server
+ *  will record when the message lands. Call once per input message. */
+export function recordInput(pred: Pred, seq: number, tNow: number): void {
+  pred.hist.push({ seq, px: pred.x, py: pred.y, t: tNow });
   const cutoff = tNow - HIST_MS;
   while (pred.hist.length > 1 && pred.hist[0].t < cutoff) pred.hist.shift();
 }
 
-/** fold the authoritative position in. Anchor to the server truth (`ack`
- *  already applied), replay the still-unacked held inputs up to `tNow`, then
- *  blend the local hero toward that reconstructed position. Hard-snap on room
- *  change, downed, first fix, or gross disagreement (knockback/teleport). */
+/** fold the server's truth in. `authX/authY` is the hero's CURRENT server
+ *  position (used only to snap on room change / downed / gross desync);
+ *  `ackX/ackY` is where the server stood when it received input `ackSeq` — the
+ *  twin of our own anchor for that seq. Their difference is the real divergence. */
 export function reconcile(pred: Pred, authX: number, authY: number, room: number,
-                          downed: boolean, ackSeq: number, tNow: number,
-                          tiles: string[]): void {
-  if (ackSeq < pred.lastAck) return;   // stale/out-of-order snapshot — ignore
-  pred.lastAck = ackSeq;
-  // drop everything the server has already accounted for
-  pred.hist = pred.hist.filter(s => s.seq > ackSeq);
-
+                          downed: boolean, ackSeq: number,
+                          ackX: number, ackY: number): void {
+  // a new life, a new room, or no fix yet: obey the server outright
   if (!pred.live || pred.room !== room || downed) {
     pred.x = authX; pred.y = authY; pred.room = room; pred.live = true;
-    pred.hist = [];   // history from another room/life is meaningless
+    pred.hist = [];   // anchors from another room/life are meaningless
+    pred.lastAck = Math.max(pred.lastAck, ackSeq);
+    return;
+  }
+  // reconcile each ack once: re-applying the same error would push us off course
+  if (ackSeq <= pred.lastAck) return;
+  pred.lastAck = ackSeq;
+
+  const anchor = pred.hist.find(s => s.seq === ackSeq);
+  pred.hist = pred.hist.filter(s => s.seq >= ackSeq);   // keep the anchor + newer
+
+  if (!anchor) {
+    // history gap (reconnect, long stall): trust the prediction, but rescue a
+    // gross desync from the current server position
+    if (Math.hypot(authX - pred.x, authY - pred.y) > DESYNC) {
+      pred.x = authX; pred.y = authY;
+    }
     return;
   }
 
-  // replay the unacked held inputs from the server truth forward to now
-  const base: Body = { x: authX, y: authY, live: true };
-  for (let i = 0; i < pred.hist.length; i++) {
-    const s = pred.hist[i];
-    const tEnd = i + 1 < pred.hist.length ? pred.hist[i + 1].t : tNow;
-    const dt = tEnd - s.t;
-    if (dt > 0) stepPred(base, tiles, s.input, s.attacking, dt);
-  }
-
-  if (Math.hypot(base.x - pred.x, base.y - pred.y) > SNAP) {
-    pred.x = base.x; pred.y = base.y;   // the server disagrees a lot — obey it
+  // divergence measured at the SAME point of the input timeline — lag cancels
+  const ex = ackX - anchor.px, ey = ackY - anchor.py;
+  if (Math.hypot(ex, ey) > SNAP) {   // knockback, teleport, hard disagreement
+    pred.x += ex; pred.y += ey;
     return;
   }
-  pred.x += (base.x - pred.x) * BLEND;
-  pred.y += (base.y - pred.y) * BLEND;
+  pred.x += ex * BLEND;
+  pred.y += ey * BLEND;
 }
