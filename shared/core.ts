@@ -453,7 +453,7 @@ export interface Enemy {
   stagger: number;     // shield rocked aside by a blocked arrow (sentinel)
 }
 
-export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm";
+export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm" | "feather";
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
 
 /** heart containers: overworld secrets + boss drops. The golem entry only
@@ -471,6 +471,17 @@ export const ELIXIRS: { id: string; room: number; x: number; y: number }[] = [
   { id: "ice",    room: 10, x: 13 * TILE + 8, y: 2 * TILE + 8 },
   { id: "cellar", room: 12, x: 8 * TILE, y: 6 * TILE + 8 },   // optional wing reward
 ];
+
+/** phoenix feather: team item, one remote revive in FREE ROAM (Frozen Crypt wing) */
+export const FEATHERS: { id: string; room: number; x: number; y: number }[] = [
+  { id: "crypt", room: 13, x: 3 * TILE + 8, y: 10 * TILE + 8 },
+];
+
+/** FREE ROAM alone-down bleed window — 30s at 60 Hz */
+export const BLEED_TICKS = 1800;
+/** spared wraith: half-speed touch-revive when hugging a downed hero (same room only) */
+const WRAITH_ANCHOR_RANGE = 48;
+const WRAITH_REVIVE_NEEDED = 90;
 export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
@@ -490,6 +501,7 @@ export interface Player {
   downed: boolean;
   elixir: boolean;      // carried Elixir of Life (auto-revive on fall)
   reviveP: number;      // 0..90 revive progress while partner touches
+  bleedT: number;       // FREE ROAM alone-down countdown (ticks)
   say: string; sayT: number;
   present: boolean;     // slot occupied by a connected player/agent
   npc: boolean;         // an AI companion: free to cower in doorways, but
@@ -498,6 +510,7 @@ export interface Player {
   transitionCd: number; // ticks before another room edge-cross (anti door ping-pong)
   crossFade: number;    // free roam: room-transition fade for this viewer only
   crossBanner: string; crossBannerT: number;
+  doorCampT: number;   // npc doorway camping — triggers auto-yield (never blocks hero input)
 }
 
 export type GameScreen = "menu" | "lobby" | "title" | "play" | "gameover" | "win";
@@ -505,13 +518,13 @@ export type TravelMode = "linked" | "free";
 
 export interface Input {
   l: boolean; r: boolean; u: boolean; d: boolean;
-  a: boolean; b: boolean; st: boolean;
+  a: boolean; b: boolean; st: boolean; f: boolean;
 }
 export interface LatchedInput extends Input {
-  aE: boolean; bE: boolean; stE: boolean;   // fresh-press edges
+  aE: boolean; bE: boolean; stE: boolean; fE: boolean;   // fresh-press edges
 }
 export const emptyInput = (): Input =>
-  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false });
+  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false });
 
 export interface Ending { id: string; title: string; lines: string[]; }
 
@@ -539,6 +552,11 @@ export function endingFor(g: Game): Ending {
     return { id: "lone-thaw", title: "LONE THAW", lines: [
       "you touched the pedestal as your partner lay in the snow.",
       "spring came — now carry them home through the meltwater." ] };
+  }
+  if (g.bleedoutLoss) {
+    return { id: "abandoned", title: "LEFT IN THE COLD", lines: [
+      "your partner bled out alone while winter pressed in.",
+      "spring will not forget who was left behind." ] };
   }
   if (g.wraithSpared) {
     return { id: "mercy", title: "WINTER'S COMPANION", lines: [
@@ -598,8 +616,10 @@ export interface Game {
   amberClaimed: boolean;
   gateMelted: boolean;
   hasBow: boolean;
+  hasFeather: boolean;
   containers: Record<string, boolean>;
   elixirs: Record<string, boolean>;
+  feathers: Record<string, boolean>;
   wraithDead: boolean;
   emberDead: boolean;
   charmClaimed: boolean;
@@ -616,6 +636,7 @@ export interface Game {
   stats: [PlayerStats, PlayerStats];
   travelMode: TravelMode;   // linked = Four Swords; free = independent rooms + PiP
   activeSim: number;      // which sim the legacy flat accessors read (non-snapshot)
+  bleedoutLoss: boolean;  // FREE ROAM gameover: partner bled out alone
 }
 
 export const PLAYER_W = 10, PLAYER_H = 12;
@@ -638,8 +659,8 @@ export function newPlayer(idx: number): Player {
     x: (3 + idx * 1.5) * TILE, y: 6.5 * TILE, dir: 0,
     hp: 6, maxHp: 6, keys: 0,
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, walk: 0, moving: false,
-    downed: false, elixir: false, reviveP: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
-    transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0,
+    downed: false, elixir: false, reviveP: 0, bleedT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
+    transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
   };
 }
 
@@ -698,6 +719,11 @@ function fillActiveSimRoom(g: Game, index: number): void {
   for (const el of ELIXIRS) {
     if (el.room === index && !g.elixirs[el.id]) {
       g.pickups.push({ kind: "elixir", x: el.x, y: el.y, t: 0, cid: el.id });
+    }
+  }
+  for (const fe of FEATHERS) {
+    if (fe.room === index && !g.feathers[fe.id] && !g.hasFeather) {
+      g.pickups.push({ kind: "feather", x: fe.x, y: fe.y, t: 0, cid: fe.id });
     }
   }
   if (g.doors[index]) {
@@ -825,7 +851,7 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; }
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
-    if (p.downed) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; }
+    if (p.downed) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; }
   }
   transitionBanner(g, index);
 }
@@ -837,13 +863,14 @@ export function newGame(): Game {
     players: [newPlayer(0), newPlayer(1)] as [Player, Player],
     cleared: {}, doors: {},
     golemDead: false, amberClaimed: false, gateMelted: false,
-    hasBow: false, containers: {}, elixirs: {}, wraithDead: false,
-    emberDead: false, charmClaimed: false, hardGate: false,
+    hasBow: false, hasFeather: false, containers: {}, elixirs: {}, feathers: {},
+    wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
     wraithSpared: false, companion: null, ending: null,
     fade: 0, message: "", messageT: 0, ticks: 0, shake: 0,
     events: [] as GameEvent[], stats: [emptyStats(), emptyStats()] as [PlayerStats, PlayerStats],
     travelMode: "linked" as TravelMode,
     activeSim: 0,
+    bleedoutLoss: false,
   };
   // legacy flat API forwards to sims[activeSim]. Non-enumerable on purpose:
   // Object.assign(g, newGame()) then copies only the DATA fields (incl.
@@ -946,6 +973,64 @@ export function swordBox(p: Player): { x: number; y: number; w: number; h: numbe
   }
 }
 
+/** partner in the same room/sim and able to touch-revive */
+function partnerCanTouchRevive(g: Game, pi: number): boolean {
+  const other = g.players[1 - pi];
+  return other.present && !other.downed &&
+    other.simIndex === g.players[pi].simIndex;
+}
+
+/** spared wraith hugs a downed hero — only while a living partner shares the room */
+function wraithAnchorsDowned(g: Game, pi: number): boolean {
+  if (!g.companion || !g.wraithSpared) return false;
+  if (!partnerCanTouchRevive(g, pi)) return false;
+  const p = g.players[pi];
+  const c = g.companion;
+  const px = p.x + PLAYER_W / 2, py = p.y + PLAYER_H / 2;
+  return Math.hypot(c.x + 10 - px, c.y + 10 - py) < WRAITH_ANCHOR_RANGE;
+}
+
+function completeRevive(g: Game, pi: number, reviverPi: number, msg: string): void {
+  const p = g.players[pi];
+  if (reviverPi >= 0) g.stats[reviverPi].revives += 1;
+  p.downed = false;
+  p.hp = Math.max(4, Math.floor(p.maxHp / 2));
+  p.invuln = 90;
+  p.reviveP = 0;
+  p.bleedT = 0;
+  burst(g, p.x + 5, p.y + 6, "#9be07a", 12);
+  sfx(g, "revive");
+  g.message = msg;
+  g.messageT = 120;
+}
+
+function tryFeatherRevive(g: Game, pi: number, inp: LatchedInput): void {
+  if (!inp.fE || !g.hasFeather || g.travelMode !== "free") return;
+  const p = g.players[pi];
+  if (p.downed) return;
+  const other = g.players[1 - pi];
+  if (!other.present || !other.downed) return;
+  if (other.simIndex === p.simIndex) return;
+
+  g.hasFeather = false;
+  g.stats[pi].revives += 1;
+  other.downed = false;
+  other.hp = Math.max(4, Math.floor(other.maxHp / 2));
+  other.invuln = 90;
+  other.reviveP = 0;
+  other.bleedT = 0;
+  burst(g, other.x + 5, other.y + 6, "#ffb86a", 18);
+  sfx(g, "revive");
+  g.message = "A Phoenix Feather lifts your partner from the snow!";
+  g.messageT = 200;
+}
+
+function bleedoutEnding(g: Game): Ending {
+  return { id: "abandoned", title: "LEFT IN THE COLD", lines: [
+    "your partner bled out alone while winter pressed in.",
+    "spring will not forget who was left behind." ] };
+}
+
 function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: number): void {
   const p = g.players[pi];
   if (p.invuln > 0 || p.downed) return;
@@ -974,11 +1059,16 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
     p.hp = 0;
     p.downed = true;
     p.reviveP = 0;
+    p.bleedT = 0;
     sfx(g, "down");
     const other = g.players[1 - pi];
     if (other.downed || !other.present) {
       g.screen = "gameover";
       sfx(g, "gameover");
+    } else if (g.travelMode === "free" && !partnerCanTouchRevive(g, pi)) {
+      p.bleedT = BLEED_TICKS;
+      g.message = "Bleeding out alone! Partner must reach you — or press F to send a Phoenix Feather";
+      g.messageT = 220;
     } else {
       g.message = "Your partner is down! Stand close to revive";
       g.messageT = 180;
@@ -1321,26 +1411,44 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (p.bowCd > 0) p.bowCd--;
   if (p.sayT > 0) p.sayT--;
 
+  if (p.sayT > 0) p.sayT--;
+
+  if (!p.downed) tryFeatherRevive(g, pi, inp);
+
   if (p.downed) {
-    // partner touch-revive — only while sharing a room
     const other = g.players[1 - pi];
-    if (other.present && !other.downed && other.simIndex === p.simIndex &&
+    const touchRevive = partnerCanTouchRevive(g, pi);
+    if (touchRevive && !other.downed &&
         overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
                 other.x, other.y, PLAYER_W, PLAYER_H)) {
+      p.bleedT = 0;
       p.reviveP++;
-      if (p.reviveP >= 90) {
-        g.stats[1 - pi].revives += 1;
-        p.downed = false;
-        p.hp = Math.max(4, Math.floor(p.maxHp / 2));
-        p.invuln = 90;
-        p.reviveP = 0;
-        burst(g, p.x + 5, p.y + 6, "#9be07a", 12);
-        sfx(g, "revive");
-        g.message = "Back on your feet!";
-        g.messageT = 100;
+      if (p.reviveP >= WRAITH_REVIVE_NEEDED) {
+        completeRevive(g, pi, 1 - pi, "Back on your feet!");
+      }
+    } else if (wraithAnchorsDowned(g, pi)) {
+      p.bleedT = 0;
+      if (g.ticks % 2 === 0) p.reviveP++;
+      if (p.reviveP >= WRAITH_REVIVE_NEEDED) {
+        completeRevive(g, pi, -1, "The wraith holds you in the between-world");
       }
     } else if (p.reviveP > 0) {
       p.reviveP--;
+    }
+
+    if (g.travelMode === "free" && other.present && !other.downed && !touchRevive) {
+      if (p.bleedT <= 0) p.bleedT = BLEED_TICKS;
+      p.bleedT--;
+      if (p.bleedT <= 0) {
+        g.bleedoutLoss = true;
+        g.ending = bleedoutEnding(g);
+        g.screen = "gameover";
+        sfx(g, "gameover");
+        g.message = "The cold took them while help was rooms away";
+        g.messageT = 200;
+      }
+    } else {
+      p.bleedT = 0;
     }
     return;
   }
@@ -1435,6 +1543,12 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         g.message = "The Miner's Charm! Your arrows burn with ember fire";
         g.messageT = 220;
         sfx(g, "secret");
+      } else if (it.kind === "feather") {
+        g.hasFeather = true;
+        g.feathers[it.cid ?? "?"] = true;
+        g.message = "Phoenix Feather! Press F to remotely lift a downed partner (one use)";
+        g.messageT = 220;
+        sfx(g, "secret");
       } else {
         if (p.elixir) continue;   // one bottle per hero — leave it for later
         p.elixir = true;
@@ -1503,11 +1617,14 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     sfx(g, "secret");
   }
 
-  // teleports
   const spec = ROOMS[g.room];
   const ptx = Math.floor((p.x + PLAYER_W / 2) / TILE);
   const pty = Math.floor((p.y + PLAYER_H / 2) / TILE);
+  const leaveBlocked = p.npc && g.travelMode === "free" && !canNpcLeave(g, pi);
+
+  // teleports — caves obey the same FREE ROAM leave permission as doorways
   if (spec.teleport && p.transitionCd === 0 && tileAt(g, ptx, pty) === "c") {
+    if (leaveBlocked) return;
     if (g.room === 8 && g.hardGate && !g.charmClaimed) {
       if (g.messageT === 0) {
         g.message = "Dwarven wards seal this cave... their charm lies in the burning deep";
@@ -1517,8 +1634,20 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       p.y += 2;
       return;
     }
+    // LINKED: npc cannot yank the party through a cave alone — hero must stand on the mouth
+    if (p.npc && g.travelMode === "linked" && g.players[1 - pi].present) {
+      const hero = g.players[1 - pi];
+      const hptx = Math.floor((hero.x + PLAYER_W / 2) / TILE);
+      const hpty = Math.floor((hero.y + PLAYER_H / 2) / TILE);
+      if (tileAt(g, hptx, hpty) !== "c") return;
+    }
     sfx(g, "stairs");
     roomTransition(g, pi, spec.teleport.room, spec.teleport.x, spec.teleport.y);
+    for (const pl of g.players) {
+      if (!pl.present) continue;
+      markTransition(pl);
+      nudgeOffCaveMouth(g, pl);
+    }
     return;
   }
 
@@ -1530,7 +1659,6 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     return hero.present && !hero.npc && hero.simIndex === p.simIndex &&
       overlap(p.x, p.y, PLAYER_W, PLAYER_H, hero.x, hero.y, PLAYER_W, PLAYER_H);
   })();
-  const leaveBlocked = p.npc && g.travelMode === "free" && !canNpcLeave(g, pi);
   if (anchored) {
     // the companion may press into the doorway all it likes — harmlessly
   } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.x < EDGE && inp.l && spec.exits.left !== undefined) {
@@ -1544,6 +1672,25 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   }
   p.x = Math.max(0, Math.min(W - PLAYER_W, p.x));
   p.y = Math.max(0, Math.min(H - PLAYER_H, p.y));
+
+  // FREE ROAM: npc camping a doorway yields to room center — hero input is never blocked
+  if (p.npc && g.travelMode === "free") {
+    const EDGE = 2;
+    const pressing = inp.l || inp.r || inp.u || inp.d;
+    const atEdge = p.x < EDGE || p.x + PLAYER_W > W - EDGE ||
+      p.y < EDGE || p.y + PLAYER_H > H - EDGE;
+    if (atEdge && pressing) {
+      p.doorCampT++;
+      if (p.doorCampT > 90) {
+        p.x = 7.5 * TILE;
+        p.y = 8 * TILE;
+        p.doorCampT = 0;
+        p.transitionCd = 0;
+      }
+    } else if (!atEdge) {
+      p.doorCampT = 0;
+    }
+  }
 }
 
 function tickSimPhysics(g: Game): void {
@@ -1596,15 +1743,34 @@ function tickSimPhysics(g: Game): void {
   if (g.companion) {
     const c = g.companion;
     c.t++;
-    let ax = 0, ay = 0, n = 0;
-    for (const p of g.players) {
-      if (!p.present || p.simIndex !== si) continue;
-      ax += p.x; ay += p.y; n++;
+    let tx = 0, ty = 0, n = 0;
+    // spirit anchor: stay on a downed hero while a living partner shares the room
+    if (g.wraithSpared) {
+      for (let pi = 0; pi < 2; pi++) {
+        const p = g.players[pi];
+        if (!p.present || !p.downed || p.simIndex !== si) continue;
+        if (!partnerCanTouchRevive(g, pi)) continue;
+        tx = p.x + PLAYER_W / 2 - 10;
+        ty = p.y + PLAYER_H / 2 - 10;
+        n = 1;
+        break;
+      }
+    }
+    if (n === 0) {
+      let ax = 0, ay = 0;
+      for (const p of g.players) {
+        if (!p.present || p.simIndex !== si) continue;
+        ax += p.x; ay += p.y; n++;
+      }
+      if (n > 0) {
+        tx = ax / n - 4;
+        ty = ay / n - 22;
+      }
     }
     if (n > 0) {
-      const tx = ax / n - 4, ty = ay / n - 22;
-      c.x += (tx - c.x) * 0.03 + Math.cos(c.t * 0.04) * 0.3;
-      c.y += (ty - c.y) * 0.03 + Math.sin(c.t * 0.05) * 0.25;
+      const pull = n === 1 && g.wraithSpared ? 0.08 : 0.03;
+      c.x += (tx - c.x) * pull + Math.cos(c.t * 0.04) * 0.3;
+      c.y += (ty - c.y) * pull + Math.sin(c.t * 0.05) * 0.25;
     }
     if (c.t % 130 === 60) {
       let best: Enemy | null = null, bd = 160;
@@ -1719,7 +1885,9 @@ export interface Snapshot {
   players: {
     x: number; y: number; dir: Dir; hp: number; maxHp: number; keys: number;
     attack: number; invuln: number; walk: number; moving: boolean;
-    downed: boolean; elixir: boolean; reviveP: number; say: string; sayT: number; present: boolean;
+    downed: boolean; elixir: boolean; reviveP: number; bleedT: number;
+    doorCamp: boolean;
+    say: string; sayT: number; present: boolean;
   }[];
   enemies: { kind: EnemyKind; x: number; y: number; hp: number; maxHp: number;
              hurt: number; phase: number; t: number; dead: boolean; spareP: number; stagger: number }[];
@@ -1727,7 +1895,7 @@ export interface Snapshot {
   pickups: { kind: PickupKind; x: number; y: number }[];
   projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
   pedestal: { x: number; y: number; final: boolean } | null;
-  hasBow: boolean; amberClaimed: boolean; charm: boolean;
+  hasBow: boolean; amberClaimed: boolean; charm: boolean; hasFeather: boolean;
   message: string; messageT: number;
   shake: number; ticks: number; fade: number;
   events: GameEvent[];
@@ -1749,7 +1917,8 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
   return {
     x: p.x, y: p.y, dir: p.dir, hp: p.hp, maxHp: p.maxHp, keys: p.keys,
     attack: p.attack, invuln: p.invuln, walk: p.walk, moving: p.moving,
-    downed: p.downed, elixir: p.elixir, reviveP: p.reviveP, say: p.say, sayT: p.sayT,
+    downed: p.downed, elixir: p.elixir, reviveP: p.reviveP, bleedT: p.bleedT,
+    doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
   };
 }
@@ -1809,7 +1978,7 @@ export function toSnapshot(g: Game, names: [string, string],
       x: pr.x, y: pr.y, vx: pr.vx, vy: pr.vy, friendly: pr.friendly,
     })),
     pedestal: sim.pedestal,
-    hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed,
+    hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
     message: overlay.message, messageT: overlay.messageT,
     shake: g.shake, ticks: g.ticks, fade: overlay.fade,
     events: g.events.slice(),
@@ -1828,5 +1997,6 @@ export function latch(cur: Input, prev: Input): LatchedInput {
     aE: cur.a && !prev.a,
     bE: cur.b && !prev.b,
     stE: cur.st && !prev.st,
+    fE: cur.f && !prev.f,
   };
 }

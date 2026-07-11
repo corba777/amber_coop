@@ -27,6 +27,40 @@ export function partnerPipOrigin(): { ox: number; oy: number } {
   return { ox: PIP_PAD_X, oy: PIP_PAD_TOP };
 }
 
+function pipTile(ch: string): HTMLCanvasElement {
+  return TILES[ch] ?? TILES.g;
+}
+
+/** PiP enemy sprites — must index animated sheets (bat/slime/wisp), never pass arrays */
+function drawPipEnemy(ctx: CanvasRenderingContext2D, e: PartnerView["enemies"][number],
+                      ticks: number, x: number, y: number): void {
+  if (e.hurt > 0 && Math.floor(e.hurt / 3) % 2 === 0) ctx.globalAlpha = 0.5;
+  if (e.kind === "slime") {
+    const f = e.phase === 1 ? 1 : Math.floor(e.t / 30) % 2;
+    ctx.drawImage(SPR.slime[f], Math.round(x) - 2, Math.round(y) - 3);
+  } else if (e.kind === "bat") {
+    ctx.drawImage(SPR.bat[Math.floor(e.t / 8) % 2], Math.round(x) - 2, Math.round(y) - 2);
+  } else if (e.kind === "wisp") {
+    const bob = Math.sin(ticks * 0.08 + x) * 1.5;
+    ctx.globalAlpha *= 0.9;
+    ctx.drawImage(SPR.wisp[Math.floor(e.t / 14) % 2], Math.round(x) - 2, Math.round(y) - 3 + bob);
+  } else if (e.kind === "golem" || e.kind === "ember") {
+    const img = e.kind === "ember" ? SPR.ember : SPR.golem;
+    ctx.drawImage(img, Math.round(x) - 2, Math.round(y) - 3);
+  } else if (e.kind === "sentinel") {
+    ctx.drawImage(SPR.sentinel[0], Math.round(x) - 2, Math.round(y) - 2);
+  } else if (e.kind === "spitter") {
+    ctx.drawImage(SPR.spitter[0], Math.round(x) - 2, Math.round(y) - 2);
+  } else if (e.kind === "wraith") {
+    const bob = Math.sin(ticks * 0.06) * 2;
+    ctx.drawImage(SPR.wraith, Math.round(x) - 2, Math.round(y) - 3 + bob);
+  } else {
+    ctx.fillStyle = "#e8384f";
+    ctx.fillRect(Math.round(x), Math.round(y), 12, 12);
+  }
+  ctx.globalAlpha = 1;
+}
+
 export function drawPartnerPip(
   ctx: CanvasRenderingContext2D,
   pv: PartnerView,
@@ -54,8 +88,8 @@ export function drawPartnerPip(
 
   for (let j = 0; j < ROWS; j++) {
     for (let i = 0; i < COLS; i++) {
-      const img = TILES[pv.tiles[j]?.charAt(i) ?? "g"] ?? TILES.g;
-      ctx.drawImage(img, i * TILE, j * TILE);
+      const ch = pv.tiles[j]?.charAt(i) ?? "g";
+      ctx.drawImage(pipTile(ch), i * TILE, j * TILE);
     }
   }
 
@@ -102,13 +136,7 @@ export function drawPartnerPip(
   for (const e of pv.enemies) {
     if (e.dead) continue;
     drawables.push({ y: e.y + 12, fn: () => {
-      if (e.kind === "slime") ctx.drawImage(SPR.slime[e.hurt > 0 ? 1 : 0], Math.round(e.x), Math.round(e.y));
-      else if (e.kind === "bat") ctx.drawImage(SPR.bat, Math.round(e.x), Math.round(e.y));
-      else if (e.kind === "wraith") ctx.drawImage(SPR.wraith, Math.round(e.x) - 2, Math.round(e.y) - 3);
-      else ctx.fillStyle = "#e8384f";
-      if (e.kind !== "slime" && e.kind !== "bat" && e.kind !== "wraith") {
-        ctx.fillRect(Math.round(e.x), Math.round(e.y), 12, 12);
-      }
+      drawPipEnemy(ctx, e, ticks, e.x, e.y);
     }});
   }
   drawables.sort((a, b) => a.y - b.y);

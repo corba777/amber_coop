@@ -64,9 +64,10 @@ Open the URL, enter a hero name, choose your quest (CLASSIC or LONG),
 your party (single / multiplayer / AI autopilot), and — if your partner is a
 model — its provider and temperament.
 
-**Controls:** WASD/arrows move · SPACE sword · X bow · M music · T thought
-panel · ENTER or click/tap to start. Revive a fallen partner by standing
-close. Keys are shared by the party.
+**Controls:** WASD/arrows move · SPACE sword · X bow · F phoenix feather (team,
+FREE ROAM remote revive) · M music · T thought panel · ENTER or click/tap to
+start. Revive a fallen partner by standing close (same room). Keys are shared
+by the party.
 
 ## The LLM partner, briefly
 

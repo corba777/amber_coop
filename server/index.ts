@@ -189,6 +189,7 @@ class Session {
           parseFailures: this.agent ? this.agent.parseFailures : 0,
           routeAssists: this.agent ? this.agent.routeAssists : 0,
           errands: this.agent ? this.agent.errandLog : [],
+          bleedout: this.game.bleedoutLoss,
           avgLatencyMs: this.agent && this.agent.planCount
             ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
         });
@@ -396,7 +397,7 @@ wss.on("connection", (ws, req) => {
       } else if (msg.t === "input" && msg.s) {
         session.rawInputs[slot] = {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
-          a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st,
+          a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
         };
       } else if (msg.t === "setup" && slot === 0 && session.game.screen === "menu" && msg.mode) {
         session.applySetup(msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode);

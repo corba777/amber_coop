@@ -113,8 +113,9 @@ test/selftest.ts    the whole safety net. test/bench.ts — virtual-time arena
 
 17 rooms. Classic: meadow → forest → Amber Lake → (cave) → Old Vault → golem →
 Amber Blade → melt the north gate → snowfield (bow) → glacier → (cave) → ice
-vault → Winter Wraith. Optional: Cellars (elixir), Frozen Crypt (container),
-Emberdeep rooms 14–16 (Ember Golem → Miner's Charm → fire arrows). LONG QUEST
+vault → Winter Wraith. Optional: Cellars (elixir), Frozen Crypt (container +
+phoenix feather), Emberdeep rooms 14–16 (Ember Golem → Miner's Charm → fire
+arrows). LONG QUEST
 (hardGate) seals the glacier until Emberdeep is cleared. Menu: quest → party
 (single / multiplayer / AI autopilot) → travel (LINKED / FREE ROAM, multiplayer
 only) → partner (human/LLM) → provider → temperament (bodyguard / companion /
@@ -139,20 +140,15 @@ Clients render the scry-mirror (`client/partnerpip.ts`) in both 2D and HD-2D
 before rooms ever diverge — hidden when `partnerView` is null. Guarded by tests
 [32] (null while shared), [38] (diverged sim harness), [15] (bundle anchors).
 
-**Stage 3 — FREE ROAM + live partner window (core shipped).** Menu axis:
-LINKED (canon Four Swords) vs FREE ROAM (independent rooms). In free roam a
-transition moves only the crosser; `sims[1]` holds the detached room, merge
-when both reunite. `update()` ticks every active sim via `activeSim`; enemies
-and projectiles are sim-local. Remote-revive on transition is LINKED-only
-(guarded by test [39]). PiP lives in `#pip` beside the game frame ([15] bundle
-anchor). Doorway settle: `transitionCd`, npc yield when overlapping the human,
-agent reunite→follow ([41]). Agent bridge (pre-Stage-4): when partner is in
-another room, `observe()` reports `partner.away`, route assist fires like solo,
-and follow does not chase stale coordinates (test [40]). **Stage 4 DONE:** declared
-fetch errands (bow / elixir / charm) with `say` + controller `why` in plans.jsonl;
-FREE ROAM leave permission (hero not downed, not in combat — test [42]); room-aware
-errand abort on rescue failsafe (test [43]); errand telemetry in matches.jsonl
-(test [44]).
+**Stage 3 — DONE.** FREE ROAM + live partner window. Menu axis LINKED vs
+FREE ROAM; split/merge sims; per-viewer overlays ([46]); no remote revive on
+transition ([39]). PiP scry-mirror ([15], [38]). Doorway settle ([41]); agent
+bridge when partner away ([40]). **Alone-down bleed-out:** 30s (`BLEED_TICKS`
+1800) in FREE ROAM when partner is in another room — zero → gameover +
+`abandoned` ending + `bleedout` in matches.jsonl ([48], [49]). **Phoenix
+Feather:** optional Frozen Crypt pickup; press **F** for the only remote revive
+(team, one use; same-room touch-revive still required there) ([50], [51]).
+Agent may spend the feather on rescue failsafe when routing is too slow.
 
 **Stage 4 — DONE.** Partner autonomy (errands) on the same machinery:
 - The agent declares the errand through `say` + `why` (controller logs to plans.jsonl).
