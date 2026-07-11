@@ -282,7 +282,7 @@ export class AgentPlayer {
   private errandHeroWasDown = false;
   private routeHopKey: string | null = null;
   private pickupStall = 0;
-  private pickupLastDist = Infinity;
+  private pickupBestDist = Infinity;   // closest we have ever come to this pickup
   private pickupTargetKey = "";
   private exitStall = 0;
   private exitLastDist = Infinity;
@@ -391,6 +391,7 @@ export class AgentPlayer {
 
   private abandonPickup(g: Game, depth: number, inp: Input): Input {
     this.pickupStall = 0;
+    this.pickupBestDist = Infinity;
     this.pickupTargetKey = "";
     this.intent = { action: "follow" };
     this.llmIntent = { action: "follow" };
@@ -922,14 +923,24 @@ export class AgentPlayer {
       }
       const dist = Math.hypot(p.x - mcx, p.y - mcy);
       const key = `${it.target}:${p.kind}:${p.x},${p.y}`;
+      // A stall is NO NEW GROUND GAINED — measured against the closest we have
+      // ever come. The old test (dist > lastDist - 2) demanded 2 px of progress
+      // per tick, but a hero walks 1.35 px/tick, so it could never reset: it was
+      // a blanket 75-tick timeout that abandoned every pickup mid-approach (the
+      // lake container was dropped 29 px short). Patience is generous enough for
+      // an honest detour — BFS around Amber Lake makes straight-line distance
+      // grow for a while before it falls again.
       if (key !== this.pickupTargetKey) {
         this.pickupTargetKey = key;
         this.pickupStall = 0;
-        this.pickupLastDist = dist;
-      } else if (dist > this.pickupLastDist - 2) this.pickupStall++;
-      else this.pickupStall = 0;
-      this.pickupLastDist = dist;
-      if (this.pickupStall > 75) return this.abandonPickup(g, depth, inp);
+        this.pickupBestDist = dist;
+      } else if (dist < this.pickupBestDist - 0.5) {
+        this.pickupBestDist = dist;   // real headway — reset the patience
+        this.pickupStall = 0;
+      } else {
+        this.pickupStall++;           // circling, blocked, or oscillating
+      }
+      if (this.pickupStall > 150) return this.abandonPickup(g, depth, inp);
       this.waypointSeek(g, inp, me, p.x, p.y);
       this.meleeGuard(inp, g, me, mcx, mcy);
       return inp;
