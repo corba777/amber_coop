@@ -62,6 +62,7 @@ class Session {
   sockets: (WebSocket | null)[] = [null, null];
   rawInputs: [Input, Input] = [emptyInput(), emptyInput()];
   prevInputs: [Input, Input] = [emptyInput(), emptyInput()];
+  lastInputSeq: [number, number] = [0, 0];   // last input seq applied per slot (echoed as snapshot ack)
   names: [string, string] = ["ILYA", "?"];
   mode: Mode | null = null;
   agent: AgentPlayer | null = null;
@@ -263,6 +264,7 @@ class Session {
           snapObj.events = events;
           snapObj.mode = this.mode;
           snapObj.thought = this.agent ? this.lastThought : null;
+          snapObj.ack = this.lastInputSeq[slot];
           ws.send(JSON.stringify({ t: "state", s: snapObj }));
         }
         this.game.events = [];
@@ -446,7 +448,7 @@ wss.on("connection", (ws, req) => {
   ws.on("message", data => {
     try {
       const msg = JSON.parse(String(data)) as {
-        t: string; s?: Input; mode?: Mode; provider?: ProviderName; provider2?: ProviderName;
+        t: string; s?: Input; seq?: number; mode?: Mode; provider?: ProviderName; provider2?: ProviderName;
         hardGate?: boolean; name?: string; hostName?: string; temperament?: Temperament;
         temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean;
       };
@@ -463,6 +465,10 @@ wss.on("connection", (ws, req) => {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
           a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
         };
+        // record the seq so the snapshot can ack it (guard out-of-order)
+        if (typeof msg.seq === "number" && msg.seq > session.lastInputSeq[slot]) {
+          session.lastInputSeq[slot] = msg.seq;
+        }
         }
       } else if (msg.t === "setup" && slot === 0 && session.game.screen === "menu" && msg.mode) {
         session.applySetup(
