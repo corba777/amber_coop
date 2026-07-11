@@ -1904,6 +1904,7 @@ export interface Snapshot {
   ending: Ending | null;
   thought?: { action: string; why?: string; ms: number } | null;
   partnerView?: PartnerView | null;
+  mode?: string | null;   // session mode — clients use for spectator UI
 }
 
 function serEnemy(e: Enemy): Snapshot["enemies"][number] {

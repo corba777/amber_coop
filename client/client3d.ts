@@ -13,10 +13,14 @@ import {
   Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
+import { drawDuoSpectatorHud, drawHearts } from "./hud";
 import { wrapText } from "./textutil";
 import { Pred, freshPred, stepPred, reconcile } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor } from "./audio";
 import { drawPartnerPip, partnerPipCanvasSize, partnerPipOrigin } from "./partnerpip";
+import {
+  freshMenu, menuOptions, menuConfirm, menuBack, menuTitle, resetMenu,
+} from "./menu";
 
 // ------------------------------------------------------------- connection
 const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -88,6 +92,12 @@ let names: [string, string] = ["ILYA", "?"];
 
 interface ProviderInfo { ok: boolean; label: string; hint: string; }
 let providers: Record<string, ProviderInfo> = {};
+let sessionMode: string | null = null;
+
+function isSpectator(s: Snapshot | null): boolean {
+  return sessionMode === "auto" || sessionMode === "duo" ||
+    (s !== null && !s.players[mySlot].present);
+}
 
 interface Particle { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; color: number; }
 const particles: Particle[] = [];
@@ -111,6 +121,7 @@ ws.onmessage = ev => {
     sendName();
     names = msg.names;
     providers = msg.providers ?? {};
+    sessionMode = msg.mode;
   } else if (msg.t === "kicked") {
     alert("Disconnected: " + msg.reason);
   } else if (msg.t === "state") {
@@ -120,9 +131,10 @@ ws.onmessage = ev => {
     if (snapTime > 0) snapInterval = Math.min(80, Math.max(16, now - snapTime));
     snapTime = now;
     snap = msg.s;
+    if (msg.s.mode !== undefined) sessionMode = msg.s.mode;
     if (msg.s.screen === "play") ensurePlayControl();
     const me = msg.s.players[mySlot];
-    if (msg.s.screen === "play" && me?.present) {
+    if (msg.s.screen === "play" && me?.present && !isSpectator(msg.s)) {
       reconcile(pred, me.x, me.y, msg.s.room, me.downed);
     }
     for (const e of msg.s.events) handleEvent(e);
@@ -149,6 +161,7 @@ function handleEvent(e: GameEvent): void {
 // ------------------------------------------------------------------ input
 const state: Input = emptyInput();
 function sendInput(): void {
+  if (isSpectator(snap)) return;
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "input", s: state }));
 }
 const KEYMAP: Record<string, keyof Input | undefined> = {
@@ -160,87 +173,37 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
 };
 
 // ---------------------------------------------------------------- menu
-type MenuStep = 0 | 1 | 2 | 3 | 4 | 5;
-const menu = { step: 0 as MenuStep, idx: 0, hard: false, provider: 0, auto: false,
-  travel: "linked" as "linked" | "free" };
-const TEMPERAMENTS = ["guard", "companion", "hunter"] as const;
-const PROVIDER_ORDER = ["ollama", "anthropic", "openai"] as const;
+const menu = freshMenu();
 
-function menuOptions(): { label: string; ok: boolean; hint?: string }[] {
-  if (menu.step === 0) return [
-    { label: "CLASSIC QUEST", ok: true, hint: "the road you know — Emberdeep is optional" },
-    { label: "LONG QUEST", ok: true, hint: "the glacier is sealed until Emberdeep falls" },
-  ];
-  if (menu.step === 1) return [
-    { label: "SINGLE PLAYER", ok: true },
-    { label: "MULTIPLAYER", ok: true },
-    { label: "AI AUTOPILOT", ok: true, hint: "sit back — the AI quests, you watch its mind" },
-  ];
-  if (menu.step === 2) return [
-    { label: "LINKED", ok: true, hint: "Four Swords — room changes move both heroes" },
-    { label: "FREE ROAM", ok: true, hint: "split up — watch your partner through the scry mirror" },
-  ];
-  if (menu.step === 3) return [
-    { label: "PARTNER: HUMAN", ok: true, hint: "you will get a link to share" },
-    { label: "PARTNER: LLM", ok: true, hint: "models & keys come from .env" },
-  ];
-  if (menu.step === 5) return [
-    { label: "BODYGUARD", ok: true, hint: "shields you — fights only what comes at YOU" },
-    { label: "COMPANION", ok: true, hint: "balanced: joins fights near the party" },
-    { label: "BERSERKER", ok: true, hint: "hunts everything that shares the room" },
-  ];
-  return PROVIDER_ORDER.map(k => {
-    const p = providers[k];
-    return p ? { label: p.label.toUpperCase(), ok: p.ok, hint: p.hint }
-             : { label: k.toUpperCase(), ok: false, hint: "not configured" };
-  });
-}
-function menuConfirm(): void {
-  if (menu.step === 0) {
-    menu.hard = menu.idx === 1;
-    menu.step = 1; menu.idx = 0;
-  } else if (menu.step === 1) {
-    if (menu.idx === 0) {
-      setUrlRoom(false);
-      ws.send(JSON.stringify({ t: "setup", mode: "single", hardGate: menu.hard }));
-    } else if (menu.idx === 2) {
-      menu.auto = true;
-      menu.step = 4; menu.idx = 0;   // straight to provider choice
-    } else { menu.auto = false; menu.step = 2; menu.idx = 0; }
-  } else if (menu.step === 2) {
-    menu.travel = menu.idx === 0 ? "linked" : "free";
-    menu.step = 3; menu.idx = 0;
-  } else if (menu.step === 3) {
-    if (menu.idx === 0) {
-      setUrlRoom(true);   // only now is there something worth sharing
-      ws.send(JSON.stringify({
-        t: "setup", mode: "human", hardGate: menu.hard, travelMode: menu.travel,
-      }));
-    } else { menu.step = 4; menu.idx = 0; }
-  } else if (menu.step === 4) {
-    const opt = menuOptions()[menu.idx];
-    if (!opt.ok) return;   // greyed out — no key in .env
-    menu.provider = menu.idx;
-    menu.step = 5; menu.idx = 1;   // companion preselected
-  } else {
-    setUrlRoom(false);
-    ws.send(JSON.stringify({
-      t: "setup", mode: menu.auto ? "auto" : "llm", provider: PROVIDER_ORDER[menu.provider],
-      hardGate: menu.hard, temperament: TEMPERAMENTS[menu.idx], travelMode: menu.travel,
-    }));
-  }
-}
-
-function inviteLink(): string {
-  return `${location.origin}${location.pathname}?room=${roomCode}`;
-}
 function setUrlRoom(on: boolean): void {
-  // keep the canonical URL bare unless a coop seat is actually open —
-  // otherwise browser autocomplete leaks stale ?room codes everywhere
   try {
     history.replaceState(null, "", on && roomCode
       ? `${location.pathname}?room=${roomCode}` : location.pathname);
   } catch { /* */ }
+}
+
+function menuSend(payload: Record<string, unknown>): void {
+  ws.send(JSON.stringify(payload));
+}
+
+function menuKey(code: string): boolean {
+  if (!snap || snap.screen !== "menu" || mySlot !== 0) return false;
+  const opts = menuOptions(menu, providers);
+  if (code === "ArrowUp" || code === "KeyW") { menu.idx = (menu.idx + opts.length - 1) % opts.length; return true; }
+  if (code === "ArrowDown" || code === "KeyS") { menu.idx = (menu.idx + 1) % opts.length; return true; }
+  if (code === "Enter" || code === "Space") {
+    menuConfirm(menu, providers, menuSend, setUrlRoom, myName);
+    return true;
+  }
+  if (code === "Backspace" || code === "ArrowLeft") {
+    if (menu.step > 0) menuBack(menu);
+    return true;
+  }
+  return false;
+}
+
+function inviteLink(): string {
+  return `${location.origin}${location.pathname}?room=${roomCode}`;
 }
 const copyBtn = document.getElementById("copylink") as HTMLButtonElement | null;
 if (copyBtn) {
@@ -257,25 +220,13 @@ if (copyBtn) {
     }
   });
 }
-function menuKey(code: string): boolean {
-  if (!snap || snap.screen !== "menu" || mySlot !== 0) return false;
-  const opts = menuOptions();
-  if (code === "ArrowUp" || code === "KeyW") { menu.idx = (menu.idx + opts.length - 1) % opts.length; return true; }
-  if (code === "ArrowDown" || code === "KeyS") { menu.idx = (menu.idx + 1) % opts.length; return true; }
-  if (code === "Enter" || code === "Space") { menuConfirm(); return true; }
-  if (code === "Backspace" || code === "ArrowLeft") {
-    if (menu.step > 0) { menu.step = (menu.step - 1) as MenuStep; menu.idx = 0; }
-    return true;
-  }
-  return false;
-}
 
 window.addEventListener("keydown", ev => {
   if (snap?.screen === "play") ensurePlayControl();
   ensureAudio();
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
-    menu.step = 0; menu.idx = 0;
+    resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
     ev.preventDefault();
@@ -283,6 +234,13 @@ window.addEventListener("keydown", ev => {
   }
   if (ev.code === "KeyT") { showThought = !showThought; return; }
   if (ev.code === "KeyM") { music.muted = !music.muted; return; }
+  if ((ev.code === "Enter" || ev.code === "Space") && snap &&
+      (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
+    ws.send(JSON.stringify({ t: "start" }));
+    ev.preventDefault();
+    return;
+  }
+  if (isSpectator(snap)) return;
   const k = KEYMAP[ev.code];
   if (k) {
     (state[k] as boolean) = true;
@@ -291,7 +249,7 @@ window.addEventListener("keydown", ev => {
     // the server's verdict on damage arrives with the snapshot
     if (snap && snap.screen === "play") {
       const meL = snap.players[mySlot];
-      if (meL && meL.present && !meL.downed) {
+      if (meL && meL.present && !meL.downed && snap && !isSpectator(snap)) {
         if (k === "a" && localAttack <= 0 && meL.attack === 0) {
           localAttack = 16;
           playSfx("swing");
@@ -317,6 +275,7 @@ window.addEventListener("pointerdown", () => {
   }
 });
 window.addEventListener("keyup", ev => {
+  if (isSpectator(snap)) return;
   const k = KEYMAP[ev.code];
   if (k) { (state[k] as boolean) = false; sendInput(); ev.preventDefault(); }
 });
@@ -383,7 +342,7 @@ function capturePlayKeys(ev: KeyboardEvent): void {
   if (snap?.screen !== "play") return;
   ensurePlayControl();
   if (ev.code === "Escape" && mySlot === 0) {
-    menu.step = 0; menu.idx = 0;
+    resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
     ev.preventDefault();
@@ -821,35 +780,52 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 
 function drawHud(s: Snapshot): void {
   const me = s.players[mySlot];
-  if (!me.present) {
-    uictx.font = "7px monospace";
-    uictx.fillStyle = "#ffb545";
-    uictx.fillText(`SPECTATING \u00b7 ${names[1]} quests alone`, 4, 12);
-  }
-  for (let i = 0; i < me.maxHp / 2; i++) {
-    const full = me.hp >= (i + 1) * 2;
-    const half = !full && me.hp === i * 2 + 1;
-    uictx.globalAlpha = full ? 1 : 0.25;
-    uictx.drawImage(SPR.heart, 4 + i * 13, 2, 12, 12);
-    if (half) {
-      uictx.globalAlpha = 1;
-      uictx.save();
-      uictx.beginPath(); uictx.rect(4 + i * 13, 2, 6, 12); uictx.clip();
-      uictx.drawImage(SPR.heart, 4 + i * 13, 2, 12, 12);
-      uictx.restore();
+  if (isSpectator(s)) {
+    if (sessionMode === "duo") {
+      drawDuoSpectatorHud(uictx, s, names);
+    } else {
+      uictx.font = "7px monospace";
+      uictx.fillStyle = "#ffb545";
+      uictx.fillText(`SPECTATING \u00b7 ${names[1]} quests alone`, 4, 12);
+      const quest = s.players[1];
+      if (quest.present) {
+        uictx.font = "7px monospace";
+        uictx.fillStyle = "#c9c3de";
+        uictx.fillText(names[1].slice(0, 14), 4, 22);
+        drawHearts(uictx, quest.hp, quest.maxHp, 4, 27, 7, 8);
+      }
     }
-  }
-  uictx.globalAlpha = 1;
-  const mate = s.players[1 - mySlot];
-  if (mate.present) {
-    uictx.font = "7px monospace";
-    uictx.fillStyle = "#c9c3de";
-    uictx.fillText(names[1 - mySlot].slice(0, 14), 4, 22);
-    for (let i = 0; i < mate.maxHp / 2; i++) {
-      uictx.globalAlpha = mate.hp >= (i + 1) * 2 ? 1 : mate.hp === i * 2 + 1 ? 0.6 : 0.2;
-      uictx.drawImage(SPR.heart, 4 + i * 8, 27, 7, 7);
+  } else {
+    if (!me.present) {
+      uictx.font = "7px monospace";
+      uictx.fillStyle = "#ffb545";
+      uictx.fillText(`SPECTATING \u00b7 ${names[1]} quests alone`, 4, 12);
+    }
+    for (let i = 0; i < me.maxHp / 2; i++) {
+      const full = me.hp >= (i + 1) * 2;
+      const half = !full && me.hp === i * 2 + 1;
+      uictx.globalAlpha = full ? 1 : 0.25;
+      uictx.drawImage(SPR.heart, 4 + i * 13, 2, 12, 12);
+      if (half) {
+        uictx.globalAlpha = 1;
+        uictx.save();
+        uictx.beginPath(); uictx.rect(4 + i * 13, 2, 6, 12); uictx.clip();
+        uictx.drawImage(SPR.heart, 4 + i * 13, 2, 12, 12);
+        uictx.restore();
+      }
     }
     uictx.globalAlpha = 1;
+    const mate = s.players[1 - mySlot];
+    if (mate.present) {
+      uictx.font = "7px monospace";
+      uictx.fillStyle = "#c9c3de";
+      uictx.fillText(names[1 - mySlot].slice(0, 14), 4, 22);
+      for (let i = 0; i < mate.maxHp / 2; i++) {
+        uictx.globalAlpha = mate.hp >= (i + 1) * 2 ? 1 : mate.hp === i * 2 + 1 ? 0.6 : 0.2;
+        uictx.drawImage(SPR.heart, 4 + i * 8, 27, 7, 7);
+      }
+      uictx.globalAlpha = 1;
+    }
   }
   const keys = s.players[0].keys + s.players[1].keys;
   for (let i = 0; i < keys; i++) uictx.drawImage(SPR.key, W - 18 - i * 12, 1, 14, 14);
@@ -906,14 +882,10 @@ function drawScreens(s: Snapshot): void {
     uictx.fillRect(0, 0, W, H);
     centerText([
       ["AMBER COOP · HD-2D", 16, "#ffe9c2"],
-      [menu.step === 0 ? "choose the length of your quest" :
-       menu.step === 1 ? "choose your party" :
-       menu.step === 2 ? "choose how you travel" :
-       menu.step === 3 ? "choose your partner" :
-       menu.step === 4 ? "choose your AI" : "choose their temperament", 8, "#9a93b8"],
+      [menuTitle(menu), 8, "#9a93b8"],
     ], 48);
     if (mySlot === 0) {
-      const opts = menuOptions();
+      const opts = menuOptions(menu, providers);
       let y = 104;
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
