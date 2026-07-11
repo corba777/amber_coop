@@ -1154,35 +1154,55 @@ function freshPlay(): Game {
   const P = await import("../client/predict");
   const tiles = core.ROOMS[0].tiles;   // the meadow
 
+  const right = { ...emptyInput(), r: true };
+  const left = { ...emptyInput(), l: true };
+
   // walks exactly like the server: 1.35 px per 60 Hz tick, diagonals normalized
   const pr = P.freshPred();
-  P.reconcile(pr, 8 * TILE, 6 * TILE, 0, false);
-  const right = { ...emptyInput(), r: true };
+  P.reconcile(pr, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);   // first fix
   P.stepPred(pr, tiles, right, false, 100);           // 6 ticks
   ok(Math.abs(pr.x - (8 * TILE + 6 * 1.35)) < 0.6, "matches server speed tick-for-tick");
 
   // walls are walls, even in the future
   const pr2 = P.freshPred();
-  P.reconcile(pr2, 1 * TILE + 2, 6 * TILE, 0, false);
-  const left = { ...emptyInput(), l: true };
+  P.reconcile(pr2, 1 * TILE + 2, 6 * TILE, 0, false, -1, 0, tiles);
   for (let i = 0; i < 30; i++) P.stepPred(pr2, tiles, left, false, 17);
   ok(pr2.x >= TILE - 1, "prediction collides with the western tree line");
 
   // the core rule holds: swinging freezes movement
   const pr3 = P.freshPred();
-  P.reconcile(pr3, 8 * TILE, 6 * TILE, 0, false);
+  P.reconcile(pr3, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);
   P.stepPred(pr3, tiles, right, true, 200);
   ok(pr3.x === 8 * TILE, "attack freezes predicted movement too");
 
-  // reconciliation: gentle blend on small drift, hard snap on big news
+  // reconciliation is seq/ack + replay: an UNACKED input replays forward off the
+  // (stale) server truth, so the hero does NOT snap back — the drag is gone
+  const sx = 8 * TILE, sy = 6 * TILE;
   const pr4 = P.freshPred();
-  P.reconcile(pr4, 100, 100, 0, false);
-  P.reconcile(pr4, 106, 100, 0, false);
-  ok(pr4.x > 100 && pr4.x < 103, "small drift blends smoothly");
-  P.reconcile(pr4, 200, 100, 0, false);
-  ok(pr4.x === 200, "a large disagreement snaps to the server truth");
-  P.reconcile(pr4, 50, 50, 3, false);
+  P.reconcile(pr4, sx, sy, 0, false, -1, 0, tiles);   // first fix, live at start
+  P.recordInput(pr4, 1, right, false, 0);             // client sends seq 1 (held right)
+  P.stepPred(pr4, tiles, right, false, 100);          // local prediction runs ahead
+  const predictedX = pr4.x;
+  // snapshot arrives but the server hasn't applied seq 1 yet: ack=0, hero at start
+  P.reconcile(pr4, sx, sy, 0, false, 0, 100, tiles);
+  ok(pr4.x > sx + 5, "unacked input replays forward — no snap back to the stale server pos");
+  ok(Math.abs(pr4.x - predictedX) < 1.5, "replay lands on the local prediction — near-zero correction");
+
+  // once the server acks the input, it is pruned and we anchor to the fresh truth
+  P.reconcile(pr4, sx + 8, sy, 0, false, 1, 120, tiles);
+  ok(pr4.hist.length === 0, "acked inputs are pruned from the history buffer");
+
+  // a large disagreement (knockback/teleport) still snaps to the server truth
+  P.reconcile(pr4, sx + 200, sy, 0, false, 1, 130, tiles);
+  ok(Math.abs(pr4.x - (sx + 200)) < 0.001, "a large disagreement snaps to the server truth");
+
+  // room change resets the prediction outright
+  P.reconcile(pr4, 50, 50, 3, false, 1, 140, tiles);
   ok(pr4.x === 50 && pr4.room === 3, "room change resets the prediction");
+
+  // a stale (out-of-order) ack must never rewind the hero
+  P.reconcile(pr4, 999, 50, 3, false, 0, 150, tiles);
+  ok(pr4.x === 50, "a stale, out-of-order ack is ignored");
 }
 
 // ------------------------------------------------- 29. dedicated start

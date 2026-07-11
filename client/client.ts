@@ -12,7 +12,7 @@ import {
 import { SPR, HEROES, TILES } from "./sprites";
 import { drawDuoSpectatorHud, drawHearts } from "./hud";
 import { wrapText } from "./textutil";
-import { Pred, freshPred, stepPred, reconcile } from "./predict";
+import { Pred, freshPred, stepPred, reconcile, recordInput } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor, actx } from "./audio";
 import { drawPartnerPip, partnerPipCanvasSize, partnerPipOrigin } from "./partnerpip";
 import {
@@ -130,7 +130,7 @@ ws.onmessage = ev => {
     if (msg.s.screen === "play") ensurePlayControl();
     const me = msg.s.players[mySlot];
     if (msg.s.screen === "play" && me?.present && !isSpectator(msg.s)) {
-      reconcile(pred, me.x, me.y, msg.s.room, me.downed);
+      reconcile(pred, me.x, me.y, msg.s.room, me.downed, msg.s.ack ?? -1, now, msg.s.tiles);
     }
     for (const e of msg.s.events) handleEvent(e);
   } else if (msg.t === "full") {
@@ -194,10 +194,15 @@ function isSpectator(s: Snapshot | null): boolean {
     (s !== null && !s.players[mySlot].present);
 }
 
+let inputSeq = 0;
 function sendInput(): void {
   if (isSpectator(snap)) return;
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ t: "input", s: state }));
+    inputSeq++;
+    ws.send(JSON.stringify({ t: "input", s: state, seq: inputSeq }));
+    // remember what we sent so the next snapshot's ack can replay from it
+    const meP = snap?.players[mySlot];
+    recordInput(pred, inputSeq, state, !!meP && meP.attack > 0, performance.now());
   }
 }
 
