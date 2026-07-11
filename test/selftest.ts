@@ -560,6 +560,11 @@ function freshPlay(): Game {
     ok(src.includes("copylink"), `${file}: invite-copy button present`);
     ok(src.includes("input.select()"), `${file}: name gate asks on every load (prefilled)`);
     ok(src.includes("releaseNameFocus"), `${file}: name field releases focus for WASD`);
+    ok(src.includes("ensurePlayControl"), `${file}: play mode unlocks human input`);
+    ok(src.includes("capturePlayKeys"), `${file}: capture phase reclaims keyboard during play`);
+    ok(src.includes("drawPipEnemy") || src.includes("SPR.bat["),
+       `${file}: PiP enemy sprites index animated sheets`);
+    ok(src.includes("gate.style.display === \"none\""), `${file}: name gate stops swallowing keys when hidden`);
     ok(src.includes("menu.auto = true"), `${file}: the AUTOPILOT menu path is reachable`);
     ok(src.includes("partnerView") && src.includes("drawPartnerPip"),
        `${file}: stage-2 scry mirror wired (partnerView + drawPartnerPip)`);
@@ -1242,8 +1247,10 @@ function freshPlay(): Game {
   };
   const tg = rescueTick("guard"), tc = rescueTick("companion"), th = rescueTick("hunter");
   ok(tg < 120, `the bodyguard drops everything almost at once (tick ${tg})`);
-  ok(tg < tc && tc < th, `patience orders itself: guard ${tg} < companion ${tc} < hunter ${th}`);
-  ok(th < 1000, "even the berserker never abandons you");
+  ok(th < tg && tg < tc,
+    `in-room patience: hunter ${th} < guard ${tg} < companion ${tc}`);
+  ok(th < 10, "the berserker runs to the body while you share a room");
+  ok(tc < 1000, "even the companion never abandons you");
 }
 
 // ------------------------------------------------- 32. world/roomsim stage 1
@@ -1661,15 +1668,16 @@ function freshPlay(): Game {
   g.players[0].hp = 0;
   g.activeSim = 1;
 
-  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "guard" });
-  type Mut = { intent: { action: string }; routeAssists: number };
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string }; routeAssists: number; mateDownedTicks: number };
   (agent as unknown as Mut).intent = { action: "follow" };
   agent.control(g);
   ok(agent.errandLog.length === 1 && agent.errandLog[0].goal === "bow",
      "fetch errand auto-starts when partner is away without the bow");
-  for (let i = 0; i < 95; i++) agent.control(g);
+  (agent as unknown as Mut).mateDownedTicks = 950;
+  for (let i = 0; i < 5; i++) agent.control(g);
   ok(agent.errandLog[0].abortReason === "rescue failsafe",
-     "errand aborts when the alone hero has waited past guard patience");
+     "errand aborts when the alone hero has waited past hunter patience");
   ok(agent.errandLog[0].heroDownsDuring === 1, "errand telemetry counts hero downs");
   ok(agent.errandLog[0].abortedTick != null, "errand record closed after abort");
   ok((agent as unknown as Mut).intent.action === "exit",
@@ -1692,7 +1700,7 @@ function freshPlay(): Game {
   g.players[1].simIndex = 0;
   g.activeSim = 0;
 
-  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
   type Mut = { intent: { action: string } };
   (agent as unknown as Mut).intent = { action: "idle" };
   agent.control(g);
@@ -1805,6 +1813,359 @@ function freshPlay(): Game {
   agent.control(g);
   ok(m.intent.action === "exit",
      "agent routes onward instead of chasing a bow pickup the team already has");
+}
+
+// ------------------------------------------------- 48. stage 3: bleed-out alone
+{
+  console.log("[48] stage 3: FREE ROAM alone-down bleed-out ends the run");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 1;
+  g.players[1].simIndex = 0;
+  g.players[1].downed = true;
+  g.players[1].hp = 0;
+  g.players[1].bleedT = 5;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 5; i++) step(g, emptyInput(), emptyInput(), prev);
+  ok(g.screen === "gameover", "bleed-out alone triggers gameover");
+  ok(g.bleedoutLoss, "bleedout flagged for endings/telemetry");
+}
+
+// ------------------------------------------------- 49. stage 3: bleed pauses on reunion
+{
+  console.log("[49] stage 3: bleed clock stops when partner reunites");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 1;
+  g.players[1].simIndex = 0;
+  g.players[1].downed = true;
+  g.players[1].hp = 0;
+  g.players[1].bleedT = 3;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(g.players[1].bleedT === 2, "bleed ticks down while alone");
+  g.players[0].simIndex = 0;
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(g.players[1].bleedT === 0, "bleed clock clears when partner shares the room");
+  for (let i = 0; i < 200; i++) step(g, emptyInput(), emptyInput(), prev);
+  ok(g.screen === "play", "no gameover after reunion");
+}
+
+// ------------------------------------------------- 50. stage 3: phoenix feather remote revive
+{
+  console.log("[50] stage 3: phoenix feather remote revive");
+  const { newRoomSim, loadRoom } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  loadRoom(g, 13, 4 * TILE, 8 * TILE);
+  g.hasFeather = true;
+  g.feathers.crypt = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 5;
+  g.sims[1].tiles[5] = ROOMS[5].tiles.map(r => r);
+  g.players[0].simIndex = 1;
+  g.players[1].simIndex = 0;
+  g.players[1].downed = true;
+  g.players[1].hp = 0;
+  g.players[1].bleedT = 100;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const feather = latch({ ...emptyInput(), f: true }, emptyInput());
+  step(g, feather, emptyInput(), prev);
+  ok(!g.players[1].downed, "feather revives downed partner in another room");
+  ok(!g.hasFeather, "feather is consumed");
+  ok(g.players[1].bleedT === 0, "bleed cleared on feather revive");
+}
+
+// ------------------------------------------------- 51. stage 3: feather wing + same-room guard
+{
+  console.log("[51] stage 3: feather in crypt; no remote revive in same room");
+  const { loadRoom } = await import("../shared/core");
+  const g = freshPlay();
+  loadRoom(g, 13, 8 * TILE, 8 * TILE);
+  ok(g.pickups.some(p => p.kind === "feather"), "frozen crypt holds the phoenix feather");
+
+  const g2 = freshPlay();
+  g2.travelMode = "free";
+  g2.hasFeather = true;
+  g2.players[1].downed = true;
+  g2.players[1].hp = 0;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g2, latch({ ...emptyInput(), f: true }, emptyInput()), emptyInput(), prev);
+  ok(g2.players[1].downed, "feather does not replace touch-revive in the same room");
+}
+
+// ------------------------------------------------- 52. vault exit pathfinds doorways
+{
+  console.log("[52] vault exit uses BFS, not greedy wall-hugging");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { loadRoom } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  loadRoom(g, 4, 8 * TILE, 8 * TILE);
+  g.players[1].npc = true;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  type Mut = { intent: { action: string; dir?: string } };
+  const m = agent as unknown as Mut;
+  m.intent = { action: "exit", dir: "down" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const y0 = g.players[1].y;
+  let progressed = false;
+  for (let i = 0; i < 180; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    if (g.players[1].y > y0 + 12) progressed = true;
+    if (g.sims[g.players[1].simIndex].room !== 4) break;
+  }
+  ok(progressed || g.sims[g.players[1].simIndex].room !== 4,
+     "agent advances toward the vault exit instead of door-camping");
+}
+
+// ------------------------------------------------- 53. hero moves while npc door-camps
+{
+  console.log("[53] human input never blocked — hero moves while npc door-camps");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[1].npc = true;
+  g.players[1].x = W - PLAYER_W - 1;
+  g.players[1].y = 6.5 * TILE;
+  g.players[1].doorCampT = 60;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const x0 = g.players[0].x;
+  const right = { ...emptyInput(), r: true };
+  for (let i = 0; i < 30; i++) step(g, right, { ...emptyInput(), r: true }, prev);
+  ok(g.players[0].x > x0 + 4, "hero walks freely while partner camps the doorway");
+  ok(g.players[1].doorCampT > 60 || g.players[1].x < W - PLAYER_W - 4,
+     "npc eventually yields from the doorway");
+}
+
+// ------------------------------------------------- 54. FREE ROAM temperament: guard rejoins, hunter quests
+{
+  console.log("[54] FREE ROAM temperament: guard rejoins partner wing, hunter quests ahead");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { newRoomSim } = await import("../shared/core");
+
+  const mk = (temp: "guard" | "hunter") => {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.golemDead = true;
+    g.amberClaimed = true;
+    g.gateMelted = true;
+    g.hasBow = false;
+    g.sims.push(newRoomSim());
+    g.sims[0].room = 12;
+    g.sims[0].tiles[12] = ROOMS[12].tiles.map(r => r);
+    g.sims[1].room = 4;
+    g.sims[1].tiles[4] = ROOMS[4].tiles.map(r => r);
+    g.players[0].simIndex = 0;
+    g.players[0].x = 6 * TILE;
+    g.players[0].y = 6 * TILE;
+    g.players[1].simIndex = 1;
+    g.players[1].npc = true;
+    g.players[1].x = 6 * TILE;
+    g.players[1].y = 6 * TILE;
+    g.activeSim = 1;
+    return { g, agent: new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: temp }) };
+  };
+
+  type Mut = { intent: { action: string; dir?: string } };
+
+  const { g: gG, agent: guard } = mk("guard");
+  (guard as unknown as Mut).intent = { action: "follow" };
+  guard.control(gG);
+  ok((guard as unknown as Mut).intent.action === "exit", "guard exits to rejoin partner");
+  ok((guard as unknown as Mut).intent.dir === "left", "guard routes into the cellars wing");
+
+  const { g: gH, agent: hunter } = mk("hunter");
+  (hunter as unknown as Mut).intent = { action: "follow" };
+  hunter.control(gH);
+  ok((hunter as unknown as Mut).intent.action === "exit", "hunter exits toward the quest");
+  ok((hunter as unknown as Mut).intent.dir !== "left", "hunter does not chase partner into cellars");
+
+  const brief = JSON.parse(guard.observe(gG)) as { objective: string };
+  ok(brief.objective.includes("Rejoin"), "guard brief stresses rejoining the partner");
+}
+
+// ------------------------------------------------- 55. FREE ROAM: hunter early cave split, hero keeps moving
+{
+  console.log("[55] FREE ROAM: hunter cave split — hero never frozen at the lake");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { loadRoom } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[1].npc = true;
+  loadRoom(g, 2, 4 * TILE, 6 * TILE);
+  g.cleared[2] = true;
+  g.enemies = [];
+  g.players[0].x = 2 * TILE;
+  g.players[0].y = 10 * TILE;
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "exit", dir: "cave" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let agentCrossed = false;
+  for (let t = 0; t < 600 && !agentCrossed; t++) {
+    (agent as unknown as Mut).intent = { action: "exit", dir: "cave" };
+    g.activeSim = g.players[1].simIndex;
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    if (g.sims[g.players[1].simIndex].room === 3) agentCrossed = true;
+  }
+  ok(agentCrossed, "hunter crosses the lake cave into the vault");
+  ok(g.sims.length >= 2, "rooms split after the cave");
+  ok(g.sims[g.players[0].simIndex].room === 2, "hero stays at the lake");
+
+  const x0 = g.players[0].x;
+  const right = { ...emptyInput(), r: true };
+  for (let t = 0; t < 60; t++) step(g, right, emptyInput(), prev);
+  ok(g.players[0].x > x0 + 4, "hero walks freely after the partner splits through the cave");
+
+  let hops = 0;
+  let lastRoom = g.sims[g.players[1].simIndex].room;
+  for (let t = 0; t < 120; t++) {
+    g.activeSim = g.players[1].simIndex;
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    const r = g.sims[g.players[1].simIndex].room;
+    if (r !== lastRoom) { hops++; lastRoom = r; }
+  }
+  ok(hops < 8, "agent does not ping-pong rooms after the split");
+}
+
+// ------------------------------------------------- 56. LINKED: npc cannot solo-cave the party
+{
+  console.log("[56] LINKED: npc waits at the cave mouth until the hero steps on");
+  const { loadRoom } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "linked";
+  g.players[1].npc = true;
+  loadRoom(g, 2, 5 * TILE, 9 * TILE);
+  g.enemies = [];
+  g.players[0].x = 2 * TILE;
+  g.players[0].y = 9 * TILE;
+  g.players[1].x = 9 * TILE + 2;
+  g.players[1].y = 1 * TILE + 2;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const cave = { ...emptyInput(), d: true };
+  for (let t = 0; t < 30; t++) step(g, emptyInput(), cave, prev);
+  ok(g.room === 2, "npc on the cave mouth does not yank a linked party alone");
+
+  g.players[0].x = 9 * TILE + 2;
+  g.players[0].y = 1 * TILE + 2;
+  for (let t = 0; t < 30 && g.room === 2; t++) step(g, cave, cave, prev);
+  ok(g.room === 3, "linked party crosses when the hero shares the cave mouth");
+}
+
+// ------------------------------------------------- 57. no elixir errand while partner still at the lake
+{
+  console.log("[57] hunter skips optional errand while partner is still at Amber Lake");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { loadRoom, newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[1].npc = true;
+  g.sims.push(newRoomSim());
+  g.sims[0].room = 2;
+  g.sims[0].tiles[2] = ROOMS[2].tiles.map(r => r);
+  g.sims[0].enemies = [];
+  g.sims[1].room = 3;
+  g.sims[1].tiles[3] = ROOMS[3].tiles.map(r => r);
+  g.players[0].simIndex = 0;
+  g.players[0].x = 4 * TILE;
+  g.players[0].y = 9 * TILE;
+  g.players[1].simIndex = 1;
+  g.players[1].x = 8 * TILE;
+  g.players[1].y = 8 * TILE;
+  g.activeSim = 1;
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "follow" };
+  for (let i = 0; i < 10; i++) agent.control(g);
+  ok(agent.errandLog.length === 0, "no elixir errand while partner is still at the lake");
+  ok((agent as unknown as Mut).intent.action === "exit",
+     "hunter routes toward the golem instead of optional elixir");
+}
+
+// ------------------------------------------------- 58. spared wraith spirit anchor (same room only)
+{
+  console.log("[58] spared wraith revives slowly when partner shares the room");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.wraithSpared = true;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.players[0].x = 6 * TILE;
+  g.players[0].y = 6 * TILE;
+  g.players[1].x = W - PLAYER_W - 4;
+  g.players[1].y = 6 * TILE;
+  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0 };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 220 && g.players[0].downed; i++) {
+    step(g, emptyInput(), emptyInput(), prev);
+  }
+  ok(!g.players[0].downed, "wraith lifts a downed hero at half speed");
+  ok(g.message.includes("between-world"), "wraith revive uses spirit-anchor flavor");
+  ok(g.players[0].bleedT === 0, "no bleed while partner shares the room");
+}
+
+// ------------------------------------------------- 59. wraith cannot anchor across rooms
+{
+  console.log("[59] split rooms: 30s bleed stays; wraith does not remote-save");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.wraithSpared = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 0;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.players[0].bleedT = 40;
+  g.players[1].simIndex = 1;
+  g.players[1].x = 6 * TILE;
+  g.players[1].y = 6 * TILE;
+  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0 };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 20; i++) step(g, emptyInput(), emptyInput(), prev);
+  ok(g.players[0].downed, "wraith in the partner wing does not remote-revive");
+  ok(g.players[0].bleedT < 40 && g.players[0].bleedT > 0, "bleed clock still runs when rooms split");
+  ok(g.screen === "play", "run continues until bleed expires");
+}
+
+// ------------------------------------------------- 60. agent rescues in-room even while attacking
+{
+  console.log("[60] agent drops attack and rescues when partner is downed in-room");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const g = freshPlay();
+  g.players[1].npc = true;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.players[0].x = 4 * TILE;
+  g.players[0].y = 8 * TILE;
+  g.players[1].x = W - PLAYER_W - 4;
+  g.players[1].y = 4 * TILE;
+  g.enemies.push(makeEnemy("bat", 7 * TILE, 4 * TILE));
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string } };
+  (agent as unknown as Mut).intent = { action: "attack" };
+  const inp = agent.control(g);
+  ok(inp.d || inp.l || inp.u || inp.r, "hunter runs toward the body instead of swinging");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

@@ -51,11 +51,23 @@ Keep quips rare and short. Output JSON only.`;
 const FREE_ROAM_ADDENDUM = `
 FREE ROAM mode: you and your partner may be in DIFFERENT rooms at once — the human watches you through a scry mirror.
 - If "partner" shows "away" with a room name, they are NOT beside you — do NOT "follow" their old coordinates.
-- Pursue the "objective" on your own: use "exit" / "pickup" / "attack" like a solo hero. Splitting up is normal.
 - Team keys still unlock doors for both of you — grab keys and clear wings on your route.
 - If partner is away and downed, hurry toward their room ("exit" along the route toward partner.room).
 - You may leave only when your partner is safe (not downed, not fighting) — the game enforces this at the doorway.
 - When fetching something for the team (bow, elixir, charm), "say" what you are getting — the human reads it in the mirror.`;
+
+const FREE_ROAM_TEMPERAMENT: Record<Temperament, string> = {
+  guard: `
+FREE ROAM + BODYGUARD: your partner may split rooms, but you do NOT race ahead on the main quest.
+- If partner is "away", your job is to REJOIN their room — use "exit" toward partner.room, not toward distant bosses or the bow.
+- Stay in the same wing; clear local threats, but do not vanish north into the ice while they explore next door.
+- Never start a fetch errand alone; rejoin first unless they are downed.`,
+  companion: `
+FREE ROAM + COMPANION: you may split up and pursue the objective, but check in — grab team pickups on your route.
+- After a short beat apart, errands (bow, elixir, charm) are fair game if the human is safe.`,
+  hunter: `
+FREE ROAM + BERSERKER: when partner is away, quest like a solo hero — race the route, clear wings, fetch what the team needs.`,
+};
 
 const SOLO_PROMPT = `You are the HERO of a tiny Zelda-like quest — questing ALONE. There is no partner: never choose "follow" or "idle", they mean standing still and the winter never ends.
 Your mission is the "objective"; the "route" field is your compass — it names the exit (or cave mouth) that leads toward the goal.
@@ -176,9 +188,9 @@ export function nextWaypoint(tiles: string[][] | string[], fromX: number, fromY:
 }
 
 const TEMPERAMENT_DOCTRINE: Record<Temperament, string> = {
-  guard: "Your temperament: BODYGUARD. Stay glued to your partner; engage only enemies that threaten THEM. Never roam. If they fall, dropping everything to revive them is your creed.",
-  companion: "Your temperament: COMPANION. Balance it: join fights near the party, stay reachable, grab useful pickups.",
-  hunter: "Your temperament: BERSERKER. Hunt. If anything hostile shares the room, it is your problem — clear it, then regroup. If your partner falls, you may finish the kill first — but never leave them in the snow for long.",
+  guard: "Your temperament: BODYGUARD. Stay glued to your partner; engage only enemies that threaten THEM. In FREE ROAM, rejoin their room — never sprint ahead on the quest alone. If they fall, dropping everything to revive them is your creed.",
+  companion: "Your temperament: COMPANION. Balance it: join fights near the party, stay reachable, grab useful pickups. In FREE ROAM you may roam for errands after a moment apart.",
+  hunter: "Your temperament: BERSERKER. Hunt. If anything hostile shares the room, it is your problem — clear it, then regroup. In FREE ROAM, quest independently when your partner is elsewhere. If your partner falls, you may finish the kill first — but never leave them in the snow for long.",
 };
 
 export interface PlanRecord {
@@ -217,6 +229,13 @@ export class AgentPlayer {
   private pickupStall = 0;
   private pickupLastDist = Infinity;
   private pickupTargetKey = "";
+  private exitStall = 0;
+  private exitLastDist = Infinity;
+  private partnerAwayTicks = 0;
+  private guardRejoinAnnounced = false;
+
+  /** FREE ROAM: companion waits ~5s after a split before racing the quest */
+  private static readonly COMPANION_ROAM_GRACE = 300;
 
   constructor(
     private llm: LLM,
@@ -243,7 +262,42 @@ export class AgentPlayer {
     return this.activeErrand?.targetRoom ?? this.targetRoom(g);
   }
 
+  /** Where route-assist should send the agent in FREE ROAM while partner is elsewhere */
+  private freeRoamRouteTarget(g: Game): number {
+    const mate = g.players[this.mateSlot()];
+    if (!mate.present) return this.routeDestination(g);
+    if (mate.downed) return simOf(g, this.mateSlot()).room;
+    if (!this.partnerAway(g)) return this.routeDestination(g);
+    if (this.temperament === "guard") return simOf(g, this.mateSlot()).room;
+    if (this.temperament === "companion" &&
+        this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE) {
+      return simOf(g, this.mateSlot()).room;
+    }
+    return this.routeDestination(g);
+  }
+
+  private guardShouldRejoin(g: Game): boolean {
+    return this.temperament === "guard" && this.partnerAway(g) &&
+      g.players[this.mateSlot()].present && !g.players[this.mateSlot()].downed;
+  }
+
+  private nudgeGuardRejoin(g: Game): void {
+    if (!this.guardShouldRejoin(g)) return;
+    const mateRoom = simOf(g, this.mateSlot()).room;
+    if (g.room === mateRoom) return;
+    if (!this.guardRejoinAnnounced) {
+      this.guardRejoinAnnounced = true;
+      this.sayQueue = "Staying close — on my way";
+    }
+    this.applyRouteHop(g, mateRoom);
+  }
+
   private detectFetchErrand(g: Game): ActiveErrand | null {
+    if (this.temperament === "guard") return null;
+    if (this.temperament === "companion" && this.partnerAway(g) &&
+        this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE) {
+      return null;
+    }
     if (!g.hasBow && g.golemDead) {
       return { goal: "bow", targetRoom: 6, startedTick: g.ticks,
         say: "Fetching the bow — hold on", why: "you need it in the snowfield" };
@@ -252,6 +306,9 @@ export class AgentPlayer {
       return { goal: "charm", targetRoom: 16, startedTick: g.ticks,
         say: "Getting the Miner's Charm — hold on", why: "fire arrows crack the glacier" };
     }
+    // optional fetches wait until the partner has entered the vault wing —
+    // otherwise a split at Amber Lake hijacks the route to Guard Room elixir
+    if (this.partnerAway(g) && simOf(g, this.mateSlot()).room < 3) return null;
     const mate = g.players[this.mateSlot()];
     for (const el of ELIXIRS) {
       if (!g.elixirs[el.id] && !mate.elixir && !g.players[this.slot].elixir) {
@@ -279,7 +336,7 @@ export class AgentPlayer {
     this.intent = { action: "follow" };
     this.llmIntent = { action: "follow" };
     if (!g.players[this.mateSlot()].present || this.partnerAway(g)) {
-      this.applyRouteHop(g, this.routeDestination(g));
+      this.applyRouteHop(g, this.freeRoamRouteTarget(g));
     }
     return depth < 8 ? this.control(g, depth + 1) : inp;
   }
@@ -373,7 +430,7 @@ export class AgentPlayer {
       me: {
         x: Math.round(me.x), y: Math.round(me.y),
         hp: me.hp, maxHp: me.maxHp, teamKeys: me.keys + mate.keys,
-        hasBow: g.hasBow, downed: me.downed, elixir: me.elixir,
+        hasBow: g.hasBow, hasFeather: g.hasFeather, downed: me.downed, elixir: me.elixir,
       },
       partner: !mate.present ? "NONE — you quest ALONE"
         : mateHere ? {
@@ -383,10 +440,18 @@ export class AgentPlayer {
           away: true,
           room: ROOMS[mateSim!.room].name,
           hp: mate.hp, downed: mate.downed,
-          note: "partner is in another room — pursue your objective; do not follow stale coordinates",
+          note: this.temperament === "guard"
+            ? "partner is in another room — rejoin their wing; do not race the ice quest alone"
+            : this.temperament === "companion" &&
+                this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE
+              ? "partner just left — catch up first, then errands are fine"
+              : "partner is in another room — pursue your objective; do not follow stale coordinates",
         },
       route: ((): string => {
-        const hop = routeHop(g.room, this.routeDestination(g));
+        const dest = mate.present && this.partnerAway(g)
+          ? this.freeRoamRouteTarget(g)
+          : this.routeDestination(g);
+        const hop = routeHop(g.room, dest);
         if (!hop) return "you are in the goal room";
         return hop.kind === "exit"
           ? `exit "${hop.dir}" leads toward your goal`
@@ -430,7 +495,16 @@ export class AgentPlayer {
       return "REVIVE your partner: goto their position";
     }
     if (this.partnerAway(g)) {
-      return this.soloObjective(g) + " (partner is elsewhere — split up is fine)";
+      if (this.temperament === "guard") {
+        const rm = ROOMS[simOf(g, this.mateSlot()).room].name;
+        return `Rejoin your partner in ${rm} — stay in their wing, do not race the ice quest alone`;
+      }
+      if (this.temperament === "companion" &&
+          this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE) {
+        const rm = ROOMS[simOf(g, this.mateSlot()).room].name;
+        return `Partner just left for ${rm} — catch up first, then errands are fine`;
+      }
+      return this.soloObjective(g) + " (partner is elsewhere — you may roam)";
     }
     const spec = ROOMS[g.room];
     if (g.enemies.some(e => e.kind === "wraith" && e.phase === 9 && !e.dead)) {
@@ -492,7 +566,9 @@ export class AgentPlayer {
     const user = "Observation:\n" + this.observe(g);
     const solo = !g.players[this.mateSlot()].present;
     const sys = (solo ? SOLO_PROMPT : SYSTEM_PROMPT)
-      + (g.travelMode === "free" && !solo ? FREE_ROAM_ADDENDUM : "")
+      + (g.travelMode === "free" && !solo
+        ? FREE_ROAM_ADDENDUM + FREE_ROAM_TEMPERAMENT[this.temperament]
+        : "")
       + "\n" + TEMPERAMENT_DOCTRINE[this.temperament];
     const t0 = Date.now();
     let rec: PlanRecord;
@@ -560,30 +636,36 @@ export class AgentPlayer {
     if (g.room !== this.lastRoom) {
       this.lastRoom = g.room;
       this.routeHopKey = null;
+      this.exitStall = 0;
+      this.exitLastDist = Infinity;
       if (g.travelMode === "free" && this.intent.action === "exit") {
         this.intent = { action: "idle" };
         this.llmIntent = { ...this.llmIntent, action: "idle" };
         const mateEarly = g.players[this.mateSlot()];
         if (!mateEarly.present || this.partnerAway(g)) {
-          this.applyRouteHop(g, this.routeDestination(g));
+          this.applyRouteHop(g, this.freeRoamRouteTarget(g));
         }
       }
     }
     if (this.partnerInRoom(g)) {
       if (this.partnerWasAway) {
         this.partnerWasAway = false;
+        this.partnerAwayTicks = 0;
+        this.guardRejoinAnnounced = false;
         this.intent = { action: "follow" };
         this.llmIntent = this.intent;
       }
     } else if (this.partnerAway(g)) {
       this.partnerWasAway = true;
+      this.partnerAwayTicks++;
     }
+    this.nudgeGuardRejoin(g);
     this.tickErrandState(g);
 
     if (this.partnerAway(g) && this.intent.action === "pickup") {
       const items = this.livePickups(g);
       if (this.pickupObsolete(g, items[this.intent.target ?? -1])) {
-        this.applyRouteHop(g, this.routeDestination(g));
+        this.applyRouteHop(g, this.freeRoamRouteTarget(g));
       }
     }
 
@@ -601,11 +683,17 @@ export class AgentPlayer {
         : this.temperament === "hunter" ? 900 : 600;
       const overdue = this.mateDownedTicks > patience;
       if (this.partnerAway(g)) {
+        if (overdue && g.hasFeather) {
+          inp.f = true;
+          return inp;
+        }
         if (overdue || act === "follow" || act === "idle") {
           this.applyRouteHop(g, simOf(g, this.mateSlot()).room);
         }
         // route toward their room — exit intent handled below
-      } else if (overdue || (act !== "attack" && act !== "flee")) {
+      } else if (overdue ||
+                 (this.partnerInRoom(g) && this.temperament === "hunter") ||
+                 (act !== "attack" && act !== "flee")) {
         // rescue run — but keep the matador instincts: do not walk into
         // a charging golem on the way to the body
         const charger = g.enemies.find(e =>
@@ -670,10 +758,19 @@ export class AgentPlayer {
         }
       }
       if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
-        if (!mate.present || this.partnerAway(g)) {
+        if (!mate.present) {
           this.applyRouteHop(g, this.routeDestination(g));
+        } else if (this.partnerAway(g)) {
+          this.applyRouteHop(g, this.freeRoamRouteTarget(g));
         }
       }
+    }
+
+    if (this.guardShouldRejoin(g) &&
+        (this.intent.action === "exit" || this.intent.action === "goto" ||
+         this.intent.action === "pickup")) {
+      const mateRoom = simOf(g, this.mateSlot()).room;
+      if (g.room !== mateRoom) this.applyRouteHop(g, mateRoom);
     }
 
     const it = this.intent;
@@ -770,6 +867,7 @@ export class AgentPlayer {
     }
 
     if (it.action === "exit" && it.dir) {
+      if (me.transitionCd > 0) return inp;
       if (g.travelMode === "free" && this.partnerInRoom(g) &&
           !canNpcLeave(g, this.slot)) {
         let threat = -1, threatD = Infinity;
@@ -786,7 +884,7 @@ export class AgentPlayer {
         return inp;
       }
       if (g.travelMode === "free" && this.partnerInRoom(g) &&
-          this.partnerNearDoor(mate, it.dir)) {
+          this.partnerNearDoor(g, mate, it.dir)) {
         this.seek(inp, me, 8 * TILE, 8 * TILE);
         return inp;
       }
@@ -794,24 +892,46 @@ export class AgentPlayer {
       const wantsCave = (it.dir as string) === "cave" ||
         (spec2.teleport && spec2.exits[it.dir] === undefined);
       if (wantsCave && spec2.teleport) {
-        // the cave mouth is an exit too: walking onto the tile teleports
         let cx = 0, cy = 0;
         spec2.tiles.forEach((row, ty) => {
           const tx = row.indexOf("c");
           if (tx >= 0) { cx = tx * TILE + 3; cy = ty * TILE + 2; }
         });
+        const dist = Math.hypot(cx - me.x, cy - me.y);
+        if (dist >= this.exitLastDist - 1) this.exitStall++;
+        else this.exitStall = 0;
+        this.exitLastDist = dist;
+        if (this.exitStall > 90) {
+          this.exitStall = 0;
+          this.exitLastDist = Infinity;
+          this.routeHopKey = null;
+          this.intent = { action: "follow" };
+          this.llmIntent = { action: "follow" };
+          return this.control(g, depth + 1);
+        }
         this.waypointSeek(g, inp, me, cx, cy);
         this.meleeGuard(inp, g, me, mcx, mcy);
         return inp;
       }
       const targets: Record<string, [number, number, keyof Input]> = {
-        // side doorways live on tile rows 6-7 in every room of the game
         left: [2, 6 * TILE + 8, "l"], right: [W - PLAYER_W - 2, 6 * TILE + 8, "r"],
         up: [7.5 * TILE, 2, "u"], down: [7.5 * TILE, H - PLAYER_H - 2, "d"],
       };
       const t = targets[it.dir];
       if (t) {
-        this.seek(inp, me, t[0], t[1]);
+        const dist = Math.hypot(t[0] - me.x, t[1] - me.y);
+        if (dist >= this.exitLastDist - 1) this.exitStall++;
+        else this.exitStall = 0;
+        this.exitLastDist = dist;
+        if (this.exitStall > 90) {
+          this.exitStall = 0;
+          this.exitLastDist = Infinity;
+          this.routeHopKey = null;
+          this.intent = { action: "follow" };
+          this.llmIntent = { action: "follow" };
+          return this.control(g, depth + 1);
+        }
+        this.waypointSeek(g, inp, me, t[0], t[1]);
         (inp[t[2]] as boolean) = true;
       }
       this.meleeGuard(inp, g, me, mcx, mcy);
@@ -905,7 +1025,17 @@ export class AgentPlayer {
     return targets[dir] ?? [W / 2, H / 2];
   }
 
-  private partnerNearDoor(mate: Player, dir: string): boolean {
+  private partnerNearDoor(g: Game, mate: Player, dir: string): boolean {
+    if ((dir as string) === "cave") {
+      const spec = ROOMS[g.room];
+      if (!spec.teleport) return false;
+      let cx = 0, cy = 0;
+      spec.tiles.forEach((row, ty) => {
+        const tx = row.indexOf("c");
+        if (tx >= 0) { cx = tx * TILE + TILE / 2; cy = ty * TILE + TILE / 2; }
+      });
+      return Math.hypot(mate.x - cx, mate.y - cy) < 44;
+    }
     const [tx, ty] = this.exitDoorPoint(dir);
     return Math.hypot(mate.x - tx, mate.y - ty) < 44;
   }

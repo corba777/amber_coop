@@ -10,7 +10,7 @@
 import * as THREE from "three";
 import {
   TILE, COLS, ROWS, W, H, PLAYER_W, PLAYER_H,
-  Snapshot, Input, emptyInput, GameEvent, SOLID,
+  Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
 import { wrapText } from "./textutil";
@@ -59,6 +59,7 @@ function sendName(): void {
       try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
     }
     if (gate) gate.style.display = "none";
+    enableNameGate(false);
     releaseNameFocus();
     sendName();
   };
@@ -67,9 +68,12 @@ function sendName(): void {
     // name; a guest on the same machine gets to introduce themselves
     input.value = myName;
     gate.style.display = "flex";
+    enableNameGate(true);
     setTimeout(() => { input.focus(); input.select(); }, 50);
     go.addEventListener("click", submit);
     input.addEventListener("keydown", ev => {
+      if (!gate || gate.style.display === "none") return;
+      if (snap?.screen === "play") { ensurePlayControl(); return; }
       ev.stopPropagation();
       if (ev.key === "Enter") submit();
     });
@@ -116,7 +120,7 @@ ws.onmessage = ev => {
     if (snapTime > 0) snapInterval = Math.min(80, Math.max(16, now - snapTime));
     snapTime = now;
     snap = msg.s;
-    if (msg.s.screen === "play") releaseNameFocus();
+    if (msg.s.screen === "play") ensurePlayControl();
     const me = msg.s.players[mySlot];
     if (msg.s.screen === "play" && me?.present) {
       reconcile(pred, me.x, me.y, msg.s.room, me.downed);
@@ -150,7 +154,8 @@ function sendInput(): void {
 const KEYMAP: Record<string, keyof Input | undefined> = {
   ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r",
   ArrowUp: "u", KeyW: "u", ArrowDown: "d", KeyS: "d",
-  Space: "a", KeyJ: "a", KeyZ: "a", KeyX: "b", KeyK: "b",
+  Space: "a", KeyJ: "a", KeyZ: "a",   KeyX: "b", KeyK: "b",
+  KeyF: "f",
   Enter: "st", KeyE: "st",
 };
 
@@ -266,13 +271,14 @@ function menuKey(code: string): boolean {
 }
 
 window.addEventListener("keydown", ev => {
-  if ((document.activeElement as HTMLElement | null)?.id === "namein") return;
+  if (snap?.screen === "play") ensurePlayControl();
   ensureAudio();
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
     menu.step = 0; menu.idx = 0;
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
+    ev.preventDefault();
     return;
   }
   if (ev.code === "KeyT") { showThought = !showThought; return; }
@@ -321,7 +327,7 @@ if (touchUI && ("ontouchstart" in window || navigator.maxTouchPoints > 0)) {
   touchUI.style.display = "flex";
   const bind = (id: string, key: keyof Input): void => {
     const el = document.getElementById(id)!;
-    const on = (ev: Event): void => { ensureAudio(); (state[key] as boolean) = true; sendInput(); ev.preventDefault(); };
+    const on = (ev: Event): void => { ensurePlayControl(); ensureAudio(); (state[key] as boolean) = true; sendInput(); ev.preventDefault(); };
     const off = (ev: Event): void => { (state[key] as boolean) = false; sendInput(); ev.preventDefault(); };
     el.addEventListener("pointerdown", on);
     el.addEventListener("pointerup", off);
@@ -336,11 +342,56 @@ if (touchUI && ("ontouchstart" in window || navigator.maxTouchPoints > 0)) {
 // ------------------------------------------------------------- three setup
 const glCanvas = document.getElementById("gl") as HTMLCanvasElement;
 const ui = document.getElementById("ui") as HTMLCanvasElement;
-function releaseNameFocus(): void {
-  (document.getElementById("namein") as HTMLInputElement | null)?.blur();
-  glCanvas.tabIndex = 0;
-  glCanvas.focus();
+function enableNameGate(on: boolean): void {
+  const input = document.getElementById("namein") as HTMLInputElement | null;
+  const gate = document.getElementById("namegate") as HTMLDivElement | null;
+  if (!input) return;
+  if (on) {
+    input.disabled = false;
+    input.tabIndex = 0;
+    input.removeAttribute("inert");
+    gate?.removeAttribute("inert");
+    gate?.removeAttribute("aria-hidden");
+  } else {
+    input.disabled = true;
+    input.tabIndex = -1;
+    input.setAttribute("inert", "");
+    gate?.setAttribute("inert", "");
+    gate?.setAttribute("aria-hidden", "true");
+  }
 }
+
+function ensurePlayControl(): void {
+  const gate = document.getElementById("namegate") as HTMLDivElement | null;
+  if (gate) {
+    gate.style.display = "none";
+    gate.setAttribute("inert", "");
+    gate.setAttribute("aria-hidden", "true");
+  }
+  enableNameGate(false);
+  const input = document.getElementById("namein") as HTMLInputElement | null;
+  input?.blur();
+  glCanvas.tabIndex = 0;
+  glCanvas.focus({ preventScroll: true });
+}
+
+function releaseNameFocus(): void {
+  ensurePlayControl();
+}
+
+function capturePlayKeys(ev: KeyboardEvent): void {
+  if (snap?.screen !== "play") return;
+  ensurePlayControl();
+  if (ev.code === "Escape" && mySlot === 0) {
+    menu.step = 0; menu.idx = 0;
+    setUrlRoom(false);
+    ws.send(JSON.stringify({ t: "tomenu" }));
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  }
+}
+window.addEventListener("keydown", capturePlayKeys, true);
+window.addEventListener("focus", () => { if (snap?.screen === "play") ensurePlayControl(); });
 glCanvas.addEventListener("pointerdown", () => glCanvas.focus());
 ui.width = W; ui.height = H;
 const uictx = ui.getContext("2d")!;
@@ -1051,6 +1102,13 @@ function render(): void {
       ring.position.set(wx, 0.05, wz);
       ring.geometry.dispose();
       ring.geometry = new THREE.RingGeometry(0.5, 0.62, 24, 1, -Math.PI / 2, (p.reviveP / 90) * Math.PI * 2);
+      (ring.material as THREE.MeshBasicMaterial).color.set(0x9be07a);
+    } else if (p.downed && p.bleedT > 0) {
+      ring.visible = true;
+      ring.position.set(wx, 0.05, wz);
+      ring.geometry.dispose();
+      ring.geometry = new THREE.RingGeometry(0.5, 0.62, 24, 1, -Math.PI / 2, (p.bleedT / BLEED_TICKS) * Math.PI * 2);
+      (ring.material as THREE.MeshBasicMaterial).color.set(0xe8384f);
     } else ring.visible = false;
     // sword
     if (showAttack > 0 && !p.downed) {
@@ -1205,7 +1263,11 @@ function render(): void {
     });
     drawHud(s);
   }
-  drawPartnerMirror(s);
+  try {
+    drawPartnerMirror(s);
+  } catch (err) {
+    console.error("partner PiP render failed:", err);
+  }
   if (s.fade > 0) {
     uictx.fillStyle = `rgba(0,0,0,${s.fade})`;
     uictx.fillRect(0, 0, W, H);
