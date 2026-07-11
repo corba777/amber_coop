@@ -160,10 +160,134 @@ Agent may spend the feather on rescue failsafe when routing is too slow.
 - Telemetry: `errands` array in matches.jsonl — goal, duration, fetched, hero
   downs during absence (test [44]).
 
-**Stage 5 (sketch) — the dungeon as the third player.** An LLM director for
-the {dungeon} side with a NON-WINNING utility ("interesting resistance", L4D
-AI-Director lineage): assigns targets across enemies, paces pressure. Turns the
-three-player coalition framing literal. Design-only; do not start unprompted.
+**Stage 4.5 — AI DUO (two LLM heroes, humans spectate).** Author's go-ahead
+GIVEN; implement before the Architect. Providers may match or differ; so may
+temperaments. This is the coordination-dyad benchmark (do two models revive
+each other? how do mercy decisions differ when BOTH are models?) and the
+substrate for the Architect bench (duo vs director = the first fully
+machine-played coalition triangle).
+
+*Menu.* Party step gains a fourth option: AI DUO. Flow: two passes over the
+existing provider→temperament steps with headers "choose the HERO's AI" /
+"choose the COMPANION's AI" (reuse steps + a phase counter; remember: menu code
+is duplicated in BOTH clients, test [15] anchors). Travel axis: v1 is LINKED
+only (free-roam duo + errands later — machinery exists, scope doesn't).
+
+*Server.* `mode: "duo"`: two AgentPlayers. Slot 0 = HERO (leader), slot 1 =
+COMPANION. Host is a bodiless spectator exactly like autopilot (start via
+ENTER / click / {t:"start"}). names[] from llm names; heroes table in /stats
+skips duo matches (like auto); partner leaderboard gains a PAIR key:
+`"HAIKU+LLAMA [guard+hunter]"` (temperament suffixes when non-companion).
+plans.jsonl entries gain `slot`; matches.jsonl gains mode "duo" + both
+provider/temperament fields.
+
+*The anchor deadlock (CRITICAL).* The npc room-anchor with two NPCs and zero
+heroes locks both in the first room forever. Resolution, per iron rule 3:
+the anchor's spirit is "room transitions belong to the party's humans"; with
+no humans in the party, leadership devolves to slot 0. So: slot 0 npc=false
+(may transition; LINKED drag carries the companion), slot 1 npc=true.
+Mechanics-level, tested.
+
+*Prompts.* Slot 0 gets LEADER_PROMPT: quest-driving like SOLO_PROMPT (route
+compass, "exit"/"cave" verbs, never idle) but WITH a companion — coordinate,
+don't abandon ("your companion fights beside you; lead the route, share the
+loot sensibly"). Slot 1 keeps SYSTEM_PROMPT + temperament doctrine unchanged.
+Two follow-intents deadlock in mutual politeness — the leader must never be
+told to follow; forbid "follow" in LEADER_PROMPT like SOLO does.
+
+*Decisions with no human present.* Mercy: the WRAITH-yield choice devolves to
+the LEADER's temperament (companion stands back — the existing "the choice
+belongs to your partner" generalizes: the deciding slot is the party leader).
+Rescue: mutual, each side's temperament-scaled patience + failsafe apply
+symmetrically (guard slot-agnostic code — agent.ts is mostly slot-clean
+already; audit `1 - this.slot` assumptions).
+
+*Spectator UI.* Thought panel shows BOTH minds: two lines, name-prefixed
+(`HAIKU: exit — the vault lies east` / `LLAMA: follow — staying close`).
+Snapshot: migrate `thought` → `thoughts: [{slot, name, action, why, ms}]`
+(optional field; flat; both clients render up to two lines; T toggles both).
+
+*Bench.* `MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter
+node dist/bench.js` — pair columns: winrate, ticks, mutual revives, downs per
+slot, routeAssists per slot, mercy outcome distribution. This table (model ×
+model × temperament × temperament) exists nowhere publicly.
+
+*Tests to land WITH the implementation:* duo menu reachability anchors in both
+built bundles; WS boot test (both agents act, spectator starts); anchor
+devolution (leader transitions, companion dragged, room never reloads under
+companion pressure); mutual revive both directions; leader-temperament mercy
+(hunter leader strikes / guard leader spares while companion stands back);
+stats pair key; thoughts[] in snapshot.
+
+**Stage 5 — THE ARCHITECT (the dungeon as the third player).** Full design
+spec; implement only on the author's explicit go-ahead, stage by stage.
+
+*Concept.* An LLM director plays the {dungeon} side with a NON-WINNING utility:
+"interesting resistance" (L4D AI-Director lineage; the Matrix naming is
+deliberate — the first Matrix failed because its utility was wrong). Two
+victory-seeking sides plus one quality-seeking side turns the three-player
+coalition framing literal.
+
+*Architecture — mirror of AgentPlayer (two layers, both already precedented):*
+- `server/director.ts`, class `DirectorPlayer`. The ORACLE (LLM planner,
+  `DIRECTOR_PLAN_MS` ≈ 3500) reads a compact observation (room state, heroes'
+  hp/positions, recent tension metrics) and answers JSON:
+  `{"assignments": [{"e": 2, "focus": 0}, {"e": 0, "focus": "door"}],
+    "why": "...", "whisper": "the winter watches the archer"}`.
+- The ARCHITECT (controller) is mechanics: validates directives, enforces the
+  power limits, computes tension metrics, falls back to vanilla enemy AI on
+  silence/parse failure. A `mock` director drives tests.
+- Core hook is ONE field: `Enemy.focus?: number | "door" | null`. targetNearest
+  honors a valid, living focus; otherwise vanilla behavior. No other core
+  change. Enemies with no directive behave exactly as today.
+
+*Power vocabulary v1 — target assignment ONLY.* The director may set focus per
+enemy in the room. It may NOT: spawn, buff, heal, change room composition,
+touch boss HP or attack patterns, move enemies between rooms, or retarget a
+yielding wraith (phase 9 is sacred — mercy stays outside its reach). The
+smallest power at which the dungeon suddenly reads as coordinated; the "anomaly"
+stays with the players — a limited director can be outplayed, an omnipotent one
+is just repression. Vocabulary growth (pacing hints, patrol waypoints) is a
+LATER negotiation, one verb at a time, each behind its own test.
+
+*Utility operationalization (tension corridor).* Candidate v1 metric, tunable:
+keep the party's aggregate HP fraction inside [0.4, 0.75]; reward downs that do
+NOT end in gameover; escalate on boredom (no damage taken for ~12 s), ease off
+near party wipe. The stats timeline (dmgTaken/downs/revives per tick window)
+already exists in telemetry — the controller computes the corridor signal and
+passes it to the Oracle as observation, the Oracle decides HOW to act on it.
+
+*Director styles (menu: THE ARCHITECT → style):* WARDEN (defensive: guard
+doors, protect key rooms), HUNTSMAN (focus-fire the weaker hero, punish
+splits — FREE ROAM synergy), DRAMATURGE (pure tension-curve play). Same
+pattern as partner temperaments: a doctrine line in the prompt + controller
+weights. Styles are also the bench ablation axis.
+
+*Introduction order (deliberate, mirrors trust-before-betrayal):*
+1. BENCH FIRST — director vs AI autopilot, and director vs AI DUO once 4.5
+   lands (three models, full triangle), no humans. `DIRECTOR=anthropic
+   DIRECTOR_STYLE=huntsman PROVIDERS=... node dist/bench.js`. New columns:
+   corridor-time %, downs caused, gameovers, director parse-fail rate. This is
+   an adversarial eval (partner model × temperament vs director model × style)
+   that no public benchmark has — and it validates the director's judgment
+   before any experiment touches Ilya.
+2. Then a menu toggle for humans (default OFF; canon quest without the
+   director stays byte-identical — guard with a test).
+
+*Channels & telemetry.* Director plans go to plans.jsonl with `side: "dungeon"`
+(the self-explanation corpus doubles); matches.jsonl gains director
+provider/style/metrics. `whisper` is an optional flavor channel surfaced to
+players (toggleable, off by default) — the winter thinking out loud.
+
+*Tests to land WITH the implementation:* directive validation + power-limit
+enforcement (spawn/buff attempts rejected), phase-9 sanctity, vanilla fallback
+on director silence, focus honored by targetNearest, canon-untouched guard
+(no-director game identical), bench harness smoke.
+
+*Research hooks.* The full coalition triangle becomes expressible; a
+{partner, dungeon} coalition is the betrayal endgame — still gated on the
+author. The Oracle/Architect split (meaning-layer vs mechanics-layer) is the
+same pattern as planner/controller in agent.ts: name it in the write-up.
 
 **Research line (design-only so far):** partner with hidden utility weights /
 betrayal as rational defection. Order of introduction is deliberate: honest

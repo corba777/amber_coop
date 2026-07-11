@@ -10,7 +10,7 @@
 
 import {
   Game, Input, emptyInput, TILE, W, H, COLS, ROWS, SOLID, PLAYER_W, PLAYER_H, ROOMS, Player,
-  simOf, ELIXIRS, canNpcLeave,
+  simOf, ELIXIRS, canNpcLeave, solidAt,
 } from "../shared/core";
 import { LLM } from "./llm";
 
@@ -37,6 +37,7 @@ Actions:
 - "exit": walk through a room exit: dir must be one listed in "exits". Walking "up" into a locked door with a team key unlocks it.
 
 Be PROACTIVE in combat: if enemies share the room, pick one and "attack" — do not shadow your partner while they fight. Use "follow" for travel and empty rooms only.
+Do not camp one tile — if a foe hides behind a tree or pillar, keep moving or "goto" a flanking spot; standing still wastes time.
 When your partner FALLS: reviving them is the mission, but you are the last one standing — if you die too, the quest ends. If a boss or a crowd rages beside their body, "attack" or "flee" FIRST to survive the moment, then go stand by them. Never dawdle: they are watching you from the snow.
 Tactics that matter:
 - Golem and Ember Golem bosses: invulnerable except when "phase" is 3 (stunned, glowing). Attack then; otherwise keep distance ("flee" or "follow"). The ember one is faster and spits fire while winding up.
@@ -79,11 +80,23 @@ Combat notes: golem-family bosses are only vulnerable at phase 3 (stunned); sent
 If the Winter Wraith yields (phase 9), the mercy choice is yours alone: stand beside it to spare it, or strike to end winter — choose in character.
 Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
 
+const LEADER_PROMPT = `You are the HERO (Player 1) in a tiny co-op Zelda-like — your COMPANION is another AI hero beside you.
+You LEAD the quest. Never choose "follow" or "idle" — those freeze the party; your companion will trail you.
+Your mission is the "objective"; the "route" field is your compass — it names the exit (or cave mouth) toward the goal.
+Default each turn:
+1. Enemies in the room — "attack" the nearest threat.
+2. Useful pickup close by — "pickup" it (keys are team-shared).
+3. Otherwise FOLLOW THE ROUTE: "exit" with the named dir — "cave" is valid where a cave mouth exists.
+Fight beside your companion; brief quips only. Combat notes: golem bosses vulnerable at phase 3; sentinels block frontal hits; spitters are rooted.
+If the Winter Wraith yields (phase 9), YOU decide mercy or the killing blow — your companion stands back.
+Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
+
 export type Temperament = "guard" | "companion" | "hunter";
 
 export interface AgentOptions {
   planMs: number;      // how often to ask the LLM for a new intent
   temperament?: Temperament;   // bodyguard / companion / berserker
+  leader?: boolean;    // AI DUO slot 0 — quest driver, never follow
 }
 
 export type RouteHop = { kind: "exit"; dir: string } | { kind: "cave"; x: number; y: number } | null;
@@ -187,6 +200,48 @@ export function nextWaypoint(tiles: string[][] | string[], fromX: number, fromY:
   return { x: (node % COLS) * TILE + TILE / 2, y: ((node / COLS) | 0) * TILE + TILE / 2 };
 }
 
+/** nearest walkable tile beside the target — for melee approach around obstacles */
+export function approachWaypoint(tiles: string[][] | string[], fromX: number, fromY: number,
+                                 toX: number, toY: number, flank = 0): { x: number; y: number } {
+  const at = (tx: number, ty: number): string => {
+    if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return "W";
+    const row = tiles[ty];
+    return row ? row[tx] : "W";
+  };
+  const walk = (tx: number, ty: number): boolean => !SOLID.has(at(tx, ty));
+  const sx = Math.max(0, Math.min(COLS - 1, Math.floor(fromX / TILE)));
+  const sy = Math.max(0, Math.min(ROWS - 1, Math.floor(fromY / TILE)));
+  const gx = Math.max(0, Math.min(COLS - 1, Math.floor(toX / TILE)));
+  const gy = Math.max(0, Math.min(ROWS - 1, Math.floor(toY / TILE)));
+  const goals: number[] = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    const nx = gx + dx, ny = gy + dy;
+    if (walk(nx, ny)) goals.push(ny * COLS + nx);
+  }
+  if (!goals.length) return nextWaypoint(tiles, fromX, fromY, toX, toY);
+  if (goals.length > 1 && flank) goals.sort((a, b) => ((a % COLS) - (b % COLS)) * flank);
+  const prev = new Int16Array(COLS * ROWS).fill(-1);
+  const q = [sy * COLS + sx];
+  prev[sy * COLS + sx] = sy * COLS + sx;
+  const goalSet = new Set(goals);
+  let hit = -1;
+  while (q.length && hit < 0) {
+    const cur = q.shift() as number;
+    if (goalSet.has(cur)) { hit = cur; break; }
+    const cx = cur % COLS, cy = (cur / COLS) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      const ni = ny * COLS + nx;
+      if (prev[ni] !== -1 || !walk(nx, ny)) continue;
+      prev[ni] = cur;
+      q.push(ni);
+    }
+  }
+  if (hit < 0) return nextWaypoint(tiles, fromX, fromY, toX, toY);
+  return { x: (hit % COLS) * TILE + TILE / 2, y: ((hit / COLS) | 0) * TILE + TILE / 2 };
+}
+
 const TEMPERAMENT_DOCTRINE: Record<Temperament, string> = {
   guard: "Your temperament: BODYGUARD. Stay glued to your partner; engage only enemies that threaten THEM. In FREE ROAM, rejoin their room — never sprint ahead on the quest alone. If they fall, dropping everything to revive them is your creed.",
   companion: "Your temperament: COMPANION. Balance it: join fights near the party, stay reachable, grab useful pickups. In FREE ROAM you may roam for errands after a moment apart.",
@@ -231,6 +286,10 @@ export class AgentPlayer {
   private pickupTargetKey = "";
   private exitStall = 0;
   private exitLastDist = Infinity;
+  private attackStall = 0;
+  private attackLastDist = Infinity;
+  private attackTargetKey = "";
+  private attackFlank = 0;
   private partnerAwayTicks = 0;
   private guardRejoinAnnounced = false;
 
@@ -565,7 +624,9 @@ export class AgentPlayer {
   async planOnce(g: Game): Promise<PlanRecord> {
     const user = "Observation:\n" + this.observe(g);
     const solo = !g.players[this.mateSlot()].present;
-    const sys = (solo ? SOLO_PROMPT : SYSTEM_PROMPT)
+    const sys = (this.opts.leader ? LEADER_PROMPT
+      : solo ? SOLO_PROMPT
+      : SYSTEM_PROMPT)
       + (g.travelMode === "free" && !solo
         ? FREE_ROAM_ADDENDUM + FREE_ROAM_TEMPERAMENT[this.temperament]
         : "")
@@ -758,7 +819,9 @@ export class AgentPlayer {
         }
       }
       if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
-        if (!mate.present) {
+        if (this.opts.leader) {
+          this.applyRouteHop(g, this.routeDestination(g));
+        } else if (!mate.present) {
           this.applyRouteHop(g, this.routeDestination(g));
         } else if (this.partnerAway(g)) {
           this.applyRouteHop(g, this.freeRoamRouteTarget(g));
@@ -791,7 +854,7 @@ export class AgentPlayer {
         // alone, the choice is the agent's own — and temperament IS character:
         // the berserker finishes it; guard and companion stand beside it
         if (this.temperament !== "hunter") {
-          this.seek(inp, me, e.x, e.y);   // closeness is how mercy is given
+            this.seek(g, inp, me, e.x, e.y);   // closeness is how mercy is given
           return inp;
         }
         // hunter: fall through and strike
@@ -805,7 +868,7 @@ export class AgentPlayer {
           if (rel < 0) {
             // it charges away from us — chase the charge to be standing
             // right there when it slams the wall and stuns itself
-            this.seek(inp, me, e.x, e.y);
+            this.seek(g, inp, me, e.x, e.y);
           } else {
             // it charges at us — sidestep perpendicular, matador-style
             const perp = { x: -e.vy, y: e.vx };
@@ -827,8 +890,23 @@ export class AgentPlayer {
       // swinging mid-run freezes movement (core rule) — so sprint silently
       // until the blade can actually connect, and only then start swinging
       const reach = 19 + Math.max(e.w, e.h) / 2 + 2;
+      const atkKey = `${it.target}:${e.kind}`;
+      if (atkKey !== this.attackTargetKey) {
+        this.attackTargetKey = atkKey;
+        this.attackStall = 0;
+        this.attackLastDist = d;
+        this.attackFlank = 0;
+      } else if (d > reach && d > this.attackLastDist - 1.5) this.attackStall++;
+      else this.attackStall = Math.max(0, this.attackStall - 1);
+      this.attackLastDist = d;
+      if (this.attackStall > 35 && d > reach) {
+        this.attackStall = 0;
+        this.attackFlank++;
+        this.approachSeek(g, inp, me, ecx, ecy, this.attackFlank % 2 === 0 ? 1 : -1);
+        return inp;
+      }
       if (d > reach - 4) {
-        this.seek(inp, me, e.x, e.y);
+        this.waypointSeek(g, inp, me, e.x, e.y);
       } else {
         this.face(inp, me, ecx, ecy);
       }
@@ -880,12 +958,12 @@ export class AgentPlayer {
           this.intent = { action: "attack", target: threat, say: this.intent.say };
           return this.control(g, depth + 1);
         }
-        this.seek(inp, me, 8 * TILE, 8 * TILE);
+        this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
         return inp;
       }
       if (g.travelMode === "free" && this.partnerInRoom(g) &&
           this.partnerNearDoor(g, mate, it.dir)) {
-        this.seek(inp, me, 8 * TILE, 8 * TILE);
+        this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
         return inp;
       }
       const spec2 = ROOMS[g.room];
@@ -949,11 +1027,11 @@ export class AgentPlayer {
     }
 
     // follow (default): keep a comfortable distance from the partner
-    if (mate.present && this.partnerInRoom(g)) {
+    if (!this.opts.leader && mate.present && this.partnerInRoom(g)) {
       const d = Math.hypot(mate.x - me.x, mate.y - me.y);
       const followAt = this.temperament === "guard" ? 30 :
                        this.temperament === "hunter" ? 64 : 44;
-      if (d > followAt) this.seek(inp, me, mate.x, mate.y);
+      if (d > followAt) this.waypointSeek(g, inp, me, mate.x, mate.y);
     }
     this.meleeGuard(inp, g, me, mcx, mcy);
     return inp;
@@ -989,19 +1067,74 @@ export class AgentPlayer {
     return it;
   }
 
+  /** tile rows for the room the agent is standing in */
+  private roomRows(g: Game): string[] {
+    const ri = g.room;
+    return g.tiles[ri] ?? ROOMS[ri].tiles;
+  }
+
+  /** path to a walkable tile beside the target — flanks around trees */
+  private approachSeek(g: Game, inp: Input, me: Player,
+                       tx: number, ty: number, flank = 0): void {
+    const wp = approachWaypoint(this.roomRows(g),
+      me.x + PLAYER_W / 2, me.y + PLAYER_H / 2, tx, ty, flank);
+    this.seekDirect(g, inp, me, wp.x - PLAYER_W / 2, wp.y - PLAYER_H / 2);
+  }
+
   /** long-range seek that actually routes around water, pillars and lava */
   private waypointSeek(g: Game, inp: Input, me: Player, tx: number, ty: number): void {
-    const wp = nextWaypoint(g.tiles, me.x + PLAYER_W / 2, me.y + PLAYER_H / 2,
+    const wp = nextWaypoint(this.roomRows(g), me.x + PLAYER_W / 2, me.y + PLAYER_H / 2,
                             tx + PLAYER_W / 2, ty + PLAYER_H / 2);
-    this.seek(inp, me, wp.x - PLAYER_W / 2, wp.y - PLAYER_H / 2);
+    this.seekDirect(g, inp, me, wp.x - PLAYER_W / 2, wp.y - PLAYER_H / 2);
   }
 
   // ---- movement helpers -------------------------------------------------
-  private seek(inp: Input, me: { x: number; y: number }, tx: number, ty: number): void {
+  /** routes around obstacles when far; slides along walls when close */
+  private seek(g: Game, inp: Input, me: Player, tx: number, ty: number): void {
+    if (Math.hypot(tx - me.x, ty - me.y) > TILE * 2) {
+      this.waypointSeek(g, inp, me, tx, ty);
+      return;
+    }
+    this.seekDirect(g, inp, me, tx, ty);
+  }
+
+  private seekDirect(g: Game, inp: Input, me: { x: number; y: number },
+                     tx: number, ty: number): void {
     const dx = tx - me.x, dy = ty - me.y;
-    // greedy axis movement with a light wall-avoid nudge
-    if (Math.abs(dx) > 2) { if (dx > 0) inp.r = true; else inp.l = true; }
-    if (Math.abs(dy) > 2) { if (dy > 0) inp.d = true; else inp.u = true; }
+    const mcx = me.x + PLAYER_W / 2, mcy = me.y + PLAYER_H / 2;
+    const probe = 10;
+    const canH = (sign: number): boolean =>
+      !solidAt(g, mcx + sign * probe, mcy) &&
+      !solidAt(g, mcx + sign * probe, mcy + 2) &&
+      !solidAt(g, mcx + sign * probe, mcy + PLAYER_H - 2);
+    const canV = (sign: number): boolean =>
+      !solidAt(g, mcx, mcy + sign * probe) &&
+      !solidAt(g, mcx + 2, mcy + sign * probe) &&
+      !solidAt(g, mcx + PLAYER_W - 2, mcy + sign * probe);
+
+    let h = false, v = false;
+    if (Math.abs(dx) > 2) {
+      if (dx > 0 && canH(1)) { inp.r = true; h = true; }
+      else if (dx < 0 && canH(-1)) { inp.l = true; h = true; }
+    }
+    if (Math.abs(dy) > 2) {
+      if (dy > 0 && canV(1)) { inp.d = true; v = true; }
+      else if (dy < 0 && canV(-1)) { inp.u = true; v = true; }
+    }
+    // blocked on the greedy axis — try sliding along the other
+    if (!h && !v) {
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        if (dx > 0 && canH(1)) inp.r = true;
+        else if (dx < 0 && canH(-1)) inp.l = true;
+        else if (dy > 0 && canV(1)) inp.d = true;
+        else if (dy < 0 && canV(-1)) inp.u = true;
+      } else {
+        if (dy > 0 && canV(1)) inp.d = true;
+        else if (dy < 0 && canV(-1)) inp.u = true;
+        else if (dx > 0 && canH(1)) inp.r = true;
+        else if (dx < 0 && canH(-1)) inp.l = true;
+      }
+    }
   }
   private seekAway(inp: Input, me: { x: number; y: number }, fx: number, fy: number): void {
     const dx = me.x - fx, dy = me.y - fy;

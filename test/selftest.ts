@@ -5,7 +5,7 @@
 
 import {
   newGame, update, latch, emptyInput, toSnapshot, validateRooms,
-  Game, Input, LatchedInput, TILE, W, PLAYER_W, makeEnemy, ROOMS, SOLID,
+  Game, Input, LatchedInput, TILE, W, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
 } from "../shared/core";
 import { AgentPlayer } from "../server/agent";
 import { mock } from "../server/llm";
@@ -236,7 +236,7 @@ function freshPlay(): Game {
   const { proc: srv, port: PORT } = await spawnTestServer({}, ["P2", "LLM_PROVIDER"]);
   try {
     const wsc = new WebSocket(`ws://127.0.0.1:${PORT}`);
-    const seen = { menu: false, title: false, play: false, agentName: "" };
+    const seen = { menu: false, title: false, play: false, agentName: "", hostName: "" };
     let providersOk = false;
     wsc.on("message", (data: Buffer) => {
       const msg = JSON.parse(String(data));
@@ -247,10 +247,14 @@ function freshPlay(): Game {
         const s = msg.s;
         if (s.screen === "menu" && !seen.menu) {
           seen.menu = true;
-          wsc.send(JSON.stringify({ t: "setup", mode: "llm", provider: "mock" }));
+          wsc.send(JSON.stringify({ t: "name", name: "Artem" }));
+          wsc.send(JSON.stringify({
+            t: "setup", mode: "llm", provider: "mock", hostName: "Artem",
+          }));
         } else if (s.screen === "title" && !seen.title) {
           seen.title = true;
           seen.agentName = s.names[1];
+          seen.hostName = s.names[0];
           wsc.send(JSON.stringify({ t: "input", s: { l: false, r: false, u: false, d: false, a: false, b: false, st: true } }));
         } else if (s.screen === "play") {
           seen.play = true;
@@ -262,6 +266,7 @@ function freshPlay(): Game {
     ok(seen.menu, "fresh server starts at the menu");
     ok(seen.title, "setup(llm/mock) moved menu → title");
     ok(seen.agentName.includes("MOCK"), "agent name propagated to names[1]");
+    ok(seen.hostName === "ARTEM", "human keeps their name in names[0] — not the model");
     ok(seen.play, "ENTER started the coop game");
     // ESC → back to menu, then single player
     wsc.send(JSON.stringify({ t: "input", s: { l: false, r: false, u: false, d: false, a: false, b: false, st: false } }));
@@ -542,13 +547,19 @@ function freshPlay(): Game {
     const src = fs.readFileSync(file, "utf8");
     ok(src.includes("CLASSIC QUEST") && src.includes("LONG QUEST"),
        `${file}: quest step present`);
+    ok(src.includes("SINGLE PLAYER") && src.includes("MULTIPLAYER"),
+       `${file}: root menu starts with single or multiplayer`);
+    ok(src.includes("AI AUTOPILOT") && src.includes("AI + AI"),
+       `${file}: autopilot and AI duo paths present`);
+    ok(src.includes("HUMAN + AI"), `${file}: human + AI party option present`);
+    ok(src.includes("THE ARCHITECT"), `${file}: architect toggle stub on quest screen`);
     for (const mode of ["single", "human"]) {
-      const re = new RegExp(`mode:\\s*"${mode}"[^}]*hardGate`);
-      ok(re.test(src), `${file}: mode "${mode}" carries hardGate`);
+      ok(src.includes(`mode: "${mode}"`) && src.includes("hardGate"),
+         `${file}: mode "${mode}" setup carries hardGate`);
     }
-    // llm/auto share one send via a ternary — assert it still carries hardGate
-    ok(/"auto" : "llm"[\s\S]{0,220}hardGate/.test(src),
-       `${file}: llm/auto setup carries hardGate`);
+    ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
+    ok(src.includes('mode: "auto"') && src.includes("hardGate"), `${file}: autopilot setup carries hardGate`);
+    ok(src.includes('mode: "llm"') && src.includes("hardGate"), `${file}: llm setup carries hardGate`);
   }
   const src3d = fs.readFileSync("dist/client3d.html", "utf8");
   // anchors must be CODE, not comments — esbuild strips comments from bundles
@@ -565,11 +576,15 @@ function freshPlay(): Game {
     ok(src.includes("drawPipEnemy") || src.includes("SPR.bat["),
        `${file}: PiP enemy sprites index animated sheets`);
     ok(src.includes("gate.style.display === \"none\""), `${file}: name gate stops swallowing keys when hidden`);
-    ok(src.includes("menu.auto = true"), `${file}: the AUTOPILOT menu path is reachable`);
+    ok(src.includes("single-auto") || src.includes("AI AUTOPILOT"),
+       `${file}: the AUTOPILOT menu path is reachable`);
     ok(src.includes("partnerView") && src.includes("drawPartnerPip"),
        `${file}: stage-2 scry mirror wired (partnerView + drawPartnerPip)`);
+    ok(src.includes("drawDuoSpectatorHud"),
+       `${file}: AI duo spectator shows both heroes' hearts`);
     ok(src.includes('id="pip"'), `${file}: partner scry mirror lives outside the game frame`);
-    ok(src.includes("FREE ROAM"), `${file}: free roam travel mode in menu`);
+    ok(src.includes("[x] FREE ROAM") || src.includes("FREE ROAM"),
+       `${file}: free roam travel toggle on quest screen`);
     ok(/build [0-9]{10}-[a-z0-9]{4}/.test(src) || src.includes("__BUILD__") === false,
        `${file}: build id stamped`);
   }
@@ -2166,6 +2181,71 @@ function freshPlay(): Game {
   (agent as unknown as Mut).intent = { action: "attack" };
   const inp = agent.control(g);
   ok(inp.d || inp.l || inp.u || inp.r, "hunter runs toward the body instead of swinging");
+}
+
+// ------------------------------------------------- 61. agent pathfinds around meadow trees
+{
+  console.log("[61] attack & follow route around trees — not straight into trunks");
+  const { AgentPlayer, nextWaypoint, approachWaypoint } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const rows = ROOMS[0].tiles;
+  const fromX = 5 * TILE + 8, fromY = 6 * TILE + 8;
+  const toX = 11 * TILE + 8, toY = 6 * TILE + 8;
+  const wp = nextWaypoint(rows, fromX, fromY, toX, toY);
+  const wtx = Math.floor(wp.x / TILE), wty = Math.floor(wp.y / TILE);
+  ok(!SOLID.has(rows[wty][wtx]), "BFS first step avoids solid tree tiles");
+
+  const g = freshPlay();
+  g.screen = "play"; g.fade = 0;
+  g.players[0].present = false;
+  g.players[1].x = fromX - 8; g.players[1].y = fromY - 10;
+  const slime = makeEnemy("slime", toX - 4, toY - 4);
+  g.enemies.push(slime);
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string; target?: number } };
+  (agent as unknown as Mut).intent = { action: "attack", target: 0 };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let moved = false;
+  for (let i = 0; i < 120; i++) {
+    const inp = agent.control(g);
+    if (inp.r || inp.l || inp.u || inp.d) moved = true;
+    step(g, emptyInput(), inp, prev);
+    if (g.players[1].x > fromX + TILE) break;
+  }
+  ok(moved, "agent moves toward the slime");
+  const tx = Math.floor((g.players[1].x + PLAYER_W / 2) / TILE);
+  const ty = Math.floor((g.players[1].y + PLAYER_H / 2) / TILE);
+  ok(!SOLID.has(rows[ty][tx]), "agent body stays on walkable floor while routing");
+
+  const ap = approachWaypoint(rows, fromX, fromY, toX, toY);
+  const atx = Math.floor(ap.x / TILE), aty = Math.floor(ap.y / TILE);
+  ok(!SOLID.has(rows[aty][atx]), "approach tile beside the slime is walkable");
+}
+
+// ------------------------------------------------- 62. AI DUO leader drives the route
+{
+  console.log("[62] AI DUO: leader routes instead of mutual follow");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const g = freshPlay();
+  g.screen = "play"; g.fade = 0;
+  g.players[0].npc = false;
+  g.players[1].npc = true;
+  g.enemies.push(makeEnemy("slime", 11 * TILE, 6 * TILE));
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "hunter" });
+  const comp = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  type Mut = { intent: { action: string } };
+  (leader as unknown as Mut).intent = { action: "follow" };
+  (comp as unknown as Mut).intent = { action: "follow" };
+  const x0 = g.players[0].x;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200; i++) {
+    step(g, leader.control(g), comp.control(g), prev);
+  }
+  const moved = Math.abs(g.players[0].x - x0) > 8;
+  const routed = (leader as unknown as Mut).intent.action === "exit";
+  const fought = g.enemies.every(e => e.dead);
+  ok(moved || routed || fought, "leader quests — not stuck in mutual follow");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

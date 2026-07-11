@@ -42,7 +42,11 @@ function appendLog(file: string, obj: unknown): void {
 const llmCfg = configFromEnv();
 const catalog = providerCatalog(llmCfg);
 
-type Mode = "single" | "human" | "llm" | "auto";
+type Mode = "single" | "human" | "llm" | "auto" | "duo";
+
+function cleanName(raw: string, fallback: string): string {
+  return raw.replace(/[^\p{L}\p{N} _\-.]/gu, "").trim().slice(0, 12).toUpperCase() || fallback;
+}
 
 // ---------------------------------------------------------------- sessions
 function makeCode(): string {
@@ -61,6 +65,8 @@ class Session {
   names: [string, string] = ["ILYA", "?"];
   mode: Mode | null = null;
   agent: AgentPlayer | null = null;
+  leaderAgent: AgentPlayer | null = null;   // AI DUO: slot 0
+  architect = false;   // Stage 5 toggle — stored, not yet wired
   lastThought: { action: string; why?: string; ms: number } | null = null;
   emptySince = 0;   // ms timestamp when the last human left (0 = occupied)
   pendingStart = false;   // a "start" message: synthesized START edge
@@ -82,25 +88,67 @@ class Session {
 
   temperament: Temperament = "companion";
 
-  applySetup(m: Mode, provider?: ProviderName, hard?: boolean, temperament?: Temperament,
-             travelMode?: TravelMode): boolean {
+  applySetup(
+    m: Mode,
+    provider?: ProviderName,
+    hard?: boolean,
+    temperament?: Temperament,
+    travelMode?: TravelMode,
+    extra?: {
+      provider2?: ProviderName;
+      temperament2?: Temperament;
+      architect?: boolean;
+      hostName?: string;
+    },
+  ): boolean {
+    this.architect = !!extra?.architect;
     this.game.hardGate = hard ?? HARD_GATE_DEFAULT;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
-    if (m === "llm" || m === "auto") {
+    this.leaderAgent = null;
+    if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "ILYA");
+
+    const pickTemp = (t?: Temperament): Temperament =>
+      (["guard", "companion", "hunter"] as Temperament[]).includes(t as Temperament)
+        ? (t as Temperament) : "companion";
+
+    const wireAgent = (agent: AgentPlayer, slot: number): void => {
+      agent.onPlan = rec => {
+        if (slot === 1) this.lastThought = { action: rec.action, why: rec.why, ms: rec.ms };
+        appendLog("plans.jsonl", { sid: this.id, slot, ...rec });
+      };
+    };
+
+    if (m === "duo") {
+      const p0 = provider, p1 = extra?.provider2;
+      if (!p0 || !p1) return false;
+      if (p0 !== "mock" && !catalog[p0]?.ok) return false;
+      if (p1 !== "mock" && !catalog[p1]?.ok) return false;
+      const llm0 = makeLLM(p0, llmCfg);
+      const llm1 = makeLLM(p1, llmCfg);
+      const t0 = pickTemp(temperament);
+      const t1 = pickTemp(extra?.temperament2);
+      this.temperament = t1;
+      this.leaderAgent = new AgentPlayer(llm0, 0, { planMs: PLAN_MS, temperament: t0, leader: true });
+      this.agent = new AgentPlayer(llm1, 1, { planMs: PLAN_MS, temperament: t1 });
+      wireAgent(this.leaderAgent, 0);
+      wireAgent(this.agent, 1);
+      this.names[0] = llm0.name.toUpperCase();
+      this.names[1] = llm1.name.toUpperCase();
+      this.game.players[0].present = true;
+      this.game.players[0].npc = false;
+      this.game.players[1].present = true;
+      this.game.players[1].npc = true;
+      this.kickSlot1("host chose AI duo");
+      this.game.screen = "title";
+    } else if (m === "llm" || m === "auto") {
       if (!provider) return false;
       if (provider !== "mock" && !catalog[provider]?.ok) return false;
       const llm = makeLLM(provider, llmCfg);
-      this.temperament = (["guard", "companion", "hunter"] as Temperament[])
-        .includes(temperament as Temperament) ? (temperament as Temperament) : "companion";
+      this.temperament = pickTemp(temperament);
       this.agent = new AgentPlayer(llm, 1, { planMs: PLAN_MS, temperament: this.temperament });
-      this.agent.onPlan = rec => {
-        this.lastThought = { action: rec.action, why: rec.why, ms: rec.ms };
-        appendLog("plans.jsonl", { sid: this.id, ...rec });
-      };
+      wireAgent(this.agent, 1);
       this.names[1] = llm.name.toUpperCase();
       this.game.players[1].present = true;
-      // autopilot: the LLM IS the hero — no npc anchor, free to travel;
-      // the human host becomes a bodiless spectator
       this.game.players[1].npc = m === "llm";
       this.game.players[0].present = m === "llm" && !!this.sockets[0];
       if (m === "auto") this.names[0] = "SPECTATOR";
@@ -133,6 +181,7 @@ class Session {
     this.game.players[0].present = keep0;
     this.game.players[1].present = false;
     this.agent = null;
+    this.leaderAgent = null;
     this.mode = null;
     this.names[1] = "?";
     this.rawInputs = [emptyInput(), emptyInput()];
@@ -149,6 +198,16 @@ class Session {
 
   tick(tickCount: number): void {
     try {
+      if (this.leaderAgent) {
+        this.game.activeSim = this.game.players[0].simIndex;
+        this.leaderAgent.maybePlan(this.game, Date.now());
+        this.rawInputs[0] = this.leaderAgent.control(this.game);
+        const quip0 = this.leaderAgent.takeSay();
+        if (quip0) {
+          this.game.players[0].say = quip0;
+          this.game.players[0].sayT = 180;
+        }
+      }
       if (this.agent) {
         this.game.activeSim = this.game.players[1].simIndex;
         this.agent.maybePlan(this.game, Date.now());
@@ -202,6 +261,7 @@ class Session {
           if (!ws || ws.readyState !== WebSocket.OPEN) continue;
           const snapObj = toSnapshot(this.game, this.names, slot, false);
           snapObj.events = events;
+          snapObj.mode = this.mode;
           snapObj.thought = this.agent ? this.lastThought : null;
           ws.send(JSON.stringify({ t: "state", s: snapObj }));
         }
@@ -386,8 +446,9 @@ wss.on("connection", (ws, req) => {
   ws.on("message", data => {
     try {
       const msg = JSON.parse(String(data)) as {
-        t: string; s?: Input; mode?: Mode; provider?: ProviderName; hardGate?: boolean;
-        name?: string; temperament?: Temperament; travelMode?: TravelMode;
+        t: string; s?: Input; mode?: Mode; provider?: ProviderName; provider2?: ProviderName;
+        hardGate?: boolean; name?: string; hostName?: string; temperament?: Temperament;
+        temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean;
       };
       if (msg.t === "start") {
         const sc = session.game.screen;
@@ -395,16 +456,26 @@ wss.on("connection", (ws, req) => {
       } else if (msg.t === "ping") {
         ws.send(JSON.stringify({ t: "pong", n: (msg as unknown as { n: number }).n }));
       } else if (msg.t === "input" && msg.s) {
+        if (session.mode === "duo" || (session.mode === "auto" && slot === 0)) {
+          if (msg.s.st) session.pendingStart = true;
+        } else {
         session.rawInputs[slot] = {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
           a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
         };
+        }
       } else if (msg.t === "setup" && slot === 0 && session.game.screen === "menu" && msg.mode) {
-        session.applySetup(msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode);
+        session.applySetup(
+          msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode,
+          {
+            provider2: msg.provider2, temperament2: msg.temperament2,
+            architect: msg.architect, hostName: msg.hostName,
+          },
+        );
       } else if (msg.t === "name" && typeof msg.name === "string") {
-        const clean = msg.name.replace(/[^\p{L}\p{N} _\-.]/gu, "").trim().slice(0, 12).toUpperCase();
-        if (slot === 0) session.names[0] = clean || "ILYA";
-        else if (session.mode === "human") session.names[1] = clean || "PLAYER 2";
+        const clean = cleanName(msg.name, slot === 0 ? "ILYA" : "PLAYER 2");
+        if (slot === 0) session.names[0] = clean;
+        else if (session.mode === "human") session.names[1] = clean;
       } else if (msg.t === "tomenu" && slot === 0) {
         session.resetToMenu();
       }
