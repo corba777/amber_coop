@@ -15,7 +15,7 @@
  * prediction is never corrected — no backward drag, and (because reconcile adds
  * no motion of its own) nothing can double-count into an overshoot. */
 
-import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID, ICE_ACCEL, ICE_DECEL } from "../shared/core";
+import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID, ICE_ACCEL, ICE_DECEL, SLIDE_SPEED } from "../shared/core";
 
 /** where our prediction stood when we sent input `seq` — the anchor the server
  *  answers with its own position for the same seq */
@@ -50,6 +50,12 @@ function iceAtTiles(tiles: string[], px: number, py: number): boolean {
   const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
   if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return false;
   return tiles[ty][tx] === "i";
+}
+
+function slideAtTiles(tiles: string[], px: number, py: number): boolean {
+  const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+  if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return false;
+  return tiles[ty][tx] === "z";
 }
 
 /** exact mirror of core.moveBody against a raw tile map */
@@ -88,6 +94,21 @@ export function stepPred(b: Body, tiles: string[], inp: Input,
   let ticks = dtMs / (1000 / 60);
   while (ticks > 0) {
     const f = Math.min(1, ticks);
+    // commit-slide puzzle ice ("z") — mirror of core.slideBody: locked skate
+    // direction, steering ignored, stop on a wall. Not gated by `slick`.
+    if (slideAtTiles(tiles, b.x + PLAYER_W / 2, b.y + PLAYER_H / 2)) {
+      if (b.vx === 0 && b.vy === 0) {
+        if (dx !== 0) { b.vx = Math.sign(dx) * SLIDE_SPEED; b.vy = 0; }
+        else if (dy !== 0) { b.vx = 0; b.vy = Math.sign(dy) * SLIDE_SPEED; }
+      }
+      if (b.vx !== 0 || b.vy !== 0) {
+        const px0 = b.x, py0 = b.y;
+        movePredicted(tiles, b, b.vx * f, b.vy * f);
+        if (b.x === px0 && b.y === py0) { b.vx = 0; b.vy = 0; }
+      }
+      ticks -= 1;
+      continue;
+    }
     const onIce = slick && iceAtTiles(tiles, b.x + PLAYER_W / 2, b.y + PLAYER_H / 2);
     if (onIce) {
       const ease = (moving ? ICE_ACCEL : ICE_DECEL) * f;

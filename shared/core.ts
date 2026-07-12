@@ -41,7 +41,7 @@ const ROOM_MEADOW = [
   "tggggggggggggggt",
   "tgggghgggghggggt",
   "tggggggggggggggt",
-  "tttttttttttttttt",
+  "tttttttIIttttttt",
 ];
 const ROOM_FOREST = [
   "tttttttttttttttt",
@@ -237,7 +237,7 @@ const ROOM_CELLAR = [
   "WWWWWWWWWWWWWWWW",
 ];
 const ROOM_CRYPT = [
-  "WWWWWWWWWWWWWWWW",
+  "WWWWWWWffWWWWWWW",
   "WiiiiiiiiiiiiiiW",
   "WiiWiiiiiiiiWiiW",
   "WiiiiiiiiiiiiiiW",
@@ -284,6 +284,25 @@ const ROOM_EMBER_GUARD = [
   "keeeeeeeeeeeeeek",
   "kkkkkkkkkkkkkkkk",
 ];
+// optional skate-puzzle wing (tile "z" = commit-slide ice, grip-floor "f" borders
+// so you always board and disembark on solid ground); dwellers slide too. Two
+// doors: top-centre from the meadow (early access), bottom-centre from the crypt.
+const ROOM_SKATE = [
+  "WWWWWWWffWWWWWWW",
+  "WffffffffffffffW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzWzzzzzzzzWzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzWzzzzzzWzzzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzzzzzWWzzzzzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WzzzzzzzzzzzzzzW",
+  "WffffffffffffffW",
+  "WWWWWWWffWWWWWWW",
+];
 const ROOM_EMBER_SANCTUM = [
   "kkkkkkkkkkkkkkkk",
   "keeeeeeeeeeeeeek",
@@ -302,7 +321,7 @@ const ROOM_EMBER_SANCTUM = [
 ];
 
 export const ROOMS: RoomSpec[] = [
-  { name: "Sunlit Meadow", tiles: ROOM_MEADOW, exits: { right: 1, up: 6 }, enemies: [] },
+  { name: "Sunlit Meadow", tiles: ROOM_MEADOW, exits: { right: 1, up: 6, down: 17 }, enemies: [] },
   {
     name: "Whispering Forest", tiles: ROOM_FOREST, exits: { left: 0, right: 2, down: 14 },
     enemies: [
@@ -394,7 +413,7 @@ export const ROOMS: RoomSpec[] = [
     ],
   },
   { // 13
-    name: "Ice Vault — Frozen Crypt", tiles: ROOM_CRYPT, exits: { right: 10 },
+    name: "Ice Vault — Frozen Crypt", tiles: ROOM_CRYPT, exits: { right: 10, up: 17 },
     enemies: [
       { kind: "sentinel", x: 4 * TILE, y: 5 * TILE },
       { kind: "sentinel", x: 11 * TILE, y: 8 * TILE },
@@ -423,6 +442,19 @@ export const ROOMS: RoomSpec[] = [
   { // 16
     name: "Ember Sanctum", tiles: ROOM_EMBER_SANCTUM, exits: { down: 15 }, boss: true,
     enemies: [{ kind: "ember", x: 7 * TILE, y: 4 * TILE }],
+  },
+  { // 17 — optional skate-puzzle wing. Tester request (Алексей Белозёров,
+    //   2026-07-12): "чтоб до конца скользили, как в Undertale" + "все — герои
+    //   и противники — скользят по льду". Two doors so testers reach it fast:
+    //   top-centre straight from the starting meadow (early/FREE ROAM access),
+    //   bottom-centre from the Frozen Crypt. Off the canon *path* (an additive
+    //   side wing, like the Cellars/Emberdeep) and off the AI quest route.
+    name: "Frozen Playground", tiles: ROOM_SKATE, exits: { up: 0, down: 13 },
+    enemies: [
+      { kind: "slime", x: 5 * TILE, y: 4 * TILE },
+      { kind: "slime", x: 11 * TILE, y: 8 * TILE },
+      { kind: "bat", x: 8 * TILE, y: 5 * TILE },
+    ],
   },
 ];
 
@@ -649,6 +681,11 @@ export const TRANSITION_CD = 50;   // ~0.8s at 60 Hz — doorway settle time
 // leaves a long, obvious glide (~10px) — noticeably icy, still controllable.
 export const ICE_ACCEL = 0.4;
 export const ICE_DECEL = 0.12;
+// commit-slide puzzle ice (tile "z"): step on and you skate in a locked 4-dir
+// line until a wall stops you or you reach solid ground — the Undertale/Zelda
+// ice-block puzzle. Distinct from the "i" coast (which stays under control and
+// is behind the slick toggle). Both heroes AND enemies slide on it.
+export const SLIDE_SPEED = 1.7;
 
 export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
@@ -742,7 +779,19 @@ function fillActiveSimRoom(g: Game, index: number): void {
   if (index === 0 && g.gateMelted) {
     setTile(g, 7, 0, "g");
     setTile(g, 8, 0, "g");
+    setTile(g, 7, ROWS - 1, "g");
+    setTile(g, 8, ROWS - 1, "g");
   }
+}
+
+/** the Amber Blade thaws BOTH meadow ice seals: the north quest gate and the
+ *  south Frozen Playground door — one warm edge, both walls of ancient ice */
+function meltMeadowIce(g: Game): void {
+  g.gateMelted = true;
+  setTile(g, 7, 0, "g");
+  setTile(g, 8, 0, "g");
+  setTile(g, 7, ROWS - 1, "g");
+  setTile(g, 8, ROWS - 1, "g");
 }
 
 function transitionBanner(g: Game, index: number, pi?: number): void {
@@ -938,6 +987,29 @@ export function moveBody(g: Game, b: { x: number; y: number }, w: number, h: num
     if (!solidAt(g, b.x + 1, edge) && !solidAt(g, b.x + w - 1, edge) &&
         !solidAt(g, b.x + w / 2, edge)) b.y = ny;
   }
+}
+
+/** commit-slide on puzzle ice ("z"): when a body's centre sits on a slide tile
+ *  it skates in a single locked axis until moveBody is blocked (a wall) — then
+ *  it rests. `dx/dy` is the *intent* used only to START a slide (horizontal wins
+ *  a diagonal); once moving, steering is ignored (that's the whole puzzle). Off
+ *  the ice this returns false and the caller runs its normal movement, so the
+ *  body naturally stops the moment it slides onto solid ground. Shared by heroes
+ *  and enemies — the client mirrors it in predict.ts for lockstep. */
+export function slideBody(g: Game, b: { x: number; y: number; vx: number; vy: number },
+                          w: number, h: number, dx: number, dy: number): boolean {
+  const cx = Math.floor((b.x + w / 2) / TILE);
+  const cy = Math.floor((b.y + h / 2) / TILE);
+  if (tileAt(g, cx, cy) !== "z") return false;
+  if (b.vx === 0 && b.vy === 0) {
+    if (dx !== 0) { b.vx = Math.sign(dx) * SLIDE_SPEED; b.vy = 0; }
+    else if (dy !== 0) { b.vx = 0; b.vy = Math.sign(dy) * SLIDE_SPEED; }
+    else return true;   // idle on ice, nothing to commit
+  }
+  const px = b.x, py = b.y;
+  moveBody(g, b, w, h, b.vx, b.vy);
+  if (b.x === px && b.y === py) { b.vx = 0; b.vy = 0; }   // met a wall — rest here
+  return true;
 }
 
 export function overlap(ax: number, ay: number, aw: number, ah: number,
@@ -1211,6 +1283,16 @@ function updateEnemy(g: Game, e: Enemy): void {
   if (Math.abs(e.kx) > 0.05 || Math.abs(e.ky) > 0.05) {
     moveBody(g, e, e.w, e.h, e.kx, e.ky);
     e.kx *= 0.85; e.ky *= 0.85;
+  }
+
+  // puzzle ice: the room's dwellers skate too — they slide toward the nearest
+  // hero and re-aim off the walls, no kind-specific AI while on the rink
+  const sc = { x: e.x + e.w / 2, y: e.y + e.h / 2 };
+  if (tileAt(g, Math.floor(sc.x / TILE), Math.floor(sc.y / TILE)) === "z") {
+    const t = nearestPlayer(g, sc.x, sc.y);
+    slideBody(g, e, e.w, e.h,
+      (t.p.x + PLAYER_W / 2) - sc.x, (t.p.y + PLAYER_H / 2) - sc.y);
+    return;
   }
 
   const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
@@ -1511,7 +1593,20 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   p.moving = dx !== 0 || dy !== 0;
   // swinging freezes movement (canon) — leave velocity untouched so the client
   // prediction, which returns early while attacking, stays in exact lockstep
-  if (p.attack === 0) {
+  if (p.attack === 0 &&
+      tileAt(g, Math.floor((p.x + PLAYER_W / 2) / TILE),
+                Math.floor((p.y + PLAYER_H / 2) / TILE)) === "z") {
+    // commit-slide puzzle ice: face the locked skate direction, ignore steering.
+    // EVERYONE skates — humans, agents and enemies. The agent controller is
+    // slide-aware (BFS over slide-endpoints, banks off walls) so `follow`/errands
+    // still work on the rink; see nextSlideWaypoint in server/agent.ts.
+    slideBody(g, p, PLAYER_W, PLAYER_H, dx, dy);
+    if (p.vx !== 0 || p.vy !== 0) {
+      if (p.vy > 0) p.dir = 0; else if (p.vy < 0) p.dir = 1;
+      if (p.vx > 0) p.dir = 2; else if (p.vx < 0) p.dir = 3;
+      p.walk += 0.22;
+    }
+  } else if (p.attack === 0) {
     const sp = 1.35;
     const len = p.moving ? Math.hypot(dx, dy) : 1;
     const tvx = p.moving ? (dx / len) * sp : 0;
@@ -1653,18 +1748,34 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
   }
 
-  // ice gate
+  // meadow ice — both the north quest gate and the south Frozen Playground door
+  // are sealed by ancient ice; only the Amber Blade's warm edge melts them
+  // (mirror mechanic — the south entrance is frozen until the blade is claimed)
   if (!g.gateMelted && g.room === 0 && inp.u) {
     const tx = Math.floor((p.x + PLAYER_W / 2) / TILE);
     const ty = Math.floor(p.y / TILE) - 1;
     if (ty >= 0 && tileAt(g, tx, ty) === "I") {
       if (g.amberClaimed) {
-        g.gateMelted = true;
-        setTile(g, 7, 0, "g");
-        setTile(g, 8, 0, "g");
+        meltMeadowIce(g);
         g.message = "The Amber Blade melts the ice! The north is open";
         g.messageT = 200;
         burst(g, 7.5 * TILE + 8, 8, "#9fe8ff", 14);
+        sfx(g, "melt");
+      } else if (g.messageT === 0) {
+        g.message = "A wall of ancient ice. Something warm could melt it...";
+        g.messageT = 150;
+      }
+    }
+  }
+  if (!g.gateMelted && g.room === 0 && inp.d) {
+    const tx = Math.floor((p.x + PLAYER_W / 2) / TILE);
+    const ty = Math.floor((p.y + PLAYER_H) / TILE) + 1;
+    if (ty < ROWS && tileAt(g, tx, ty) === "I") {
+      if (g.amberClaimed) {
+        meltMeadowIce(g);
+        g.message = "The Amber Blade melts the ice! The playground opens";
+        g.messageT = 200;
+        burst(g, 7.5 * TILE + 8, H - 8, "#9fe8ff", 14);
         sfx(g, "melt");
       } else if (g.messageT === 0) {
         g.message = "A wall of ancient ice. Something warm could melt it...";

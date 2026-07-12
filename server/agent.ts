@@ -15,18 +15,20 @@ import {
 import { LLM } from "./llm";
 
 type Action = "attack" | "goto" | "pickup" | "follow" | "flee" | "exit" | "idle";
+export type SlideDir = "up" | "down" | "left" | "right";
 interface Intent {
   action: Action;
   target?: number;                    // enemy or pickup index
   point?: { x: number; y: number };   // for goto
   dir?: "left" | "right" | "up" | "down"; // for exit
+  icePlan?: SlideDir[];               // Frozen Playground: commit-slide sequence
   say?: string;
   why?: string;                       // one-line reasoning, shown on screen
 }
 
 const SYSTEM_PROMPT = `You are Player 2 in a tiny co-op Zelda-like game, teammate of Player 1 (a human).
 You receive a compact JSON observation. Reply with ONLY a JSON object, no prose:
-{"action": "...", "target": <int, optional>, "point": {"x":int,"y":int} (optional), "dir": "left|right|up|down" (optional), "say": "short friendly quip, <=40 chars, optional"}
+{"action": "...", "target": <int, optional>, "point": {"x":int,"y":int} (optional), "dir": "left|right|up|down" (optional), "icePlan": ["up","left",...] (optional, Frozen Playground only), "say": "short friendly quip, <=40 chars, optional"}
 
 Actions:
 - "attack": fight enemy with index target (from observation "enemies", pick low d = closest). The controller handles movement, sword range and bow.
@@ -90,6 +92,12 @@ Default each turn:
 Fight beside your companion; brief quips only. Combat notes: golem bosses vulnerable at phase 3; sentinels block frontal hits; spitters are rooted.
 If the Winter Wraith yields (phase 9), YOU decide mercy or the killing blow — your companion stands back.
 Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
+
+const ICE_ADDENDUM = `
+FROZEN PLAYGROUND (only when observation.icePuzzle is present):
+- Commit-slide ice: include "icePlan": ["up","left",...] — each entry is ONE press that skates until you stop (max 12 dirs).
+- You CANNOT steer mid-glide. Use icePuzzle.legalFirstDirs for your first press; mentally simulate where each press lands.
+- Keep your action (follow/goto/exit/attack) as the goal; icePlan is HOW you cross the rink.`;
 
 export type Temperament = "guard" | "companion" | "hunter";
 
@@ -217,6 +225,130 @@ export function nextWaypoint(tiles: string[][] | string[], fromX: number, fromY:
   return { x: (node % COLS) * TILE + TILE / 2, y: ((node / COLS) | 0) * TILE + TILE / 2 };
 }
 
+/** Slide-aware routing for commit-slide ice ("z"): a press does NOT move one
+ *  tile, it skates until a wall (or onto grip floor). We BFS over *rest tiles*
+ *  where each edge is a full slide, then return the resting POINT of the FIRST
+ *  slide on the shortest route — seekDirect presses toward it and the core slide
+ *  carries the hero there (banking off walls to get around pillars). This is the
+ *  agent's answer to "solve the ice"; the LLM only needs to name the target. */
+export function nextSlideWaypoint(tiles: string[][] | string[], fromX: number, fromY: number,
+                                  toX: number, toY: number): { x: number; y: number } {
+  const at = (tx: number, ty: number): string => {
+    if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return "W";
+    const row = tiles[ty];
+    return row ? row[tx] : "W";
+  };
+  const walk = (tx: number, ty: number): boolean => !SOLID.has(at(tx, ty));
+  const slide = (tx: number, ty: number): boolean => at(tx, ty) === "z";
+  const sx = Math.max(0, Math.min(COLS - 1, Math.floor(fromX / TILE)));
+  const sy = Math.max(0, Math.min(ROWS - 1, Math.floor(fromY / TILE)));
+  const gx = Math.max(0, Math.min(COLS - 1, Math.floor(toX / TILE)));
+  const gy = Math.max(0, Math.min(ROWS - 1, Math.floor(toY / TILE)));
+  if (sx === gx && sy === gy) return { x: toX, y: toY };
+
+  // where a press in (dx,dy) from a rest tile comes to rest
+  const dest = (tx: number, ty: number, dx: number, dy: number): [number, number] => {
+    if (!walk(tx + dx, ty + dy)) return [tx, ty];       // wall right there
+    let cx = tx + dx, cy = ty + dy;                      // first step
+    while (slide(cx, cy)) {                              // keep skating on ice
+      if (!walk(cx + dx, cy + dy)) break;               // wall ahead → rest
+      cx += dx; cy += dy;
+      if (!slide(cx, cy)) break;                        // slid onto grip → rest
+    }
+    return [cx, cy];
+  };
+
+  // Greedy best-first over slide-endpoints (heuristic: squared distance to the
+  // goal tile). Greedy — not shortest-edge — on purpose: min-edge BFS loves the
+  // narrow one-tile "chimney" gaps that a body cannot line up on beside a wall,
+  // which made the agent jitter at the doorway. Greedy commits to the big slide
+  // that closes the most distance (usually straight onto the ice) and a visited
+  // set kills in-plan loops; re-planned every tick it descends to the target. */
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const start = sy * COLS + sx;
+  const goalNode = gy * COLS + gx;
+  const visited = new Set<number>([start]);
+  let cur = start, firstMove = -1;
+  for (let hop = 0; hop < 64 && cur !== goalNode; hop++) {
+    const cx = cur % COLS, cy = (cur / COLS) | 0;
+    let bestNi = -1, bestH = Infinity, bestDi = -1;
+    for (let di = 0; di < 4; di++) {
+      const [nx, ny] = dest(cx, cy, dirs[di][0], dirs[di][1]);
+      const ni = ny * COLS + nx;
+      if (ni === cur || visited.has(ni)) continue;      // no progress / loop
+      const h = (nx - gx) * (nx - gx) + (ny - gy) * (ny - gy);
+      if (h < bestH) { bestH = h; bestNi = ni; bestDi = di; }
+    }
+    if (bestNi < 0) break;                               // dead end
+    if (firstMove < 0) firstMove = bestDi;
+    visited.add(bestNi);
+    cur = bestNi;
+  }
+  if (firstMove < 0) return { x: toX, y: toY };
+  const [rx, ry] = dest(sx, sy, dirs[firstMove][0], dirs[firstMove][1]);
+  return { x: rx * TILE + TILE / 2, y: ry * TILE + TILE / 2 };
+}
+
+const SLIDE_DIRS: SlideDir[] = ["up", "down", "left", "right"];
+const SLIDE_VEC: Record<SlideDir, [number, number]> = {
+  up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+};
+
+function slideRoomAt(tiles: string[][] | string[], tx: number, ty: number): string {
+  if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return "W";
+  const row = tiles[ty];
+  return row ? row[tx] : "W";
+}
+
+/** Rest tile after one commit-slide press from (tx,ty); null if blocked/no progress */
+export function slideDestTile(tiles: string[][] | string[], tx: number, ty: number,
+                              dir: SlideDir): [number, number] | null {
+  const [dx, dy] = SLIDE_VEC[dir];
+  const walk = (x: number, y: number): boolean => !SOLID.has(slideRoomAt(tiles, x, y));
+  const slide = (x: number, y: number): boolean => slideRoomAt(tiles, x, y) === "z";
+  if (!walk(tx + dx, ty + dy)) return null;
+  let cx = tx + dx, cy = ty + dy;
+  while (slide(cx, cy)) {
+    if (!walk(cx + dx, cy + dy)) break;
+    cx += dx; cy += dy;
+    if (!slide(cx, cy)) break;
+  }
+  if (cx === tx && cy === ty) return null;
+  return [cx, cy];
+}
+
+/** Directions that make progress from a rest tile on the rink */
+export function legalSlideDirs(tiles: string[][] | string[], tx: number, ty: number): SlideDir[] {
+  return SLIDE_DIRS.filter(d => slideDestTile(tiles, tx, ty, d) !== null);
+}
+
+/** Simulate an LLM ice plan from a rest tile toward a goal tile */
+export function simulateIcePlan(tiles: string[][] | string[], startTx: number, startTy: number,
+                                  plan: SlideDir[], goalTx: number, goalTy: number,
+                                  maxSteps = 12): {
+  ok: boolean; steps: number; final: [number, number]; reason?: string;
+} {
+  const visited = new Set<string>([`${startTx},${startTy}`]);
+  let tx = startTx, ty = startTy;
+  let steps = 0;
+  const dist = (x: number, y: number): number =>
+    Math.abs(x - goalTx) + Math.abs(y - goalTy);
+  const startDist = dist(startTx, startTy);
+  for (const dir of plan.slice(0, maxSteps)) {
+    const next = slideDestTile(tiles, tx, ty, dir);
+    if (!next) return { ok: false, steps, final: [tx, ty], reason: `blocked:${dir}` };
+    [tx, ty] = next;
+    steps++;
+    const key = `${tx},${ty}`;
+    if (visited.has(key)) return { ok: false, steps, final: [tx, ty], reason: "loop" };
+    visited.add(key);
+    if (dist(tx, ty) <= 1) return { ok: true, steps, final: [tx, ty] };
+  }
+  const endDist = dist(tx, ty);
+  if (endDist < startDist) return { ok: true, steps, final: [tx, ty] };
+  return { ok: false, steps, final: [tx, ty], reason: "no_progress" };
+}
+
 /** nearest walkable tile beside the target — for melee approach around obstacles */
 export function approachWaypoint(tiles: string[][] | string[], fromX: number, fromY: number,
                                  toX: number, toY: number, flank = 0): { x: number; y: number } {
@@ -273,7 +405,18 @@ export interface PlanRecord {
   action: string;
   say?: string;
   why?: string;
+  icePlan?: SlideDir[];
+  icePlanValid?: boolean;
+  icePlanReason?: string;
   err?: string;
+}
+
+export interface IcePlanStats {
+  used: number;
+  ok: number;
+  failed: number;
+  fallback: number;
+  steps: number;
 }
 
 export class AgentPlayer {
@@ -310,6 +453,19 @@ export class AgentPlayer {
   private attackFlank = 0;
   private partnerAwayTicks = 0;
   private guardRejoinAnnounced = false;
+
+  // LLM ice-plan execution (Frozen Playground only)
+  private icePlanQueue: SlideDir[] = [];
+  private icePlanTargetPx: { x: number; y: number } | null = null;
+  private icePlanStartedTick = 0;
+  private icePlanStepCount = 0;
+  private icePlanVisited = new Set<string>();
+  private icePlanBestDist = Infinity;
+  private icePlanWasMoving = false;
+  private icePlanAttempted = false;
+  private icePlanActive = false;
+  private icePlanNeedFallback = false;
+  public icePlanStats: IcePlanStats = { used: 0, ok: 0, failed: 0, fallback: 0, steps: 0 };
 
   /** FREE ROAM: companion waits ~5s after a split before racing the quest */
   private static readonly COMPANION_ROAM_GRACE = 300;
@@ -504,6 +660,7 @@ export class AgentPlayer {
       room: spec.name,
       travelMode: g.travelMode,
       exits: [...Object.keys(spec.exits), ...(spec.teleport ? ["cave"] : [])],
+      icePuzzle: g.room === 17 ? this.buildIcePuzzle(g, me) : undefined,
       objective: this.objective(g),
       me: {
         x: Math.round(me.x), y: Math.round(me.y),
@@ -552,6 +709,53 @@ export class AgentPlayer {
           d: Math.round(Math.hypot(it.x - mcx, it.y - mcy)) })),
     };
     return JSON.stringify(obs);
+  }
+
+  private buildIcePuzzle(g: Game, me: Player): Record<string, unknown> {
+    const rows = this.roomRows(g);
+    const tx = Math.floor((me.x + PLAYER_W / 2) / TILE);
+    const ty = Math.floor((me.y + PLAYER_H / 2) / TILE);
+    const [tgtX, tgtY] = this.iceTargetTile(g, me);
+    const exits: Record<string, [number, number]> = {};
+    for (const dir of Object.keys(ROOMS[17].exits)) {
+      const [px, py] = this.exitDoorPoint(dir);
+      exits[dir] = [Math.floor(px / TILE), Math.floor(py / TILE)];
+    }
+    return {
+      rule: "commit-slide: each dir skates until wall or grip floor; cannot steer mid-glide",
+      rest: [tx, ty],
+      target: [tgtX, tgtY],
+      legalFirstDirs: legalSlideDirs(rows, tx, ty),
+      exits,
+      sliding: me.vx !== 0 || me.vy !== 0,
+    };
+  }
+
+  private iceTargetPixels(g: Game, me: Player): [number, number] {
+    const it = this.llmIntent;
+    const mate = g.players[this.mateSlot()];
+    if (it.action === "goto" && it.point) return [it.point.x, it.point.y];
+    if (it.action === "exit" && it.dir) return this.exitDoorPoint(it.dir);
+    if (it.action === "attack" && it.target !== undefined) {
+      const e = g.enemies[it.target];
+      if (e && !e.dead) return [e.x, e.y];
+    }
+    if (it.action === "pickup" && it.target !== undefined) {
+      const p = g.pickups.filter(pk => pk.t >= 0)[it.target];
+      if (p) return [p.x, p.y];
+    }
+    if (mate.present && this.partnerInRoom(g)) return [mate.x, mate.y];
+    const hop = routeHop(g.room, this.routeDestination(g));
+    if (hop?.kind === "exit") return this.exitDoorPoint(hop.dir);
+    return [me.x, me.y];
+  }
+
+  private iceTargetTile(g: Game, me: Player): [number, number] {
+    const [px, py] = this.iceTargetPixels(g, me);
+    return [
+      Math.max(0, Math.min(COLS - 1, Math.floor((px + PLAYER_W / 2) / TILE))),
+      Math.max(0, Math.min(ROWS - 1, Math.floor((py + PLAYER_H / 2) / TILE))),
+    ];
   }
 
   private targetRoom(g: Game): number {
@@ -649,18 +853,41 @@ export class AgentPlayer {
       + (g.travelMode === "free" && !solo
         ? FREE_ROAM_ADDENDUM + FREE_ROAM_TEMPERAMENT[this.temperament]
         : "")
+      + (g.room === 17 ? ICE_ADDENDUM : "")
       + "\n" + TEMPERAMENT_DOCTRINE[this.temperament];
     const t0 = Date.now();
     let rec: PlanRecord;
     try {
       const raw = await this.llm.chat(sys, user);
       const { intent, ok } = this.parse(raw);
+      let icePlanValid: boolean | undefined;
+      let icePlanReason: string | undefined;
+      let loggedIcePlan: SlideDir[] | undefined;
+      if (g.room === 17 && intent.icePlan?.length) {
+        loggedIcePlan = [...intent.icePlan];
+        const rows = this.roomRows(g);
+        const me = g.players[this.slot];
+        const [gtx, gty] = this.iceTargetTile(g, me);
+        const restTx = Math.floor((me.x + PLAYER_W / 2) / TILE);
+        const restTy = Math.floor((me.y + PLAYER_H / 2) / TILE);
+        const sim = simulateIcePlan(rows, restTx, restTy, intent.icePlan, gtx, gty);
+        icePlanValid = sim.ok;
+        icePlanReason = sim.reason;
+        if (!sim.ok) {
+          delete intent.icePlan;
+          this.icePlanStats.failed++;
+        } else {
+          this.icePlanAttempted = false;
+          this.icePlanActive = false;
+        }
+      }
       this.llmIntent = intent;
       this.intent = intent;
       if (!ok) this.parseFailures++;
       rec = { t: new Date().toISOString(), llm: this.llm.name, ms: Date.now() - t0,
               ok, action: intent.action, say: intent.say,
-              why: typeof intent.why === "string" ? intent.why.slice(0, 60) : undefined };
+              why: typeof intent.why === "string" ? intent.why.slice(0, 60) : undefined,
+              icePlan: loggedIcePlan, icePlanValid, icePlanReason };
     } catch (err) {
       this.lastError = String(err);
       this.llmIntent = { action: "follow" };
@@ -683,6 +910,15 @@ export class AgentPlayer {
       const obj = JSON.parse(cleaned.slice(start, end + 1)) as Intent;
       const actions: Action[] = ["attack", "goto", "pickup", "follow", "flee", "exit", "idle"];
       if (!actions.includes(obj.action)) return { intent: { action: "follow" }, ok: false };
+      if (obj.icePlan !== undefined) {
+        if (!Array.isArray(obj.icePlan)) delete obj.icePlan;
+        else {
+          obj.icePlan = obj.icePlan
+            .filter((d): d is SlideDir => SLIDE_DIRS.includes(d as SlideDir))
+            .slice(0, 12);
+          if (obj.icePlan.length === 0) delete obj.icePlan;
+        }
+      }
       if (obj.say && typeof obj.say === "string") {
         this.sayQueue = obj.say.slice(0, 40);
       }
@@ -720,6 +956,7 @@ export class AgentPlayer {
       this.exitStall = 0;
       this.exitLastDist = Infinity;
       this.exitGiveUpT = 0;
+      this.clearIcePlan();
       if (g.travelMode === "free" && this.intent.action === "exit") {
         this.intent = { action: "idle" };
         this.llmIntent = { ...this.llmIntent, action: "idle" };
@@ -1048,7 +1285,9 @@ export class AgentPlayer {
           return inp;
         }
         this.waypointSeek(g, inp, me, t[0], t[1]);
-        (inp[t[2]] as boolean) = true;
+        // Force the exit key only off the ice: on a commit-slide tile a second
+        // axis would corrupt the slide commit (waypointSeek already steers).
+        if (!this.onSlideTile(g, me)) (inp[t[2]] as boolean) = true;
       }
       this.meleeGuard(inp, g, me, mcx, mcy);
       return inp;
@@ -1121,6 +1360,13 @@ export class AgentPlayer {
     return g.tiles[ri] ?? ROOMS[ri].tiles;
   }
 
+  /** is the agent's centre currently on a commit-slide "z" tile? */
+  private onSlideTile(g: Game, me: Player): boolean {
+    const tx = Math.floor((me.x + PLAYER_W / 2) / TILE);
+    const ty = Math.floor((me.y + PLAYER_H / 2) / TILE);
+    return this.roomRows(g)[ty]?.[tx] === "z";
+  }
+
   /** path to a walkable tile beside the target — flanks around trees */
   private approachSeek(g: Game, inp: Input, me: Player,
                        tx: number, ty: number, flank = 0): void {
@@ -1129,11 +1375,138 @@ export class AgentPlayer {
     this.seekDirect(g, inp, me, wp.x - PLAYER_W / 2, wp.y - PLAYER_H / 2);
   }
 
-  /** long-range seek that actually routes around water, pillars and lava */
+  /** long-range seek that actually routes around water, pillars and lava — and
+   *  on the rink prefers an LLM icePlan, else banks off walls via nextSlideWaypoint */
   private waypointSeek(g: Game, inp: Input, me: Player, tx: number, ty: number): void {
-    const wp = nextWaypoint(this.roomRows(g), me.x + PLAYER_W / 2, me.y + PLAYER_H / 2,
-                            tx + PLAYER_W / 2, ty + PLAYER_H / 2);
+    if (this.tickIcePlan(g, inp, me, tx, ty)) return;
+    const rows = this.roomRows(g);
+    const cx = me.x + PLAYER_W / 2, cy = me.y + PLAYER_H / 2;
+    const gx = tx + PLAYER_W / 2, gy = ty + PLAYER_H / 2;
+    if (this.icePlanNeedFallback) {
+      this.icePlanStats.fallback++;
+      this.icePlanNeedFallback = false;
+    }
+    const hasIce = rows.some(r => r.includes("z"));
+    const wp = hasIce
+      ? nextSlideWaypoint(rows, cx, cy, gx, gy)
+      : nextWaypoint(rows, cx, cy, gx, gy);
+    // On a commit-slide tile press ONE axis only; slideBody locks a single-axis
+    // skate and prioritises horizontal, so a few px of cross-axis nudge from a
+    // 2-axis seekDirect would send the body skating the wrong way, wall to wall.
+    if (hasIce && this.onSlideTile(g, me)) {
+      const ddx = wp.x - cx, ddy = wp.y - cy;
+      if (Math.abs(ddx) >= Math.abs(ddy)) {
+        if (ddx > 1) inp.r = true; else if (ddx < -1) inp.l = true;
+      } else {
+        if (ddy > 1) inp.d = true; else if (ddy < -1) inp.u = true;
+      }
+      return;
+    }
     this.seekDirect(g, inp, me, wp.x - PLAYER_W / 2, wp.y - PLAYER_H / 2);
+  }
+
+  private clearIcePlan(): void {
+    this.icePlanQueue = [];
+    this.icePlanTargetPx = null;
+    this.icePlanStartedTick = 0;
+    this.icePlanStepCount = 0;
+    this.icePlanVisited.clear();
+    this.icePlanBestDist = Infinity;
+    this.icePlanWasMoving = false;
+    this.icePlanAttempted = false;
+    this.icePlanActive = false;
+    this.icePlanNeedFallback = false;
+  }
+
+  private pressDir(inp: Input, dir: SlideDir): void {
+    if (dir === "up") inp.u = true;
+    else if (dir === "down") inp.d = true;
+    else if (dir === "left") inp.l = true;
+    else inp.r = true;
+  }
+
+  private succeedIcePlan(): void {
+    this.icePlanStats.ok++;
+    this.icePlanStats.steps += this.icePlanStepCount;
+    this.clearIcePlan();
+  }
+
+  private failIcePlan(reason: string): void {
+    if (this.icePlanActive) this.icePlanNeedFallback = true;
+    this.icePlanStats.failed++;
+    this.icePlanStats.steps += this.icePlanStepCount;
+    this.clearIcePlan();
+    void reason;
+  }
+
+  private tryStartIcePlan(g: Game, me: Player, targetPx: number, targetPy: number): boolean {
+    const plan = this.llmIntent.icePlan;
+    if (!plan?.length || this.icePlanAttempted) return false;
+    this.icePlanAttempted = true;
+    const rows = this.roomRows(g);
+    const restTx = Math.floor((me.x + PLAYER_W / 2) / TILE);
+    const restTy = Math.floor((me.y + PLAYER_H / 2) / TILE);
+    const [gtx, gty] = [
+      Math.floor((targetPx + PLAYER_W / 2) / TILE),
+      Math.floor((targetPy + PLAYER_H / 2) / TILE),
+    ];
+    const sim = simulateIcePlan(rows, restTx, restTy, plan, gtx, gty);
+    if (!sim.ok) {
+      this.failIcePlan(sim.reason ?? "invalid");
+      return false;
+    }
+    this.icePlanStats.used++;
+    this.icePlanQueue = [...plan];
+    this.icePlanTargetPx = { x: targetPx, y: targetPy };
+    this.icePlanStartedTick = g.ticks;
+    this.icePlanStepCount = 0;
+    this.icePlanVisited = new Set([`${restTx},${restTy}`]);
+    this.icePlanBestDist = Math.hypot(targetPx - me.x, targetPy - me.y);
+    this.icePlanActive = true;
+    return true;
+  }
+
+  /** Returns true when the ice-plan executor owns movement this tick */
+  private tickIcePlan(g: Game, inp: Input, me: Player, targetPx: number, targetPy: number): boolean {
+    if (g.room !== 17) {
+      if (this.icePlanQueue.length || this.icePlanActive) this.clearIcePlan();
+      return false;
+    }
+    const sliding = me.vx !== 0 || me.vy !== 0;
+
+    if (sliding) this.icePlanWasMoving = true;
+
+    if (this.icePlanWasMoving && !sliding) {
+      if (this.icePlanQueue.length > 0) {
+        this.icePlanQueue.shift();
+        this.icePlanStepCount++;
+        const tx = Math.floor((me.x + PLAYER_W / 2) / TILE);
+        const ty = Math.floor((me.y + PLAYER_H / 2) / TILE);
+        const key = `${tx},${ty}`;
+        const dist = Math.hypot(targetPx - me.x, targetPy - me.y);
+        if (this.icePlanVisited.has(key)) this.failIcePlan("loop");
+        else this.icePlanVisited.add(key);
+        if (dist < TILE * 2.5) this.succeedIcePlan();
+        else if (dist < this.icePlanBestDist) this.icePlanBestDist = dist;
+        else if (this.icePlanStepCount > 2 && dist > this.icePlanBestDist + TILE * 3) {
+          this.failIcePlan("away");
+        }
+        if (g.ticks - this.icePlanStartedTick > 600) this.failIcePlan("timeout");
+      }
+      this.icePlanWasMoving = false;
+    }
+
+    if (!this.icePlanQueue.length) {
+      if (this.llmIntent.icePlan?.length && !this.icePlanAttempted) {
+        this.tryStartIcePlan(g, me, targetPx, targetPy);
+      }
+      if (!this.icePlanQueue.length) return false;
+    }
+
+    if (sliding) return true;
+
+    this.pressDir(inp, this.icePlanQueue[0]);
+    return true;
   }
 
   // ---- movement helpers -------------------------------------------------

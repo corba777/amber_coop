@@ -5,7 +5,7 @@
 
 import {
   newGame, update, latch, emptyInput, toSnapshot, validateRooms,
-  Game, Input, LatchedInput, TILE, W, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
+  Game, Input, LatchedInput, TILE, W, H, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
 } from "../shared/core";
 import { AgentPlayer } from "../server/agent";
 import { mock } from "../server/llm";
@@ -387,7 +387,7 @@ function freshPlay(): Game {
   console.log("[11] extended world: classic path intact, additive wings");
   const core = await import("../shared/core");
   core.validateRooms();
-  ok(core.ROOMS.length === 17, "17 rooms validate");
+  ok(core.ROOMS.length === 18, "18 rooms validate");
   // the classic route is untouched
   ok(core.ROOMS[4].exits.up === 5 && core.ROOMS[5].exits.down === 4,
      "old vault: guard leads straight to the boss, as it always did");
@@ -400,6 +400,14 @@ function freshPlay(): Game {
   ok(core.ROOMS[10].exits.left === 13 && core.ROOMS[13].exits.right === 10,
      "crypt is a side wing too");
   ok(core.ROOMS[1].exits.down === 14, "forest opens down into Emberdeep");
+  // skate-puzzle wing: two additive doors (crypt + early meadow), canon path
+  // (the room *sequence*) untouched — just extra side exits, like the cellars
+  ok(core.ROOMS[13].exits.up === 17 && core.ROOMS[17].exits.down === 13,
+     "Frozen Playground hangs off the Frozen Crypt");
+  ok(core.ROOMS[0].exits.down === 17 && core.ROOMS[17].exits.up === 0,
+     "and also opens straight off the starting meadow (early access)");
+  ok(core.ROOMS[0].exits.right === 1 && core.ROOMS[0].exits.up === 6,
+     "the meadow's canon exits (right→forest, up→gate) are untouched");
 
   // bow is back where veterans remember it
   const g = freshPlay();
@@ -2399,6 +2407,338 @@ function freshPlay(): Game {
   const coast = on.players[0].x - heldOn;
   ok(coast > 4 && coast < 16, "the glide is noticeable — a real skid, not a skate rink");
   ok(on.players[0].vx === 0, "velocity settles back to rest");
+}
+
+// ------------------------------------------------- 66. commit-slide puzzle ice
+// tester request (Алексей Белозёров, 2026-07-12): a full Undertale-style slide,
+// heroes AND enemies. New "z" tile + Frozen Playground wing (17); canon path
+// and the AI quest route are untouched (guarded by [11]).
+{
+  console.log("[66] puzzle ice: one tap skates to the wall, dwellers slide too");
+  const core = await import("../shared/core");
+  const right = { ...emptyInput(), r: true };
+  const down = { ...emptyInput(), d: true };
+  const up = { ...emptyInput(), u: true };
+
+  // hero commits: tap right on the rink and skate the whole way to the wall
+  const g = freshPlay();
+  core.loadRoom(g, 17, 2 * TILE, 5 * TILE);
+  g.players[1].present = false;
+  g.enemies.splice(0);   // isolate the hero for the movement assertions
+  const p = g.players[0];
+  const x0 = p.x;
+  const pr: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, right, emptyInput(), pr);
+  ok(p.vx > 0 && p.vy === 0, "one tap locks a rightward skate");
+  for (let i = 0; i < 150; i++) step(g, emptyInput(), emptyInput(), pr);   // let go
+  ok(p.x > x0 + 100, "the hero slides the whole rink after a single tap");
+  ok(p.vx === 0, "and stops dead against the far wall");
+
+  // steering is ignored mid-slide — that IS the puzzle
+  const g2 = freshPlay();
+  core.loadRoom(g2, 17, 2 * TILE, 5 * TILE);
+  g2.players[1].present = false;
+  g2.enemies.splice(0);
+  const p2 = g2.players[0];
+  const pr2: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g2, right, emptyInput(), pr2);
+  const x2 = p2.x, y2 = p2.y;
+  for (let i = 0; i < 6; i++) step(g2, up, emptyInput(), pr2);
+  ok(p2.x > x2 && p2.y === y2, "pressing up mid-skate does nothing — commit is locked");
+
+  // slide onto grip floor ("f") and you rest there, not skate forever
+  const g3 = freshPlay();
+  core.loadRoom(g3, 17, 6 * TILE, 10 * TILE);   // lowest ice rank, grip floor below
+  g3.players[1].present = false;
+  g3.enemies.splice(0);
+  const p3 = g3.players[0];
+  const pr3: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 3; i++) step(g3, down, emptyInput(), pr3);
+  for (let i = 0; i < 40; i++) step(g3, emptyInput(), emptyInput(), pr3);
+  const ct = core.tileAt(g3, Math.floor((p3.x + PLAYER_W / 2) / TILE),
+                             Math.floor((p3.y + PLAYER_H / 2) / TILE));
+  ok(ct === "f", "the skid ends on the grip floor, not against a wall");
+  ok(p3.vx === 0 && p3.vy === 0, "grip floor kills the momentum");
+
+  // dwellers skate too: an enemy on the rink slides toward the hero
+  const g4 = freshPlay();
+  core.loadRoom(g4, 17, 13 * TILE, 6 * TILE);   // hero parked on the right
+  g4.players[1].present = false;
+  g4.enemies.splice(0);
+  const foe = core.makeEnemy("bat", 2 * TILE, 6 * TILE);
+  g4.enemies.push(foe);
+  const fx0 = foe.x;
+  const pr4: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30; i++) step(g4, emptyInput(), emptyInput(), pr4);
+  ok(foe.x > fx0 + 30, "the enemy skates across the ice toward the hero");
+
+  // agents skate too — commit-slide is universal; the controller (not an
+  // exemption) is what makes their navigation work (see [68])
+  const g5 = freshPlay();
+  core.loadRoom(g5, 17, 2 * TILE, 5 * TILE);
+  g5.players[1].present = false;
+  g5.enemies.splice(0);
+  const npc = g5.players[0];
+  npc.npc = true;
+  const nx0 = npc.x;
+  const pr5: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g5, right, emptyInput(), pr5);
+  for (let i = 0; i < 150; i++) step(g5, emptyInput(), emptyInput(), pr5);
+  ok(npc.x > nx0 + 100, "an agent hero commits to the skate just like a human");
+}
+
+// ------------------------------------------------- 68. agent solves the rink
+// user note (Artem, 2026-07-12): agents should slide too, but navigate smartly.
+// The controller is slide-aware (nextSlideWaypoint: BFS over slide-endpoints),
+// so the AI partner banks off the walls to cross the rink and reach the human
+// past the central pillar — no exemption, no jam.
+{
+  console.log("[68] Frozen Playground: the AI partner banks across the ice to the human");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 7 * TILE, 12 * TILE);
+  g.enemies.splice(0);
+  g.players[0].npc = false;               // human at the top grip landing
+  g.players[0].x = 7 * TILE; g.players[0].y = 1 * TILE;
+  g.players[1].npc = true;                // agent at the bottom grip landing
+  g.players[1].x = 7 * TILE; g.players[1].y = 12 * TILE;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  (agent as unknown as { intent: { action: string } }).intent = { action: "follow" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const y0 = g.players[1].y;
+  let best = y0;
+  for (let i = 0; i < 600; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    best = Math.min(best, g.players[1].y);
+  }
+  ok(best < y0 - 4 * TILE, "the agent banked north across the rink, past the central pillar");
+}
+
+// ------------------------------------------------- 69. LLM ice plan: parse + validation
+{
+  console.log("[69] LLM ice brain: malformed icePlan is stripped, valid dirs kept");
+  const { AgentPlayer } = await import("../server/agent");
+  const { LLM } = await import("../server/llm");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 7 * TILE, 12 * TILE);
+  g.enemies.splice(0);
+
+  const badLlm: LLM = {
+    name: "mock/bad-shape",
+    async chat() { return JSON.stringify({ action: "follow", icePlan: "up" }); },
+  };
+  const agent = new AgentPlayer(badLlm, 1, { planMs: 0 });
+  await agent.planOnce(g);
+  type Mut = { llmIntent: { icePlan?: unknown } };
+  ok((agent as unknown as Mut).llmIntent.icePlan === undefined,
+     "a non-array icePlan is dropped at parse time");
+
+  const filtLlm: LLM = {
+    name: "mock/filter",
+    async chat() { return JSON.stringify({ action: "follow", icePlan: ["bogus", "up"] }); },
+  };
+  g.players[0].y = 1 * TILE;
+  g.players[1].y = 12 * TILE;
+  const agent2 = new AgentPlayer(filtLlm, 1, { planMs: 0 });
+  await agent2.planOnce(g);
+  ok(JSON.stringify((agent2 as unknown as Mut).llmIntent.icePlan) === JSON.stringify(["up"]),
+     "unknown dirs are filtered; a legal up press survives");
+  ok(agent2.icePlanStats.used === 0 && agent2.icePlanStats.failed === 0,
+     "a validated filtered plan waits for the controller to adopt it");
+}
+
+// ------------------------------------------------- 70. LLM ice plan executes on the rink
+{
+  console.log("[70] LLM ice brain: mock planner proposes icePlan and agent skates it");
+  const { AgentPlayer } = await import("../server/agent");
+  const { LLM } = await import("../server/llm");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 7 * TILE, 12 * TILE);
+  g.enemies.splice(0);
+  g.players[0].x = 7 * TILE; g.players[0].y = 1 * TILE;
+  g.players[1].x = 6 * TILE; g.players[1].y = 10 * TILE;   // west of the centre pillar
+  const { simulateIcePlan } = await import("../server/agent");
+  const rows = g.tiles[17] ?? core.ROOMS[17].tiles;
+  const simProbe = simulateIcePlan(rows, 6, 10, ["up"], 7, 1);
+  ok(simProbe.ok, "slide simulation confirms up crosses the rink toward the top (" + (simProbe.reason ?? "ok") + ")");
+  const iceLlm: LLM = {
+    name: "mock/ice-up",
+    async chat() {
+      return JSON.stringify({ action: "follow", icePlan: ["up"], why: "skate north" });
+    },
+  };
+  const agent = new AgentPlayer(iceLlm, 1, { planMs: 0, temperament: "companion" });
+  await agent.planOnce(g);
+  type Mut = { llmIntent: { icePlan?: string[] } };
+  ok((agent as unknown as Mut).llmIntent.icePlan?.[0] === "up",
+     "planner icePlan survives validation on the rink");
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const y0 = g.players[1].y;
+  let best = y0;
+  for (let i = 0; i < 300; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    best = Math.min(best, g.players[1].y);
+  }
+  ok(agent.icePlanStats.used >= 1, "the controller adopted the LLM ice plan");
+  ok(agent.icePlanStats.ok >= 1 || best < y0 - 3 * TILE,
+     "the LLM ice plan carried the agent north across the rink");
+}
+
+// ------------------------------------------------- 71. LLM ice plan fallback to safety planner
+{
+  console.log("[71] LLM ice brain: a bad plan falls back to slide-aware routing");
+  const { AgentPlayer, simulateIcePlan } = await import("../server/agent");
+  const { LLM } = await import("../server/llm");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 7 * TILE, 12 * TILE);
+  g.enemies.splice(0);
+  g.players[0].x = 7 * TILE; g.players[0].y = 1 * TILE;
+  g.players[1].x = 7 * TILE; g.players[1].y = 12 * TILE;
+
+  const rows = g.tiles[17] ?? core.ROOMS[17].tiles;
+  const badLlm: LLM = {
+    name: "mock/bad-ice",
+    async chat() {
+      return JSON.stringify({ action: "follow", icePlan: ["down"], why: "wrong way" });
+    },
+  };
+  const agent = new AgentPlayer(badLlm, 1, { planMs: 0, temperament: "companion" });
+  await agent.planOnce(g);
+  type Mut = { llmIntent: { icePlan?: string[] } };
+  const kept = (agent as unknown as Mut).llmIntent.icePlan;
+  const restTx = 7, restTy = 12, goalTx = 7, goalTy = 1;
+  const sim = simulateIcePlan(rows, restTx, restTy, ["down"], goalTx, goalTy);
+  if (!sim.ok) {
+    ok(kept === undefined, "a no-progress down plan is rejected at plan time");
+  } else {
+    ok(kept?.[0] === "down", "down plan accepted only if simulation says it helps");
+  }
+
+  // Force a runtime failure: valid first step but plan cannot reach the top
+  const agent2 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  const m2 = agent2 as unknown as Mut & {
+    llmIntent: { action: string; icePlan: string[] };
+    icePlanQueue: string[];
+    icePlanActive: boolean;
+    icePlanAttempted: boolean;
+    icePlanStartedTick: number;
+    icePlanVisited: Set<string>;
+    icePlanBestDist: number;
+  };
+  m2.llmIntent = { action: "follow", icePlan: ["left"] };
+  m2.icePlanQueue = ["left"];
+  m2.icePlanActive = true;
+  m2.icePlanAttempted = true;
+  m2.icePlanStartedTick = g.ticks;
+  m2.icePlanVisited = new Set(["7,12"]);
+  m2.icePlanBestDist = 999;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const y0 = g.players[1].y;
+  let best = y0;
+  for (let i = 0; i < 500; i++) {
+    const inp = agent2.control(g);
+    step(g, emptyInput(), inp, prev);
+    best = Math.min(best, g.players[1].y);
+  }
+  ok(agent2.icePlanStats.fallback >= 1 || best < y0 - 4 * TILE,
+     "after a weak LLM plan the safety slide-router still makes north progress");
+}
+
+// ------------------------------------------------- 67. Frozen Playground: ice-gated entrance
+// author request (Artem, 2026-07-12): the south meadow door to the rink is
+// SEALED by ancient ice until the Amber Blade is claimed — mirror of the north
+// gate; once the blade melts the meadow ice, both doors open (LINKED + FREE ROAM).
+{
+  console.log("[67] Frozen Playground: south door frozen until the Amber Blade, then open");
+  const down = { ...emptyInput(), d: true };
+
+  // BEFORE the blade: the south door is a wall of ice — the hero cannot pass
+  const gLocked = freshPlay();
+  gLocked.players[1].present = false;
+  gLocked.players[0].x = 7 * TILE + 3;
+  gLocked.players[0].y = 12 * TILE;
+  const prL: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 20; i++) step(gLocked, down, emptyInput(), prL);
+  ok(gLocked.room === 0, "without the Amber Blade the frozen south door blocks the rink");
+  ok(!gLocked.gateMelted, "pressing into the ice does not melt it empty-handed");
+
+  // WITH the blade: pressing down melts the ice, then the door leads to the rink
+  const g = freshPlay();
+  g.players[1].present = false;
+  g.amberClaimed = true;
+  g.players[0].x = 7 * TILE + 3;
+  g.players[0].y = 12 * TILE;
+  const pr: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 40 && g.room === 0; i++) step(g, down, emptyInput(), pr);
+  ok(g.gateMelted, "the Amber Blade melts the meadow ice");
+  ok(g.room === 17, "melted south door leads into the Frozen Playground");
+  ok(g.enemies.length === 3, "the rink is populated with its skating dwellers");
+
+  // the same thaw opens the NORTH quest gate too (one warm edge, both seals)
+  const gNorth = freshPlay();
+  gNorth.amberClaimed = true;
+  gNorth.players[0].x = 7 * TILE + 3;
+  gNorth.players[0].y = 1 * TILE;
+  const prN: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gNorth, { ...emptyInput(), u: true }, { ...emptyInput(), u: true }, prN);
+  ok(gNorth.gateMelted, "the north gate still melts with the blade (canon path intact)");
+
+  // FREE ROAM: after the blade, one hero peels off to skate while the partner stays
+  const g2 = freshPlay();
+  g2.travelMode = "free";
+  g2.amberClaimed = true;
+  g2.players[0].x = 7 * TILE + 3;
+  g2.players[0].y = 12 * TILE;
+  const p1yBefore = g2.players[1].y;
+  const pr2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 40 && g2.sims[0].room === 0; i++) step(g2, down, emptyInput(), pr2);
+  ok(g2.sims[0].room === 0, "free roam: the partner stays in the meadow");
+  ok(g2.sims.length >= 2 && g2.sims[1].room === 17,
+     "free roam: the crosser detaches into the playground alone");
+  ok(Math.abs(g2.players[1].y - p1yBefore) < 2, "the partner was not dragged along");
+}
+
+// ------------------------------------------------- 72. bench rink smoke (Stage 4.6)
+{
+  console.log("[72] bench rink smoke: mock crosses the Frozen Playground");
+  const { rinkEpisode } = await import("./bench");
+  const e = await rinkEpisode("mock", 600);
+  ok(e.outcome === "success", "mock provider reaches the north partner on the rink");
+  ok(e.icePlans.used >= 1, "bench episode logs icePlan adoption");
+}
+
+// ------------------------------------------------- 73. agent exits the rink
+// bug (Artem, 2026-07-12): the agent moved but never left the Frozen Playground —
+// a few px of cross-axis nudge from seekDirect (plus the forced exit key) hijacked
+// slideBody's single-axis commit and skated it wall-to-wall. On "z" the controller
+// now presses one axis and never forces the exit key mid-slide.
+{
+  console.log("[73] Frozen Playground: the AI agent skates out the north door");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 6 * TILE, 10 * TILE);
+  g.players[1].present = false;
+  g.enemies.splice(0);
+  g.players[0].npc = true;
+  g.players[0].x = 6 * TILE; g.players[0].y = 10 * TILE;
+  const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: unknown; llmIntent: unknown };
+  (agent as unknown as Mut).intent = { action: "exit", dir: "up" };
+  (agent as unknown as Mut).llmIntent = { action: "exit", dir: "up" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let exited = -1;
+  for (let i = 0; i < 400 && exited < 0; i++) {
+    const inp = agent.control(g);
+    step(g, inp, emptyInput(), prev);
+    if (g.room !== 17) exited = i;
+  }
+  ok(exited >= 0, "the agent reached the north door and crossed out of the rink");
+  ok(g.room === 0, "the up exit lands back in the Sunlit Meadow");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

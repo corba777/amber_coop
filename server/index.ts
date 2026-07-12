@@ -255,6 +255,7 @@ class Session {
           plans: this.agent ? this.agent.planCount : 0,
           parseFailures: this.agent ? this.agent.parseFailures : 0,
           routeAssists: this.agent ? this.agent.routeAssists : 0,
+          icePlans: this.agent ? this.agent.icePlanStats : null,
           errands: this.agent ? this.agent.errandLog : [],
           bleedout: this.game.bleedoutLoss,
           avgLatencyMs: this.agent && this.agent.planCount
