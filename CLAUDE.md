@@ -50,6 +50,8 @@ shared/core.ts      pure, DOM-free game core. update(g, inputs) is the ONLY way
                     over sims[0]. Object.assign-based restart depends on that
                     non-enumerability — do not "fix" it. Player.simIndex +
                     simOf(g, pi) are the growth points.
+                    Pickup placement: pushPickup/settlePickupPos/pickupWedged.
+                    Wraith spirit anchor: wraithAnchorsDowned (same-room revive).
                     Stage 2: toSnapshot(g, names, viewerSlot) — primary view from
                     the viewer's sim; optional partnerView (compact room mirror)
                     when the partner inhabits a different sim. Still flat — no
@@ -64,20 +66,27 @@ server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
                     reflex layer (auto-engage by temperament incl. during pickup
                     errands, survival pickups, rescue w/ temperament-scaled
                     patience + failsafe, matador dodges, tile-BFS waypointing via
-                    nextWaypoint, route compass via routeHop). llmIntent preserved
-                    across reflex fights; restored after kill via resumeIntent.
-                    SOLO_PROMPT vs SYSTEM_PROMPT chosen by partner presence.
+                    nextWaypoint on roomRows(g) — current room only, never
+                    g.tiles[] — route compass via routeHop, attackStall flank
+                    when stuck). llmIntent preserved across reflex fights;
+                    restored after kill via resumeIntent. Prompts: SYSTEM_PROMPT
+                    (partner), SOLO_PROMPT (autopilot), LEADER_PROMPT (AI DUO
+                    slot 0 — quest driver, never follow).
 server/llm.ts       providers: anthropic / openai / ollama / mock. mock is the
                     deterministic harness driver — keep it dependency-free.
 client/client.ts    2D pixel client. client/client3d.ts — HD-2D (three.js).
+client/menu.ts      shared menu state machine — imported by BOTH clients; test
+                    [15] checks built bundles for anchors.
+client/hud.ts       shared HUD helpers (heart bars, drawDuoSpectatorHud).
 client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
                     even inside the 3D client. Separate #pip canvas beside
                     #frame (~0.35 scale); hidden when partnerView is null.
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net. test/bench.ts — virtual-time arena
-                    (provider latency measured separately from decisions).
+test/selftest.ts    the whole safety net (331 assertions as of last trunk).
+                    test/bench.ts — virtual-time arena (provider latency measured
+                    separately from decisions).
 ```
 
 ## Iron rules
@@ -89,9 +98,9 @@ test/selftest.ts    the whole safety net. test/bench.ts — virtual-time arena
    naming who agreed (see the wraith-enrage precedent in selftest).
 2. **Every behavior change lands with a test in the same commit.** The suite has
    caught ~two dozen silent patch misses. When editing by string replacement,
-   assert the anchor exists; verify with grep after writing. The menu code is
-   DUPLICATED between client.ts and client3d.ts — every menu change must be
-   applied to BOTH, and test [15] checks the *built bundles* for code anchors.
+   assert the anchor exists; verify with grep after writing. Menu logic lives in
+   `client/menu.ts` (shared by both clients); test [15] still checks the *built
+   bundles* for code anchors. HUD shared helpers go in `client/hud.ts`.
 3. **Personality belongs to the agent; invariants belong to the mechanics.**
    Precedents: the npc room-anchor (an NPC cannot reload a room while a hero is
    present — core rule, not agent politeness); rescue failsafe (temperament
@@ -107,7 +116,9 @@ test/selftest.ts    the whole safety net. test/bench.ts — virtual-time arena
    perceived responsiveness comes from prediction (movement), local swing
    visuals/sfx, ping meter. Don't weaken server authority for feel.
 6. **Pickups quirk:** dispatch indexes `g.pickups.filter(p => p.t >= 0)` — any
-   code storing pickup indices must index the same filtered list.
+   code storing pickup indices must index the same filtered list. Drops use
+   `pushPickup` / `settlePickupPos` so loot never spawns inside solid tiles;
+   wedged pickups nudge each tick; nearby magnet when wedged ([63]).
 
 ## Game content quick-map
 
@@ -116,10 +127,14 @@ Amber Blade → melt the north gate → snowfield (bow) → glacier → (cave) �
 vault → Winter Wraith. Optional: Cellars (elixir), Frozen Crypt (container +
 phoenix feather), Emberdeep rooms 14–16 (Ember Golem → Miner's Charm → fire
 arrows). LONG QUEST
-(hardGate) seals the glacier until Emberdeep is cleared. Menu: quest → party
-(single / multiplayer / AI autopilot) → travel (LINKED / FREE ROAM, multiplayer
-only) → partner (human/LLM) → provider → temperament (bodyguard / companion /
-berserker). Damage: sword 1, Amber Blade 2,
+(hardGate) seals the glacier until Emberdeep is cleared. Menu (shared
+`client/menu.ts`): **single or multiplayer** → party path → provider/temp
+(where needed) → **classic / long quest** last (+ SLIPPERY ICE toggle always,
+FREE ROAM + Architect toggles on multiplayer). Paths: single human; single
+**AI autopilot** (spectator);
+multi **human + AI** (human keeps `hostName` in names[0]); multi **AI + AI**
+(duo spectator; FREE ROAM enabled); multi human co-op. Temperaments: bodyguard /
+companion / berserker. Damage: sword 1, Amber Blade 2,
 arrow 1, fire arrow 2. Wraith enrages below half HP. Sentinel shield has turn
 inertia; a blocked arrow staggers (45 ticks, still advancing). Keys are
 team-shared. Endings (endingFor, priority order): solo → lone-thaw → mercy
@@ -160,64 +175,56 @@ Agent may spend the feather on rescue failsafe when routing is too slow.
 - Telemetry: `errands` array in matches.jsonl — goal, duration, fetched, hero
   downs during absence (test [44]).
 
-**Stage 4.5 — AI DUO (two LLM heroes, humans spectate).** Author's go-ahead
-GIVEN; implement before the Architect. Providers may match or differ; so may
-temperaments. This is the coordination-dyad benchmark (do two models revive
-each other? how do mercy decisions differ when BOTH are models?) and the
-substrate for the Architect bench (duo vs director = the first fully
-machine-played coalition triangle).
+**Stage 4.5 — AI DUO (two LLM heroes, humans spectate). IN PROGRESS** — author's
+go-ahead GIVEN; land before the Architect. Providers may match or differ; so may
+temperaments. Coordination-dyad benchmark + substrate for the Architect triangle.
 
-*Menu.* Party step gains a fourth option: AI DUO. Flow: two passes over the
-existing provider→temperament steps with headers "choose the HERO's AI" /
-"choose the COMPANION's AI" (reuse steps + a phase counter; remember: menu code
-is duplicated in BOTH clients, test [15] anchors). Travel axis: v1 is LINKED
-only (free-roam duo + errands later — machinery exists, scope doesn't).
+*Landed (playable v1):*
+- Menu path **AI + AI** in `client/menu.ts` — dual provider/temperament passes;
+  FREE ROAM on quest screen; test [15] bundle anchors.
+- Server `mode: "duo"`: `leaderAgent` slot 0 (`leader: true`, `npc=false`) +
+  `agent` slot 1 (`npc=true`); spectator input discarded like autopilot; start
+  via ENTER / click / `{t:"start"}` (Enter handled *before* `isSpectator` in
+  both clients).
+- `LEADER_PROMPT` + controller: leader never follows; route assist when passive
+  even with mate in-room; companion keeps `SYSTEM_PROMPT` ([62]).
+- Spectator HUD: `drawDuoSpectatorHud` shows both heroes' hearts ([15] anchor);
+  autopilot spectator also sees questing AI hearts.
 
-*Server.* `mode: "duo"`: two AgentPlayers. Slot 0 = HERO (leader), slot 1 =
-COMPANION. Host is a bodiless spectator exactly like autopilot (start via
-ENTER / click / {t:"start"}). names[] from llm names; heroes table in /stats
-skips duo matches (like auto); partner leaderboard gains a PAIR key:
-`"HAIKU+LLAMA [guard+hunter]"` (temperament suffixes when non-companion).
-plans.jsonl entries gain `slot`; matches.jsonl gains mode "duo" + both
-provider/temperament fields.
+*Still to land (close 4.5):*
+- Anchor devolution test: leader transitions, companion dragged, room never
+  reloads under companion pressure.
+- Dual thoughts: `thought` → `thoughts: [{slot, name, action, why, ms}]` in
+  snapshot; both clients render two name-prefixed lines.
+- Telemetry: plans.jsonl `slot` on both agents; matches.jsonl `mode:"duo"` +
+  both provider/temperament fields; `/stats` partner PAIR key
+  (`"HAIKU+LLAMA [guard+hunter]"`).
+- Bench: `MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter`.
+- WS boot test; mutual revive both directions; leader-temperament mercy test.
 
-*The anchor deadlock (CRITICAL).* The npc room-anchor with two NPCs and zero
-heroes locks both in the first room forever. Resolution, per iron rule 3:
-the anchor's spirit is "room transitions belong to the party's humans"; with
-no humans in the party, leadership devolves to slot 0. So: slot 0 npc=false
-(may transition; LINKED drag carries the companion), slot 1 npc=true.
-Mechanics-level, tested.
+*Design notes (unchanged).* **Anchor deadlock:** with two NPCs and zero humans,
+leadership devolves to slot 0 — `npc=false` (may transition; LINKED drag
+carries companion), slot 1 `npc=true`. Mercy with no human → leader's
+temperament. Rescue mutual with symmetric patience + failsafe. Architect toggle
+stored on setup (`architect` field) — bench-first stub, not wired.
 
-*Prompts.* Slot 0 gets LEADER_PROMPT: quest-driving like SOLO_PROMPT (route
-compass, "exit"/"cave" verbs, never idle) but WITH a companion — coordinate,
-don't abandon ("your companion fights beside you; lead the route, share the
-loot sensibly"). Slot 1 keeps SYSTEM_PROMPT + temperament doctrine unchanged.
-Two follow-intents deadlock in mutual politeness — the leader must never be
-told to follow; forbid "follow" in LEADER_PROMPT like SOLO does.
-
-*Decisions with no human present.* Mercy: the WRAITH-yield choice devolves to
-the LEADER's temperament (companion stands back — the existing "the choice
-belongs to your partner" generalizes: the deciding slot is the party leader).
-Rescue: mutual, each side's temperament-scaled patience + failsafe apply
-symmetrically (guard slot-agnostic code — agent.ts is mostly slot-clean
-already; audit `1 - this.slot` assumptions).
-
-*Spectator UI.* Thought panel shows BOTH minds: two lines, name-prefixed
-(`HAIKU: exit — the vault lies east` / `LLAMA: follow — staying close`).
-Snapshot: migrate `thought` → `thoughts: [{slot, name, action, why, ms}]`
-(optional field; flat; both clients render up to two lines; T toggles both).
-
-*Bench.* `MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter
-node dist/bench.js` — pair columns: winrate, ticks, mutual revives, downs per
-slot, routeAssists per slot, mercy outcome distribution. This table (model ×
-model × temperament × temperament) exists nowhere publicly.
-
-*Tests to land WITH the implementation:* duo menu reachability anchors in both
-built bundles; WS boot test (both agents act, spectator starts); anchor
-devolution (leader transitions, companion dragged, room never reloads under
-companion pressure); mutual revive both directions; leader-temperament mercy
-(hunter leader strikes / guard leader spares while companion stands back);
-stats pair key; thoughts[] in snapshot.
+**Post–Stage 4 mechanics (landed, guarded):**
+- **Wraith spirit anchor** ([58]–[59]): spared wraith revives a downed hero
+  only while a living partner shares the room — half-speed hug, no remote save
+  when split; bleed-out unchanged.
+- **Hunter in-room rescue** ([60]): bodyguard/companion keep attack-first
+  patience; hunter drops attack to touch-revive when partner is downed in-room.
+- **Collision-aware agent routing** ([61]): `roomRows(g)` for BFS; `waypointSeek`
+  with `solidAt`; attack flank after `attackStall > 35`.
+- **Wedged loot** ([63]): `pickupWedged` / `settlePickupPos` / proximity magnet
+  on collection — enemy hearts no longer stuck in corners.
+- **Doorway stall break** ([64]): agent yields from a stuck exit to room center;
+  `exitGiveUpT` suppresses leader route-assist so it can't re-loop the door.
+- **Slippery ice** ([65], opt-in): menu toggle `slick`, default OFF so the
+  classic quest stays byte-identical. When ON, heroes carry velocity (`Player.vx/vy`)
+  and coast ~3px on `"i"` tiles. `client/predict.ts` mirrors the easing exactly
+  (velocity in `Pred`, `slick` flag from Snapshot) so the local hero still feels
+  responsive. Heroes only; enemies unaffected. `g.slick` in Snapshot + restart-preserved.
 
 **Stage 5 — THE ARCHITECT (the dungeon as the third player).** Full design
 spec; implement only on the author's explicit go-ahead, stage by stage.

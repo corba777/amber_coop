@@ -496,6 +496,7 @@ export interface Player {
   bowCd: number;
   invuln: number;
   kx: number; ky: number;
+  vx: number; vy: number;   // walk velocity — carries momentum on slippery ice
   walk: number;
   moving: boolean;
   downed: boolean;
@@ -624,6 +625,7 @@ export interface Game {
   emberDead: boolean;
   charmClaimed: boolean;
   hardGate: boolean;   // seal the glacier behind the charm (menu choice)
+  slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   wraithSpared: boolean;
   companion: { x: number; y: number; t: number } | null;   // the spared wraith
   ending: Ending | null;
@@ -641,6 +643,12 @@ export interface Game {
 
 export const PLAYER_W = 10, PLAYER_H = 12;
 export const TRANSITION_CD = 50;   // ~0.8s at 60 Hz — doorway settle time
+// slippery ice easing (single source of truth — client prediction imports these
+// so server physics and prediction stay in exact lockstep). ACCEL is high so
+// starting and turning stay responsive; DECEL is low so releasing the stick
+// leaves a long, obvious glide (~10px) — noticeably icy, still controllable.
+export const ICE_ACCEL = 0.4;
+export const ICE_DECEL = 0.12;
 
 export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
@@ -658,7 +666,7 @@ export function newPlayer(idx: number): Player {
   return {
     x: (3 + idx * 1.5) * TILE, y: 6.5 * TILE, dir: 0,
     hp: 6, maxHp: 6, keys: 0,
-    attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, walk: 0, moving: false,
+    attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, vx: 0, vy: 0, walk: 0, moving: false,
     downed: false, elixir: false, reviveP: 0, bleedT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
   };
@@ -865,6 +873,7 @@ export function newGame(): Game {
     golemDead: false, amberClaimed: false, gateMelted: false,
     hasBow: false, hasFeather: false, containers: {}, elixirs: {}, feathers: {},
     wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
+    slick: false,
     wraithSpared: false, companion: null, ending: null,
     fade: 0, message: "", messageT: 0, ticks: 0, shake: 0,
     events: [] as GameEvent[], stats: [emptyStats(), emptyStats()] as [PlayerStats, PlayerStats],
@@ -1500,13 +1509,36 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (inp.u) dy -= 1;
   if (inp.d) dy += 1;
   p.moving = dx !== 0 || dy !== 0;
-  if (p.moving && p.attack === 0) {
-    if (dy > 0) p.dir = 0; else if (dy < 0) p.dir = 1;
-    if (dx > 0) p.dir = 2; else if (dx < 0) p.dir = 3;
-    const len = Math.hypot(dx, dy);
+  // swinging freezes movement (canon) — leave velocity untouched so the client
+  // prediction, which returns early while attacking, stays in exact lockstep
+  if (p.attack === 0) {
     const sp = 1.35;
-    moveBody(g, p, PLAYER_W, PLAYER_H, (dx / len) * sp, (dy / len) * sp);
-    p.walk += 0.18;
+    const len = p.moving ? Math.hypot(dx, dy) : 1;
+    const tvx = p.moving ? (dx / len) * sp : 0;
+    const tvy = p.moving ? (dy / len) * sp : 0;
+    if (p.moving) {
+      if (dy > 0) p.dir = 0; else if (dy < 0) p.dir = 1;
+      if (dx > 0) p.dir = 2; else if (dx < 0) p.dir = 3;
+      p.walk += 0.18;
+    }
+    // slippery ice: velocity eases toward the target and coasts when released.
+    // asymmetric — snappy to start/turn (ICE_ACCEL) but a long, readable glide
+    // once you let go (ICE_DECEL) — that reads as real ice, not sluggish input.
+    // slick OFF (or off-ice) collapses to instant motion — the exact canon path,
+    // so the classic quest stays byte-identical (guarded by test).
+    const onIce = g.slick &&
+      tileAt(g, Math.floor((p.x + PLAYER_W / 2) / TILE),
+                Math.floor((p.y + PLAYER_H / 2) / TILE)) === "i";
+    if (onIce) {
+      const ease = p.moving ? ICE_ACCEL : ICE_DECEL;
+      p.vx += (tvx - p.vx) * ease;
+      p.vy += (tvy - p.vy) * ease;
+      if (Math.abs(p.vx) < 0.03) p.vx = 0;
+      if (Math.abs(p.vy) < 0.03) p.vy = 0;
+    } else {
+      p.vx = tvx; p.vy = tvy;
+    }
+    if (p.vx !== 0 || p.vy !== 0) moveBody(g, p, PLAYER_W, PLAYER_H, p.vx, p.vy);
   }
   if (Math.abs(p.kx) > 0.05 || Math.abs(p.ky) > 0.05) {
     moveBody(g, p, PLAYER_W, PLAYER_H, p.kx, p.ky);
@@ -1714,8 +1746,9 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   p.x = Math.max(0, Math.min(W - PLAYER_W, p.x));
   p.y = Math.max(0, Math.min(H - PLAYER_H, p.y));
 
-  // FREE ROAM: npc camping a doorway yields to room center — hero input is never blocked
-  if (p.npc && g.travelMode === "free") {
+  // doorway yield: npc pressed into an edge too long — step to room center so
+  // the party doesn't freeze (LINKED anchor + FREE ROAM door camp)
+  if (p.npc) {
     const EDGE = 2;
     const pressing = inp.l || inp.r || inp.u || inp.d;
     const atEdge = p.x < EDGE || p.x + PLAYER_W > W - EDGE ||
@@ -1896,12 +1929,14 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         const npc1 = g.players[1].npc;
         const hardGate = g.hardGate;
         const travelMode = g.travelMode;
+        const slick = g.slick;
         Object.assign(g, newGame());
         g.players[0].present = present0;
         g.players[1].present = present1;
         g.players[1].npc = npc1;
         g.hardGate = hardGate;
         g.travelMode = travelMode;
+        g.slick = slick;
         g.screen = "play";
       }
       break;
@@ -1954,6 +1989,7 @@ export interface Snapshot {
   thought?: { action: string; why?: string; ms: number } | null;
   partnerView?: PartnerView | null;
   mode?: string | null;   // session mode — clients use for spectator UI
+  slick?: boolean;        // slippery ice on — client prediction must mirror it
   ack?: number;           // last input seq the server applied for this viewer
   ackX?: number;          // where the hero stood when that input arrived — the
   ackY?: number;          // twin of the client's own anchor, so lag cancels out
@@ -2032,6 +2068,7 @@ export function toSnapshot(g: Game, names: [string, string],
     })),
     pedestal: sim.pedestal,
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
+    slick: g.slick,
     message: overlay.message, messageT: overlay.messageT,
     shake: g.shake, ticks: g.ticks, fade: overlay.fade,
     events: g.events.slice(),

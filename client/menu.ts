@@ -14,6 +14,7 @@ export interface MenuState {
   hard: boolean;
   travel: "linked" | "free";
   architect: boolean;
+  slick: boolean;
   provider: number;
   provider2: number;
   temp: number;
@@ -26,7 +27,7 @@ export const PROVIDER_ORDER = ["ollama", "anthropic", "openai"] as const;
 export function freshMenu(): MenuState {
   return {
     step: 0, idx: 0, path: "",
-    hard: false, travel: "linked", architect: false,
+    hard: false, travel: "linked", architect: false, slick: false,
     provider: 0, provider2: 0, temp: 1, temp2: 1,
   };
 }
@@ -72,6 +73,10 @@ function questOptions(menu: MenuState): MenuOption[] {
       ok: true, hint: "split up — watch your partner through the scry mirror", toggle: true,
     });
   }
+  opts.push({
+    label: menu.slick ? "[x] SLIPPERY ICE" : "[ ] SLIPPERY ICE",
+    ok: true, hint: "the ice vault and the wraith's throne turn slick underfoot", toggle: true,
+  });
   if (menu.path.startsWith("multi")) {
     opts.push({
       label: menu.architect ? "[x] THE ARCHITECT" : "[ ] THE ARCHITECT",
@@ -179,12 +184,14 @@ export function menuConfirm(
       menu.travel = menu.travel === "free" ? "linked" : "free";
     } else if (pick.label.includes("ARCHITECT")) {
       menu.architect = !menu.architect;
+    } else if (pick.label.includes("SLIPPERY ICE")) {
+      menu.slick = !menu.slick;
     }
     return;
   }
   menu.hard = menu.idx === 1;
   const travel = menu.travel;
-  const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect };
+  const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect, slick: menu.slick };
   const host = hostName?.trim().slice(0, 12);
 
   if (menu.path === "single-human") {

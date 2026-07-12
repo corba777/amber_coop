@@ -104,11 +104,13 @@ class Session {
       provider2?: ProviderName;
       temperament2?: Temperament;
       architect?: boolean;
+      slick?: boolean;
       hostName?: string;
     },
   ): boolean {
     this.architect = !!extra?.architect;
     this.game.hardGate = hard ?? HARD_GATE_DEFAULT;
+    this.game.slick = !!extra?.slick;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.leaderAgent = null;
     if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "ILYA");
@@ -457,7 +459,7 @@ wss.on("connection", (ws, req) => {
       const msg = JSON.parse(String(data)) as {
         t: string; s?: Input; seq?: number; mode?: Mode; provider?: ProviderName; provider2?: ProviderName;
         hardGate?: boolean; name?: string; hostName?: string; temperament?: Temperament;
-        temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean;
+        temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean; slick?: boolean;
       };
       if (msg.t === "start") {
         const sc = session.game.screen;
@@ -485,7 +487,7 @@ wss.on("connection", (ws, req) => {
           msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode,
           {
             provider2: msg.provider2, temperament2: msg.temperament2,
-            architect: msg.architect, hostName: msg.hostName,
+            architect: msg.architect, slick: msg.slick, hostName: msg.hostName,
           },
         );
       } else if (msg.t === "name" && typeof msg.name === "string") {
