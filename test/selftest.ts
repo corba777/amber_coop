@@ -28,6 +28,22 @@ function step(g: Game, i0: Input, i1: Input, prev: [Input, Input]): void {
   prev[1] = { ...i1 };
 }
 
+/* The sim rolls Math.random in four places (wraith teleport + destination, heart
+ * drops). Tests that walk those paths were riding on luck: the suite failed
+ * ~half of all runs. Pin the rolls to a seeded stream so a run is reproducible —
+ * the GAME is untouched, only the test's dice. */
+function withSeededRandom<T>(seed: number, fn: () => T): T {
+  const real = Math.random;
+  let s = (seed >>> 0) || 1;
+  Math.random = (): number => {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s / 4294967296;
+  };
+  try { return fn(); } finally { Math.random = real; }
+}
+
 async function freePort(): Promise<number> {
   const net = await import("node:net");
   return new Promise((res, rej) => {
@@ -1157,51 +1173,61 @@ function freshPlay(): Game {
   const right = { ...emptyInput(), r: true };
   const left = { ...emptyInput(), l: true };
 
+  const sx = 8 * TILE, sy = 6 * TILE;
+
   // walks exactly like the server: 1.35 px per 60 Hz tick, diagonals normalized
   const pr = P.freshPred();
-  P.reconcile(pr, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);   // first fix
+  P.reconcile(pr, sx, sy, 0, false, -1, sx, sy);      // first fix
   P.stepPred(pr, tiles, right, false, 100);           // 6 ticks
-  ok(Math.abs(pr.x - (8 * TILE + 6 * 1.35)) < 0.6, "matches server speed tick-for-tick");
+  ok(Math.abs(pr.x - (sx + 6 * 1.35)) < 0.6, "matches server speed tick-for-tick");
 
   // walls are walls, even in the future
   const pr2 = P.freshPred();
-  P.reconcile(pr2, 1 * TILE + 2, 6 * TILE, 0, false, -1, 0, tiles);
+  P.reconcile(pr2, 1 * TILE + 2, sy, 0, false, -1, 1 * TILE + 2, sy);
   for (let i = 0; i < 30; i++) P.stepPred(pr2, tiles, left, false, 17);
   ok(pr2.x >= TILE - 1, "prediction collides with the western tree line");
 
   // the core rule holds: swinging freezes movement
   const pr3 = P.freshPred();
-  P.reconcile(pr3, 8 * TILE, 6 * TILE, 0, false, -1, 0, tiles);
+  P.reconcile(pr3, sx, sy, 0, false, -1, sx, sy);
   P.stepPred(pr3, tiles, right, true, 200);
-  ok(pr3.x === 8 * TILE, "attack freezes predicted movement too");
+  ok(pr3.x === sx, "attack freezes predicted movement too");
 
-  // reconciliation is seq/ack + replay: an UNACKED input replays forward off the
-  // (stale) server truth, so the hero does NOT snap back — the drag is gone
-  const sx = 8 * TILE, sy = 6 * TILE;
+  // reconciliation compares ANCHORS (our predicted pos when we sent seq N vs the
+  // server's pos when it received seq N). Lag cancels, so an agreeing server
+  // costs ZERO correction — no backward drag, and no forward overshoot either.
   const pr4 = P.freshPred();
-  P.reconcile(pr4, sx, sy, 0, false, -1, 0, tiles);   // first fix, live at start
-  P.recordInput(pr4, 1, right, false, 0);             // client sends seq 1 (held right)
-  P.stepPred(pr4, tiles, right, false, 100);          // local prediction runs ahead
-  const predictedX = pr4.x;
-  // snapshot arrives but the server hasn't applied seq 1 yet: ack=0, hero at start
-  P.reconcile(pr4, sx, sy, 0, false, 0, 100, tiles);
-  ok(pr4.x > sx + 5, "unacked input replays forward — no snap back to the stale server pos");
-  ok(Math.abs(pr4.x - predictedX) < 1.5, "replay lands on the local prediction — near-zero correction");
+  P.reconcile(pr4, sx, sy, 0, false, -1, sx, sy);   // first fix, live at start
+  P.recordInput(pr4, 1, 0);                        // sent seq 1 — anchored at sx
+  P.stepPred(pr4, tiles, right, false, 100);       // local prediction runs ahead
+  P.recordInput(pr4, 2, 100);                      // heartbeat re-sends the held state
+  const ranTo = pr4.x;
+  // the server agrees (it stood at sx when seq 1 landed) but its CURRENT position
+  // is a whole RTT stale — that staleness must not move us one pixel
+  P.reconcile(pr4, sx + 2, sy, 0, false, 1, sx, sy);
+  ok(pr4.x === ranTo, "an agreeing server costs zero correction — no drag, no overshoot");
 
-  // once the server acks the input, it is pruned and we anchor to the fresh truth
-  P.reconcile(pr4, sx + 8, sy, 0, false, 1, 120, tiles);
-  ok(pr4.hist.length === 0, "acked inputs are pruned from the history buffer");
+  // the same ack must never be reconciled twice (that is what pushed us off course)
+  P.reconcile(pr4, sx + 2, sy, 0, false, 1, sx, sy);
+  ok(pr4.x === ranTo, "a repeated ack is reconciled only once");
 
-  // a large disagreement (knockback/teleport) still snaps to the server truth
-  P.reconcile(pr4, sx + 200, sy, 0, false, 1, 130, tiles);
-  ok(Math.abs(pr4.x - (sx + 200)) < 0.001, "a large disagreement snaps to the server truth");
+  // genuine divergence (knockback: the server was 10px behind our anchor) is
+  // absorbed gradually
+  P.reconcile(pr4, sx, sy, 0, false, 2, ranTo - 10, sy);
+  ok(Math.abs(pr4.x - (ranTo - 10 * 0.3)) < 0.001, "a real divergence is blended in");
+
+  // a gross divergence is taken in full
+  P.recordInput(pr4, 3, 200);
+  const before3 = pr4.x;
+  P.reconcile(pr4, sx, sy, 0, false, 3, before3 - 50, sy);
+  ok(Math.abs(pr4.x - (before3 - 50)) < 0.001, "a gross divergence is taken in full");
 
   // room change resets the prediction outright
-  P.reconcile(pr4, 50, 50, 3, false, 1, 140, tiles);
+  P.reconcile(pr4, 50, 50, 3, false, 4, 50, 50);
   ok(pr4.x === 50 && pr4.room === 3, "room change resets the prediction");
 
   // a stale (out-of-order) ack must never rewind the hero
-  P.reconcile(pr4, 999, 50, 3, false, 0, 150, tiles);
+  P.reconcile(pr4, 999, 50, 3, false, 2, 999, 50);
   ok(pr4.x === 50, "a stale, out-of-order ack is ignored");
 }
 
@@ -1454,24 +1480,37 @@ function freshPlay(): Game {
   const { mock } = await import("../server/llm");
   type Mut = { intent: { action: string; target?: number }; llmIntent: { action: string; target?: number } };
 
+  // NO LUCKY DROPS. A dying enemy rolls Math.random() < 0.3 for a heart, and the
+  // agent used to survive this errand ONLY when that roll went its way — the
+  // suite failed roughly one run in three. Pin the roll to its worst case: the
+  // errand must be won on the agent's own merit, and the test must be
+  // deterministic. (It was not the frog that killed him: the agent abandoned the
+  // container 29 px short and bled out later on an empty tank.)
+  const realRandom = Math.random;
+  Math.random = (): number => 0.99;   // a heart never drops — the worst case, always
   const g = freshPlay();
-  core.loadRoom(g, 2, 7 * TILE, 8 * TILE);
-  g.screen = "play"; g.fade = 0;
-  g.players[0].present = false;
-  g.players[1].x = 7 * TILE; g.players[1].y = 8 * TILE;
-  ok(g.enemies.some(e => e.kind === "slime" && !e.dead), "lake slime is hopping");
-  const idx = g.pickups.filter(p => p.t >= 0).findIndex(p => p.cid === "lake");
-  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
-  const prev: [Input, Input] = [emptyInput(), emptyInput()];
-  const plan = { action: "pickup", target: idx };
-  (agent as unknown as Mut).llmIntent = plan;
-  (agent as unknown as Mut).intent = plan;
-  for (let i = 0; i < 1200 && g.players[1].hp > 0; i++) {
-    step(g, emptyInput(), agent.control(g), prev);
+  try {
+    core.loadRoom(g, 2, 7 * TILE, 8 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.players[0].present = false;
+    g.players[1].x = 7 * TILE; g.players[1].y = 8 * TILE;
+    ok(g.enemies.some(e => e.kind === "slime" && !e.dead), "lake slime is hopping");
+    const idx = g.pickups.filter(p => p.t >= 0).findIndex(p => p.cid === "lake");
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    const plan = { action: "pickup", target: idx };
+    (agent as unknown as Mut).llmIntent = plan;
+    (agent as unknown as Mut).intent = plan;
+    for (let i = 0; i < 1200 && g.players[1].hp > 0; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+  } finally {
+    Math.random = realRandom;
   }
-  ok(g.players[1].hp > 0, "survived the green frog on the way to the container");
-  ok(!g.pickups.some(p => p.cid === "lake") || g.enemies.every(e => e.dead),
-     "finished the errand despite the slime");
+  ok(g.players[1].hp > 0, "survived the green frog with no lucky heart to bail him out");
+  // the old assertion had a loophole — "all enemies dead" satisfied it even when
+  // the container was never taken, which is exactly how the abandon bug hid
+  ok(g.containers["lake"] === true, "actually claimed the lake container — the errand finished");
 }
 
 // ------------------------------------------------- 37. the wraith enrages
@@ -1499,9 +1538,13 @@ function freshPlay(): Game {
     return { shots: 0, teleported: false };
   };
 
-  const calm = volley(16);
+  // the enraged teleport is deterministic (canon), but its DESTINATION tile is a
+  // dice roll — roughly once in a hundred runs it landed back on the wraith's
+  // own spawn tile and this test cried "no teleport". Seed the dice: canon
+  // untouched, the run reproducible.
+  const calm = withSeededRandom(20260712, () => volley(16));
   ok(calm.shots === 0, "at full health the first volley waits past tick 56 — canon opening untouched");
-  const angry = volley(8);
+  const angry = withSeededRandom(20260712, () => volley(8));
   ok(angry.shots === 5, `enraged: the fan widens to five shards (got ${angry.shots})`);
   ok(angry.teleported, "and every volley ends in a teleport");
 }

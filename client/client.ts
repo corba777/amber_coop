@@ -130,7 +130,8 @@ ws.onmessage = ev => {
     if (msg.s.screen === "play") ensurePlayControl();
     const me = msg.s.players[mySlot];
     if (msg.s.screen === "play" && me?.present && !isSpectator(msg.s)) {
-      reconcile(pred, me.x, me.y, msg.s.room, me.downed, msg.s.ack ?? -1, now, msg.s.tiles);
+      reconcile(pred, me.x, me.y, msg.s.room, me.downed, msg.s.ack ?? -1,
+                msg.s.ackX ?? me.x, msg.s.ackY ?? me.y);
     }
     for (const e of msg.s.events) handleEvent(e);
   } else if (msg.t === "full") {
@@ -200,9 +201,9 @@ function sendInput(): void {
   if (ws.readyState === WebSocket.OPEN) {
     inputSeq++;
     ws.send(JSON.stringify({ t: "input", s: state, seq: inputSeq }));
-    // remember what we sent so the next snapshot's ack can replay from it
-    const meP = snap?.players[mySlot];
-    recordInput(pred, inputSeq, state, !!meP && meP.attack > 0, performance.now());
+    // anchor: where our prediction stands as this held state takes effect —
+    // the server records its own twin when the message lands
+    recordInput(pred, inputSeq, performance.now());
   }
 }
 

@@ -63,6 +63,11 @@ class Session {
   rawInputs: [Input, Input] = [emptyInput(), emptyInput()];
   prevInputs: [Input, Input] = [emptyInput(), emptyInput()];
   lastInputSeq: [number, number] = [0, 0];   // last input seq applied per slot (echoed as snapshot ack)
+  // hero position at the instant that input arrived — the state the held input
+  // first acts on. The client holds the twin anchor, so the gap between them is
+  // divergence, not latency.
+  ackPos: [{ x: number; y: number }, { x: number; y: number }] =
+    [{ x: 0, y: 0 }, { x: 0, y: 0 }];
   names: [string, string] = ["ILYA", "?"];
   mode: Mode | null = null;
   agent: AgentPlayer | null = null;
@@ -265,6 +270,8 @@ class Session {
           snapObj.mode = this.mode;
           snapObj.thought = this.agent ? this.lastThought : null;
           snapObj.ack = this.lastInputSeq[slot];
+          snapObj.ackX = this.ackPos[slot].x;
+          snapObj.ackY = this.ackPos[slot].y;
           ws.send(JSON.stringify({ t: "state", s: snapObj }));
         }
         this.game.events = [];
@@ -465,9 +472,12 @@ wss.on("connection", (ws, req) => {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
           a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
         };
-        // record the seq so the snapshot can ack it (guard out-of-order)
+        // anchor the seq to where the hero stands right now: this is the state
+        // the freshly-received held input will first act on (guard out-of-order)
         if (typeof msg.seq === "number" && msg.seq > session.lastInputSeq[slot]) {
           session.lastInputSeq[slot] = msg.seq;
+          const hp = session.game.players[slot];
+          session.ackPos[slot] = { x: hp.x, y: hp.y };
         }
         }
       } else if (msg.t === "setup" && slot === 0 && session.game.screen === "menu" && msg.mode) {

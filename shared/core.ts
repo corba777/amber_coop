@@ -1955,6 +1955,8 @@ export interface Snapshot {
   partnerView?: PartnerView | null;
   mode?: string | null;   // session mode — clients use for spectator UI
   ack?: number;           // last input seq the server applied for this viewer
+  ackX?: number;          // where the hero stood when that input arrived — the
+  ackY?: number;          // twin of the client's own anchor, so lag cancels out
 }
 
 function serEnemy(e: Enemy): Snapshot["enemies"][number] {
