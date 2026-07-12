@@ -2311,6 +2311,36 @@ function freshPlay(): Game {
   ok(moved || routed || fought, "leader quests — not stuck in mutual follow");
 }
 
+// ------------------------------------------------- 63. wedged loot settles and can be collected
+{
+  console.log("[63] dropped hearts settle off walls and can be collected");
+  const core = await import("../shared/core");
+  const { pickupWedged, settlePickupPos } = core;
+  const g = freshPlay();
+  g.elixirs.cellar = true;
+  core.loadRoom(g, 12, 5 * TILE, 9 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.pickups = [];
+  const drop = { x: 2, y: 13 * TILE - 4 };
+  ok(pickupWedged(g, drop.x, drop.y), "loot wedged in a cellar corner against the wall");
+  const spot = settlePickupPos(g, drop.x, drop.y);
+  ok(!pickupWedged(g, spot.x, spot.y), "settle finds open floor nearby");
+  g.pickups.push({ kind: "heart", x: drop.x, y: drop.y, t: 0 });
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, emptyInput(), emptyInput(), prev);
+  const it = g.pickups.find(p => p.t >= 0)!;
+  ok(!pickupWedged(g, it.x, it.y), "physics pass nudges wedged loot onto walkable tiles");
+  g.players[0].x = it.x - 10;
+  g.players[0].y = it.y - 4;
+  g.players[0].hp = 4;
+  for (let i = 0; i < 30 && g.pickups.some(p => p.t >= 0); i++) {
+    step(g, emptyInput(), emptyInput(), prev);
+  }
+  ok(!g.pickups.some(p => p.t >= 0), "hero collects the heart when standing beside it");
+  ok(g.players[0].hp === 6, "the heart actually healed");
+}
+
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
 }
 

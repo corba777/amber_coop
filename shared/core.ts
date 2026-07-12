@@ -706,24 +706,24 @@ function fillActiveSimRoom(g: Game, index: number): void {
     g.pedestal = { x: 7.5 * TILE, y: 3 * TILE, final: true };
   }
   if (index === 6 && !g.hasBow) {
-    g.pickups.push({ kind: "bow", x: 3 * TILE + 8, y: 10 * TILE + 8, t: 0 });
+    pushPickup(g, { kind: "bow", x: 3 * TILE + 8, y: 10 * TILE + 8, t: 0 });
   }
   if (index === 16 && g.emberDead && !g.charmClaimed) {
-    g.pickups.push({ kind: "charm", x: 7.5 * TILE + 8, y: 8 * TILE, t: 0 });
+    pushPickup(g, { kind: "charm", x: 7.5 * TILE + 8, y: 8 * TILE, t: 0 });
   }
   for (const c of CONTAINERS) {
     if (c.room !== index || g.containers[c.id]) continue;
     if (c.id === "golem" && !g.golemDead) continue;   // appears with the boss's fall
-    g.pickups.push({ kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
+    pushPickup(g, { kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
   }
   for (const el of ELIXIRS) {
     if (el.room === index && !g.elixirs[el.id]) {
-      g.pickups.push({ kind: "elixir", x: el.x, y: el.y, t: 0, cid: el.id });
+      pushPickup(g, { kind: "elixir", x: el.x, y: el.y, t: 0, cid: el.id });
     }
   }
   for (const fe of FEATHERS) {
     if (fe.room === index && !g.feathers[fe.id] && !g.hasFeather) {
-      g.pickups.push({ kind: "feather", x: fe.x, y: fe.y, t: 0, cid: fe.id });
+      pushPickup(g, { kind: "feather", x: fe.x, y: fe.y, t: 0, cid: fe.id });
     }
   }
   if (g.doors[index]) {
@@ -934,6 +934,47 @@ export function moveBody(g: Game, b: { x: number; y: number }, w: number, h: num
 export function overlap(ax: number, ay: number, aw: number, ah: number,
                         bx: number, by: number, bw: number, bh: number): boolean {
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+const PICKUP_HALF = 6;
+
+/** true when any part of the 12×12 pickup footprint sits inside solid tiles */
+export function pickupWedged(g: Game, x: number, y: number): boolean {
+  const pts: [number, number][] = [
+    [x - PICKUP_HALF, y - PICKUP_HALF], [x + PICKUP_HALF, y - PICKUP_HALF],
+    [x - PICKUP_HALF, y + PICKUP_HALF], [x + PICKUP_HALF, y + PICKUP_HALF],
+    [x, y],
+  ];
+  return pts.some(([px, py]) => solidAt(g, px, py));
+}
+
+/** nudge a drop onto the nearest open floor — enemy loot often dies in corners */
+export function settlePickupPos(g: Game, x: number, y: number): { x: number; y: number } {
+  if (!pickupWedged(g, x, y)) return { x, y };
+  for (let ring = 1; ring <= 8; ring++) {
+    for (let ty = -ring; ty <= ring; ty++) {
+      for (let tx = -ring; tx <= ring; tx++) {
+        if (Math.abs(tx) !== ring && Math.abs(ty) !== ring) continue;
+        const nx = x + tx * 8, ny = y + ty * 8;
+        if (!pickupWedged(g, nx, ny)) return { x: nx, y: ny };
+      }
+    }
+  }
+  return { x, y };
+}
+
+function pushPickup(g: Game, item: Pickup): void {
+  const spot = settlePickupPos(g, item.x, item.y);
+  g.pickups.push({ ...item, x: spot.x, y: spot.y });
+}
+
+function playerCollectsPickup(g: Game, p: Player, it: Pickup): boolean {
+  if (overlap(p.x, p.y, PLAYER_W, PLAYER_H,
+              it.x - PICKUP_HALF, it.y - PICKUP_HALF, 12, 12)) return true;
+  const pcx = p.x + PLAYER_W / 2, pcy = p.y + PLAYER_H / 2;
+  const d = Math.hypot(it.x - pcx, it.y - pcy);
+  if (d < 16) return true;
+  return d < 28 && pickupWedged(g, it.x, it.y);
 }
 
 /** hero has a live enemy within melee/chase range — used for FREE ROAM leave permission */
@@ -1360,7 +1401,7 @@ function killEnemy(g: Game, e: Enemy): void {
   if (e.kind === "golem") {
     g.golemDead = true;
     if (!g.containers["golem"]) {
-      g.pickups.push({ kind: "container", x: cx, y: cy + 20, t: 0, cid: "golem" });
+      pushPickup(g, { kind: "container", x: cx, y: cy + 20, t: 0, cid: "golem" });
     }
     g.pedestal = { x: 7.5 * TILE, y: 3 * TILE, final: false };
     g.message = "The Amber Blade is revealed!";
@@ -1372,7 +1413,7 @@ function killEnemy(g: Game, e: Enemy): void {
   if (e.kind === "ember") {
     g.emberDead = true;
     if (!g.charmClaimed) {
-      g.pickups.push({ kind: "charm", x: cx, y: cy + 18, t: 0 });
+      pushPickup(g, { kind: "charm", x: cx, y: cy + 18, t: 0 });
     }
     g.message = "The Ember Golem crumbles to cinders...";
     g.messageT = 220;
@@ -1389,10 +1430,10 @@ function killEnemy(g: Game, e: Enemy): void {
     sfx(g, "bossdie");
     return;
   }
-  if (Math.random() < 0.3) g.pickups.push({ kind: "heart", x: cx, y: cy, t: 0 });
+  if (Math.random() < 0.3) pushPickup(g, { kind: "heart", x: cx, y: cy, t: 0 });
   if (spec.keyOnClear && !alive && !g.cleared[g.room]) {
     g.cleared[g.room] = true;
-    g.pickups.push({ kind: "key", x: 8 * TILE, y: 7 * TILE, t: 0 });
+    pushPickup(g, { kind: "key", x: 8 * TILE, y: 7 * TILE, t: 0 });
     sfx(g, "secret");
   } else if (g.travelMode === "free" && !alive && !g.cleared[g.room]) {
     g.cleared[g.room] = true;   // free roam: cleared rooms stay pacified on revisit
@@ -1517,7 +1558,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   // pickups
   for (const it of g.pickups) {
     if (it.t < 0) continue;
-    if (overlap(p.x, p.y, PLAYER_W, PLAYER_H, it.x - 6, it.y - 6, 12, 12)) {
+    if (playerCollectsPickup(g, p, it)) {
       if (it.kind === "heart") {
         p.hp = Math.min(p.maxHp, p.hp + 2);
         sfx(g, "pickup");
@@ -1787,6 +1828,14 @@ function tickSimPhysics(g: Game): void {
         }
         sfx(g, "shard");
       }
+    }
+  }
+  for (const it of g.pickups) {
+    if (it.t < 0) continue;
+    if (pickupWedged(g, it.x, it.y)) {
+      const spot = settlePickupPos(g, it.x, it.y);
+      it.x = spot.x;
+      it.y = spot.y;
     }
   }
   g.pickups = g.pickups.filter(it => {
