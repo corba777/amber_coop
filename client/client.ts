@@ -684,7 +684,7 @@ function render(): void {
   const alpha = Math.min(1, (nowT - snapTime) / snapInterval);
   if (snap && snap.screen === "play") {
     const meP = snap.players[mySlot];
-    stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT);
+    stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick);
   }
   lastFrameT = nowT;
   if (localAttack > 0) localAttack--;
@@ -867,20 +867,34 @@ function render(): void {
     ], 48);
     if (mySlot === 0) {
       const opts = menuOptions(menu, providers);
-      let y = 106;
+      // adaptive layout: tighten spacing when the quest screen carries toggles
+      // (up to 5 rows) and centre the block so the last toggle never slides
+      // under the footer. the selected option's hint lives on a fixed line.
+      const firstToggle = opts.findIndex(o => o.toggle);
+      const gap = opts.length > 4 ? 20 : 24;
+      const startY = Math.round(126 - (opts.length - 1) * gap / 2);
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
+        const y = startY + i * gap;
         ctx.textAlign = "center";
-        ctx.font = "bold 9px monospace";
-        ctx.fillStyle = !o.ok ? "#4a4560" : sel ? "#ffb545" : "#c9c3de";
+        ctx.font = o.toggle ? "bold 8px monospace" : "bold 9px monospace";
+        ctx.fillStyle = !o.ok ? "#4a4560" : sel ? "#ffb545" : o.toggle ? "#8f88ac" : "#c9c3de";
         ctx.fillText((sel ? "> " : "  ") + o.label + (sel ? " <" : "  "), W / 2, y);
-        if (sel && o.hint) {
-          ctx.font = "7px monospace";
-          ctx.fillStyle = o.ok ? "#6f688c" : "#8a4a52";
-          ctx.fillText(o.hint, W / 2, y + 11);
+        if (i === firstToggle && firstToggle > 0) {
+          ctx.strokeStyle = "#3a3550";
+          ctx.beginPath();
+          ctx.moveTo(W / 2 - 46, y - gap + 5);
+          ctx.lineTo(W / 2 + 46, y - gap + 5);
+          ctx.stroke();
         }
-        y += 26;
       });
+      const selOpt = opts[menu.idx];
+      if (selOpt?.hint) {
+        ctx.font = "7px monospace";
+        ctx.fillStyle = selOpt.ok ? "#6f688c" : "#8a4a52";
+        ctx.textAlign = "center";
+        ctx.fillText(selOpt.hint, W / 2, H - 30);
+      }
       ctx.font = "7px monospace";
       ctx.fillStyle = "#6f688c";
       ctx.fillText("↑↓ select · ENTER confirm" + (menu.step > 0 ? " · ← back" : ""), W / 2, H - 14);

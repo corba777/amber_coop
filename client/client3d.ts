@@ -892,20 +892,34 @@ function drawScreens(s: Snapshot): void {
     ], 48);
     if (mySlot === 0) {
       const opts = menuOptions(menu, providers);
-      let y = 104;
+      // adaptive layout: tighten spacing when the quest screen carries toggles
+      // (up to 5 rows) and centre the block so the last toggle never slides
+      // under the footer. the selected option's hint lives on a fixed line.
+      const firstToggle = opts.findIndex(o => o.toggle);
+      const gap = opts.length > 4 ? 20 : 24;
+      const startY = Math.round(126 - (opts.length - 1) * gap / 2);
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
+        const y = startY + i * gap;
         uictx.textAlign = "center";
-        uictx.font = "bold 9px monospace";
-        uictx.fillStyle = !o.ok ? "#4a4560" : sel ? "#ffb545" : "#c9c3de";
+        uictx.font = o.toggle ? "bold 8px monospace" : "bold 9px monospace";
+        uictx.fillStyle = !o.ok ? "#4a4560" : sel ? "#ffb545" : o.toggle ? "#8f88ac" : "#c9c3de";
         uictx.fillText((sel ? "> " : "  ") + o.label + (sel ? " <" : "  "), W / 2, y);
-        if (sel && o.hint) {
-          uictx.font = "7px monospace";
-          uictx.fillStyle = o.ok ? "#6f688c" : "#8a4a52";
-          uictx.fillText(o.hint, W / 2, y + 11);
+        if (i === firstToggle && firstToggle > 0) {
+          uictx.strokeStyle = "#3a3550";
+          uictx.beginPath();
+          uictx.moveTo(W / 2 - 46, y - gap + 5);
+          uictx.lineTo(W / 2 + 46, y - gap + 5);
+          uictx.stroke();
         }
-        y += 26;
       });
+      const selOpt = opts[menu.idx];
+      if (selOpt?.hint) {
+        uictx.font = "7px monospace";
+        uictx.fillStyle = selOpt.ok ? "#6f688c" : "#8a4a52";
+        uictx.textAlign = "center";
+        uictx.fillText(selOpt.hint, W / 2, H - 30);
+      }
       uictx.font = "7px monospace";
       uictx.fillStyle = "#6f688c";
       uictx.fillText("↑↓ select · ENTER confirm" + (menu.step > 0 ? " · ← back" : ""), W / 2, H - 14);

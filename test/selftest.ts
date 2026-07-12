@@ -574,6 +574,7 @@ function freshPlay(): Game {
          `${file}: mode "${mode}" setup carries hardGate`);
     }
     ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
+    ok(src.includes("SLIPPERY ICE"), `${file}: slippery-ice toggle present`);
     ok(src.includes('mode: "auto"') && src.includes("hardGate"), `${file}: autopilot setup carries hardGate`);
     ok(src.includes('mode: "llm"') && src.includes("hardGate"), `${file}: llm setup carries hardGate`);
   }
@@ -2339,6 +2340,65 @@ function freshPlay(): Game {
   }
   ok(!g.pickups.some(p => p.t >= 0), "hero collects the heart when standing beside it");
   ok(g.players[0].hp === 6, "the heart actually healed");
+}
+
+// ------------------------------------------------- 64. doorway stall — hunter yields instead of camping
+{
+  console.log("[64] doorway stall breaks: hunter yields from the right edge");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 13, 5 * TILE, 9 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.players[1].npc = true;
+  g.players[1].x = W - PLAYER_W - 1;
+  g.players[1].y = 6.5 * TILE;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "exit", dir: "right" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const x0 = g.players[1].x;
+  for (let i = 0; i < 200; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+  }
+  ok(g.players[1].x < x0 - 12, "agent steps back from a stuck doorway");
+}
+
+// ------------------------------------------------- 65. slippery ice (opt-in; canon off is instant)
+{
+  console.log("[65] slippery ice: canon off halts instantly, slick on coasts a little");
+  const core = await import("../shared/core");
+  const right = { ...emptyInput(), r: true };
+
+  // slick OFF — the hero stops the instant input releases (classic movement)
+  const off = freshPlay();
+  core.loadRoom(off, 11, 7 * TILE, 6 * TILE);
+  off.screen = "play"; off.fade = 0;
+  off.players[1].present = false;
+  const pOff: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 20; i++) step(off, right, emptyInput(), pOff);
+  const heldX = off.players[0].x;
+  step(off, emptyInput(), emptyInput(), pOff);   // release
+  ok(off.players[0].x === heldX, "slick off: hero halts instantly on release (canon)");
+
+  // slick ON — same ice room; the hero glides a clearly readable stretch after
+  // release (asymmetric decel), then rests. noticeable, still under control.
+  const on = freshPlay();
+  on.slick = true;
+  core.loadRoom(on, 11, 7 * TILE, 6 * TILE);
+  on.screen = "play"; on.fade = 0;
+  on.players[1].present = false;
+  const pOn: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 20; i++) step(on, right, emptyInput(), pOn);
+  const heldOn = on.players[0].x;
+  step(on, emptyInput(), emptyInput(), pOn);     // release
+  ok(on.players[0].x > heldOn, "slick on: hero keeps gliding a tick after release");
+  for (let i = 0; i < 40; i++) step(on, emptyInput(), emptyInput(), pOn);
+  const coast = on.players[0].x - heldOn;
+  ok(coast > 4 && coast < 16, "the glide is noticeable — a real skid, not a skate rink");
+  ok(on.players[0].vx === 0, "velocity settles back to rest");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

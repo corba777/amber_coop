@@ -192,7 +192,24 @@ export function nextWaypoint(tiles: string[][] | string[], fromX: number, fromY:
       q.push(ni);
     }
   }
-  if (!found) return { x: toX, y: toY };
+  if (!found) {
+    // goal inside a pillar or across a sealed wing — walk the reachable tile
+    // closest to it instead of beelining through solids
+    let best = -1, bestD = Infinity;
+    const start = sy * COLS + sx;
+    for (let i = 0; i < COLS * ROWS; i++) {
+      if (prev[i] === -1) continue;
+      const tx = i % COLS, ty = (i / COLS) | 0;
+      const d = Math.abs(tx - gx) + Math.abs(ty - gy);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best >= 0 && best !== start) {
+      let node = best;
+      while (prev[node] !== start) node = prev[node];
+      return { x: (node % COLS) * TILE + TILE / 2, y: ((node / COLS) | 0) * TILE + TILE / 2 };
+    }
+    return { x: toX, y: toY };
+  }
   // walk back from the goal to the first step off the start tile
   let node = gy * COLS + gx;
   const start = sy * COLS + sx;
@@ -286,6 +303,7 @@ export class AgentPlayer {
   private pickupTargetKey = "";
   private exitStall = 0;
   private exitLastDist = Infinity;
+  private exitGiveUpT = 0;   // suppress route-assist after doorway stall — breaks leader loop
   private attackStall = 0;
   private attackLastDist = Infinity;
   private attackTargetKey = "";
@@ -694,12 +712,14 @@ export class AgentPlayer {
     }
     if (g.screen !== "play" || me.downed) return inp;
     this.attackClock++;
+    if (this.exitGiveUpT > 0) this.exitGiveUpT--;
 
     if (g.room !== this.lastRoom) {
       this.lastRoom = g.room;
       this.routeHopKey = null;
       this.exitStall = 0;
       this.exitLastDist = Infinity;
+      this.exitGiveUpT = 0;
       if (g.travelMode === "free" && this.intent.action === "exit") {
         this.intent = { action: "idle" };
         this.llmIntent = { ...this.llmIntent, action: "idle" };
@@ -820,7 +840,7 @@ export class AgentPlayer {
         }
       }
       if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
-        if (this.opts.leader) {
+        if (this.opts.leader && this.exitGiveUpT <= 0) {
           this.applyRouteHop(g, this.routeDestination(g));
         } else if (!mate.present) {
           this.applyRouteHop(g, this.routeDestination(g));
@@ -900,14 +920,14 @@ export class AgentPlayer {
       } else if (d > reach && d > this.attackLastDist - 1.5) this.attackStall++;
       else this.attackStall = Math.max(0, this.attackStall - 1);
       this.attackLastDist = d;
-      if (this.attackStall > 35 && d > reach) {
+      if (this.attackStall > 25 && d > reach) {
         this.attackStall = 0;
         this.attackFlank++;
         this.approachSeek(g, inp, me, ecx, ecy, this.attackFlank % 2 === 0 ? 1 : -1);
         return inp;
       }
       if (d > reach - 4) {
-        this.waypointSeek(g, inp, me, e.x, e.y);
+        this.approachSeek(g, inp, me, ecx, ecy, 0);
       } else {
         this.face(inp, me, ecx, ecy);
       }
@@ -994,9 +1014,12 @@ export class AgentPlayer {
           this.exitStall = 0;
           this.exitLastDist = Infinity;
           this.routeHopKey = null;
-          this.intent = { action: "follow" };
-          this.llmIntent = { action: "follow" };
-          return this.control(g, depth + 1);
+          this.exitGiveUpT = 180;
+          this.intent = { action: "idle" };
+          this.llmIntent = { action: "idle" };
+          this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
+          this.meleeGuard(inp, g, me, mcx, mcy);
+          return inp;
         }
         this.waypointSeek(g, inp, me, cx, cy);
         this.meleeGuard(inp, g, me, mcx, mcy);
@@ -1016,9 +1039,13 @@ export class AgentPlayer {
           this.exitStall = 0;
           this.exitLastDist = Infinity;
           this.routeHopKey = null;
-          this.intent = { action: "follow" };
-          this.llmIntent = { action: "follow" };
-          return this.control(g, depth + 1);
+          this.exitGiveUpT = 180;
+          this.intent = { action: "idle" };
+          this.llmIntent = { action: "idle" };
+          this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
+          (inp[t[2]] as boolean) = false;
+          this.meleeGuard(inp, g, me, mcx, mcy);
+          return inp;
         }
         this.waypointSeek(g, inp, me, t[0], t[1]);
         (inp[t[2]] as boolean) = true;
@@ -1035,6 +1062,16 @@ export class AgentPlayer {
       }
       if (n > 0) this.seekAway(inp, me, ax / n, ay / n);
       return inp;
+    }
+
+    if (it.action === "idle" && this.exitGiveUpT > 0) {
+      const atEdge = me.x < TILE || me.x + PLAYER_W > W - TILE ||
+        me.y < TILE || me.y + PLAYER_H > H - TILE;
+      if (atEdge) {
+        this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
+        this.meleeGuard(inp, g, me, mcx, mcy);
+        return inp;
+      }
     }
 
     // follow (default): keep a comfortable distance from the partner

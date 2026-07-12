@@ -15,7 +15,7 @@
  * prediction is never corrected — no backward drag, and (because reconcile adds
  * no motion of its own) nothing can double-count into an overshoot. */
 
-import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID } from "../shared/core";
+import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID, ICE_ACCEL, ICE_DECEL } from "../shared/core";
 
 /** where our prediction stood when we sent input `seq` — the anchor the server
  *  answers with its own position for the same seq */
@@ -23,14 +23,16 @@ export interface InputSample { seq: number; px: number; py: number; t: number; }
 
 export interface Pred {
   x: number; y: number; room: number; live: boolean;
+  vx: number; vy: number;   // walk velocity — mirrors core momentum on slick ice
   hist: InputSample[];   // anchors for inputs the server has not answered yet
   lastAck: number;       // highest ack reconciled — guards repeats/out-of-order
 }
 
-export const freshPred = (): Pred => ({ x: 0, y: 0, room: -1, live: false, hist: [], lastAck: -1 });
+export const freshPred = (): Pred =>
+  ({ x: 0, y: 0, room: -1, live: false, vx: 0, vy: 0, hist: [], lastAck: -1 });
 
-/** movement bodies only need position + live */
-type Body = { x: number; y: number; live: boolean };
+/** movement bodies carry position, velocity + live */
+type Body = { x: number; y: number; vx: number; vy: number; live: boolean };
 
 const HIST_MS = 3000;   // cap history age — bounds memory
 const BLEND = 0.3;      // fraction of a genuine divergence absorbed per snapshot
@@ -42,6 +44,12 @@ function solidAtTiles(tiles: string[], px: number, py: number): boolean {
   const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
   if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return true;
   return SOLID.has(tiles[ty][tx]);
+}
+
+function iceAtTiles(tiles: string[], px: number, py: number): boolean {
+  const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+  if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return false;
+  return tiles[ty][tx] === "i";
 }
 
 /** exact mirror of core.moveBody against a raw tile map */
@@ -64,20 +72,33 @@ export function movePredicted(tiles: string[], b: { x: number; y: number },
 }
 
 /** advance a body by dtMs of held input (attack freezes movement, exactly like
- *  the core rule) */
+ *  the core rule). `slick` mirrors g.slick: on ice tiles the body coasts. */
 export function stepPred(b: Body, tiles: string[], inp: Input,
-                         attacking: boolean, dtMs: number): void {
-  if (!b.live || attacking) return;
+                         attacking: boolean, dtMs: number, slick = false): void {
+  if (!b.live || attacking) return;   // frozen like core — velocity left untouched
   const dx = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
   const dy = (inp.d ? 1 : 0) - (inp.u ? 1 : 0);
-  if (dx === 0 && dy === 0) return;
-  const len = Math.hypot(dx, dy);
-  const px = (dx / len) * 1.35, py = (dy / len) * 1.35;
+  const moving = dx !== 0 || dy !== 0;
+  if (!moving && b.vx === 0 && b.vy === 0) return;   // idle & not coasting
+  const sp = 1.35;
+  const len = moving ? Math.hypot(dx, dy) : 1;
+  const tvx = moving ? (dx / len) * sp : 0;
+  const tvy = moving ? (dy / len) * sp : 0;
   // integrate in 60 Hz sub-steps so collisions match the server tick-for-tick
   let ticks = dtMs / (1000 / 60);
   while (ticks > 0) {
     const f = Math.min(1, ticks);
-    movePredicted(tiles, b, px * f, py * f);
+    const onIce = slick && iceAtTiles(tiles, b.x + PLAYER_W / 2, b.y + PLAYER_H / 2);
+    if (onIce) {
+      const ease = (moving ? ICE_ACCEL : ICE_DECEL) * f;
+      b.vx += (tvx - b.vx) * ease;
+      b.vy += (tvy - b.vy) * ease;
+      if (Math.abs(b.vx) < 0.03) b.vx = 0;
+      if (Math.abs(b.vy) < 0.03) b.vy = 0;
+    } else {
+      b.vx = tvx; b.vy = tvy;
+    }
+    if (b.vx !== 0 || b.vy !== 0) movePredicted(tiles, b, b.vx * f, b.vy * f);
     ticks -= 1;
   }
 }
@@ -101,6 +122,7 @@ export function reconcile(pred: Pred, authX: number, authY: number, room: number
   // a new life, a new room, or no fix yet: obey the server outright
   if (!pred.live || pred.room !== room || downed) {
     pred.x = authX; pred.y = authY; pred.room = room; pred.live = true;
+    pred.vx = 0; pred.vy = 0;   // momentum does not survive a new room/life
     pred.hist = [];   // anchors from another room/life are meaningless
     pred.lastAck = Math.max(pred.lastAck, ackSeq);
     return;
