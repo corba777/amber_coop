@@ -16,7 +16,8 @@ node scripts-build.mjs        # build → dist/{server.js, client.html, client3d
                               # prints a build id like 2607101426-si8t (minute-stamp + rand)
 node dist/selftest.js         # FULL suite; prints "SELFTEST OK — N assertions"
 node dist/server.js           # serve on :8081 (PORT env to change)
-PROVIDERS=mock N=5 node dist/bench.js                    # headless agent benchmark
+PROVIDERS=mock N=5 node dist/bench.js                    # headless golem arena
+MODE=rink PROVIDERS=mock,anthropic N=10 node dist/bench.js   # Frozen Playground ice-plan eval
 PROVIDERS=anthropic,ollama N=10 TEMPERAMENT=hunter PLAN_TICKS=90 node dist/bench.js
 ./scripts/deploy-dgx.sh       # rsync + docker compose on spark-a510 (DGX)
 ./scripts/publish-dgx.sh      # selftest gate, then deploy-dgx.sh
@@ -62,13 +63,14 @@ server/index.ts     multi-session WebSocket server. Session class per room code
                     /stats, /stats.json, /health. Logs: logs/plans.jsonl (every
                     LLM plan, with `why`), logs/matches.jsonl (per-game outcome).
 server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
-                    ({action, target, dir, point, say, why}). Controller: 60 Hz
+                    ({action, target, dir, point, icePlan?, say, why}). Controller: 60 Hz
                     reflex layer (auto-engage by temperament incl. during pickup
                     errands, survival pickups, rescue w/ temperament-scaled
                     patience + failsafe, matador dodges, tile-BFS waypointing via
                     nextWaypoint on roomRows(g) — current room only, never
                     g.tiles[] — route compass via routeHop, attackStall flank
-                    when stuck). llmIntent preserved across reflex fights;
+                    when stuck; Frozen Playground: LLM icePlan queue +
+                    nextSlideWaypoint fallback). llmIntent preserved across reflex fights;
                     restored after kill via resumeIntent. Prompts: SYSTEM_PROMPT
                     (partner), SOLO_PROMPT (autopilot), LEADER_PROMPT (AI DUO
                     slot 0 — quest driver, never follow).
@@ -84,9 +86,9 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (331 assertions as of last trunk).
-                    test/bench.ts — virtual-time arena (provider latency measured
-                    separately from decisions).
+test/selftest.ts    the whole safety net (372 assertions as of last trunk).
+                    test/bench.ts — virtual-time benchmarks (MODE=arena golem,
+                    MODE=rink ice-plan eval; latency reported separately).
 ```
 
 ## Iron rules
@@ -122,11 +124,14 @@ test/selftest.ts    the whole safety net (331 assertions as of last trunk).
 
 ## Game content quick-map
 
-17 rooms. Classic: meadow → forest → Amber Lake → (cave) → Old Vault → golem →
+18 rooms. Classic: meadow → forest → Amber Lake → (cave) → Old Vault → golem →
 Amber Blade → melt the north gate → snowfield (bow) → glacier → (cave) → ice
 vault → Winter Wraith. Optional: Cellars (elixir), Frozen Crypt (container +
 phoenix feather), Emberdeep rooms 14–16 (Ember Golem → Miner's Charm → fire
-arrows). LONG QUEST
+arrows), **Frozen Playground** (room 17 — commit-slide puzzle wing; two doors:
+south off the starting meadow — SEALED by ancient ice until the Amber Blade
+melts it (mirror of the north gate; the blade thaws both meadow seals at once) —
+and off the Frozen Crypt). LONG QUEST
 (hardGate) seals the glacier until Emberdeep is cleared. Menu (shared
 `client/menu.ts`): **single or multiplayer** → party path → provider/temp
 (where needed) → **classic / long quest** last (+ SLIPPERY ICE toggle always,
@@ -222,9 +227,63 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   `exitGiveUpT` suppresses leader route-assist so it can't re-loop the door.
 - **Slippery ice** ([65], opt-in): menu toggle `slick`, default OFF so the
   classic quest stays byte-identical. When ON, heroes carry velocity (`Player.vx/vy`)
-  and coast ~3px on `"i"` tiles. `client/predict.ts` mirrors the easing exactly
-  (velocity in `Pred`, `slick` flag from Snapshot) so the local hero still feels
-  responsive. Heroes only; enemies unaffected. `g.slick` in Snapshot + restart-preserved.
+  and coast ~10px on `"i"` tiles via asymmetric easing (`ICE_ACCEL` snappy start,
+  `ICE_DECEL` long glide — both exported so `client/predict.ts` mirrors it exactly).
+  Heroes only; enemies unaffected. `g.slick` in Snapshot + restart-preserved.
+- **Commit-slide puzzle ice** ([66], new content — tester Алексей Белозёров):
+  a *distinct* tile `"z"` (walkable, NOT in SOLID, NOT gated by `slick`). Step on
+  and `slideBody(g, b, w, h, dx, dy)` locks a single-axis skate at `SLIDE_SPEED`
+  until a wall blocks it or the body slides onto grip floor (`"f"`) — the
+  Undertale/Zelda ice-block puzzle. Steering is ignored mid-slide (that IS the
+  puzzle). **EVERYONE skates** — human heroes, AI heroes (`p.npc`) and enemies
+  (`updateEnemy` short-circuits its AI on `"z"` and skates toward the nearest hero,
+  re-aiming off walls). `client/predict.ts` mirrors it for the local human hero.
+- **Slide-aware agent routing** ([68], author Artem 2026-07-12): the earlier
+  "agents don't skate" exemption was rejected as un-fun — agents skate too, but
+  the *controller* (mechanics) knows how. `nextSlideWaypoint` (server/agent.ts) is
+  a **greedy best-first** search over slide-*endpoints* (each press = a full skate
+  to a wall or onto grip floor; heuristic = squared distance to the goal tile, a
+  visited set kills in-plan loops). Greedy on purpose: min-edge BFS chose one-tile
+  "chimney" gaps a body can't line up on beside a wall, so the agent jittered at
+  the doorway; greedy commits to the big distance-closing slide (usually straight
+  onto the ice) and, re-planned each tick, descends to the target. `waypointSeek`
+  swaps in this planner whenever the room has any `"z"`, so `follow`/errands/rescue
+  all bank off the walls. Safety-net fallback when an LLM plan fails mid-execution.
+  Confined to the Frozen Playground wing (room 17), reachable two ways ([67]): south
+  straight off the starting meadow (FREE ROAM split-off) and off the Frozen
+  Crypt (`exits.up` ↔ `exits.down`) — additive side exits, the canon room *sequence*
+  is untouched (guarded by [11]). Commit-slide `"z"` never spreads to canon Ice Vault
+  rooms (they keep soft `"i"` ice only). **Ice-gated meadow entrance ([67], author
+  Artem 2026-07-12):** the south door starts as solid ice (`"I"`, meadow row 13
+  cols 7–8) and only opens once the Amber Blade is claimed — `meltMeadowIce(g)`
+  thaws BOTH the north quest gate and the south playground seal on the first
+  `amberClaimed` press (shared `g.gateMelted`; `loadRoom` re-thaws both on reload).
+
+**Stage 4.6 — LLM ICE BRAIN (Frozen Playground research sandbox). LANDED** — author
+Artem 2026-07-12: the LLM proposes *how* to cross the rink, not just *where* to go.
+
+*Planner surface:* optional `icePlan: ["up","left",...]` on the intent JSON (max 12
+dirs), only when `observation.icePuzzle` is present (room 17). Prompt addendum
+`ICE_ADDENDUM` + compact `icePuzzle` observation: rest tile, target tile, legal
+first directions, exits, sliding state.
+
+*Controller (mechanics):* `simulateIcePlan` / `slideDestTile` validate the sequence
+at plan time; `tickIcePlan` executes one press per rest point (never pops mid-glide);
+loop/timeout/away-from-target failures fall back to `nextSlideWaypoint` ([68]). Honest
+metrics: `icePlanStats` on `AgentPlayer`, `icePlan`/`icePlanValid`/`icePlanReason` in
+`plans.jsonl`, `icePlans` aggregate in `matches.jsonl`. Guarded by [69]–[71].
+
+*Single-axis slide steering ([73]):* on a `"z"` tile `waypointSeek` presses only the
+dominant axis toward the slide endpoint and the `exit` handler never force-holds the
+exit key mid-slide — `slideBody` locks one axis and prioritises horizontal, so a few px
+of cross-axis nudge from a 2-axis `seekDirect` used to skate the agent wall-to-wall and
+trap it in the rink (it could move but never leave). Off the ice (grip floor by the
+door) the normal 2-axis seek + forced exit key resumes, so it walks through the door.
+
+*Research hook:* first benchmark where the LLM's low-level navigation claim is logged
+and measured separately from controller assists — substrate for provider ablations on
+puzzle ice before RL. Bench: `MODE=rink PROVIDERS=mock,anthropic N=10 node dist/bench.js`
+reports `successRate`, `icePlanOkRate`, `icePlanFallbackRate` per provider ([72] smoke).
 
 **Stage 5 — THE ARCHITECT (the dungeon as the third player).** Full design
 spec; implement only on the author's explicit go-ahead, stage by stage.

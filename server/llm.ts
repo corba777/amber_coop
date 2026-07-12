@@ -161,7 +161,15 @@ export function mock(): LLM {
           enemies?: { i: number; hp: number; d: number }[];
           pickups?: { i: number; kind: string; d: number }[];
           me?: { hp: number; maxHp: number };
+          icePuzzle?: { legalFirstDirs?: string[]; target?: [number, number] };
         };
+        if (obs.icePuzzle?.legalFirstDirs?.includes("up")) {
+          return JSON.stringify({
+            action: "follow",
+            icePlan: ["up"],
+            why: "skate north across the rink",
+          });
+        }
         const me = obs.me ?? { hp: 6, maxHp: 6 };
         const hearts = (obs.pickups ?? []).filter(p => p.kind === "heart");
         if (me.hp <= 2 && hearts.length > 0) {
