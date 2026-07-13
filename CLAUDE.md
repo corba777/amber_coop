@@ -86,7 +86,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (372 assertions as of last trunk).
+test/selftest.ts    the whole safety net (382 assertions as of last trunk).
                     test/bench.ts — virtual-time benchmarks (MODE=arena golem,
                     MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -253,11 +253,40 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   straight off the starting meadow (FREE ROAM split-off) and off the Frozen
   Crypt (`exits.up` ↔ `exits.down`) — additive side exits, the canon room *sequence*
   is untouched (guarded by [11]). Commit-slide `"z"` never spreads to canon Ice Vault
-  rooms (they keep soft `"i"` ice only). **Ice-gated meadow entrance ([67], author
-  Artem 2026-07-12):** the south door starts as solid ice (`"I"`, meadow row 13
-  cols 7–8) and only opens once the Amber Blade is claimed — `meltMeadowIce(g)`
-  thaws BOTH the north quest gate and the south playground seal on the first
-  `amberClaimed` press (shared `g.gateMelted`; `loadRoom` re-thaws both on reload).
+  rooms (they keep soft `"i"` ice only). **Frozen Falls meadow entrance ([67],
+  author Artem 2026-07-12):** the south door starts as a solid frozen underground
+  waterfall (`"F"`, meadow row 13 cols 7–8) and only opens once the Amber Blade
+  is claimed — `meltMeadowIce(g)` thaws BOTH the north quest gate and the south
+  falls seal on the first `amberClaimed` press (shared `g.gateMelted`; `loadRoom`
+  re-thaws both on reload).
+- **Rink is not a trap** ([74], author Artem 2026-07-13 — tester report: a
+  hunter rooted in the Frozen Playground, then jammed in the Meadow bushes, then
+  looping back into the rink). Two controller (mechanics) fixes, no world change:
+  (1) On a commit-slide room the auto-engage "chase the nearest foe" reflex is
+  SKIPPED — you cannot chase skating dwellers and swinging freezes the hero
+  mid-tile, so a hunter (infinite engage radius) would root itself on the ice
+  forever, never questing or rescuing; `meleeGuard` still strikes whatever skates
+  into arm's reach while the route/exit proceeds. (2) The forced exit key is
+  committed only once the hero is lined up with the doorway on the CROSS axis
+  (was: forced unconditionally off-ice), so approaching an off-centre gate — the
+  Meadow's right door reached from the south Playground stair — no longer pits a
+  forced "r" against the pathing "l"/"u" into a stall. Underneath both, a real
+  bug in `seekDirect`'s collision probe: it sampled from the body CENTRE
+  (`mcy + PLAYER_H - 2`, ~4px below the feet, never the head), so a hero one row
+  above a solid border read sideways moves as blocked and wedged in the tree gap
+  — now probes the body's true top/middle/bottom (left/middle/right) span.
+
+**Optional idea — Playground refreeze (design-only, NOT implemented; author Artem
+2026-07-13).** A menu toggle (e.g. `refreeze`, default OFF) that recrystallises
+the Frozen Falls on ALL sides of the Frozen Playground once *both* heroes have
+left it (room 17 empty of both) — a pure research observable: "does the agent
+bump the ice wall or route around it?". Deliberately shelved because the [74]
+fixes already stop the agent from getting trapped in / looping back to the rink,
+so refreeze is no longer needed as a workaround — and it would otherwise block a
+human from re-entering the optional wing (and melt-on-touch would re-open it
+anyway). If ever built: gate it behind its own toggle so the classic quest stays
+byte-identical, seal with a NON-melting variant (or the agent just re-melts it),
+and guard with a test. Not to be implemented without the author asking.
 
 **Stage 4.6 — LLM ICE BRAIN (Frozen Playground research sandbox). LANDED** — author
 Artem 2026-07-12: the LLM proposes *how* to cross the rink, not just *where* to go.

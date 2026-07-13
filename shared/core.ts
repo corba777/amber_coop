@@ -13,7 +13,7 @@ export const H = ROWS * TILE;
 export type Dir = 0 | 1 | 2 | 3; // down, up, right, left
 export const DIRV: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
 
-export const SOLID = new Set<string>(["t", "w", "r", "W", "L", "I", "m", "d", "k", "v"]);
+export const SOLID = new Set<string>(["t", "w", "r", "W", "L", "I", "F", "m", "d", "k", "v"]);
 
 export interface Teleport { room: number; x: number; y: number; }
 export interface RoomSpec {
@@ -41,7 +41,7 @@ const ROOM_MEADOW = [
   "tggggggggggggggt",
   "tgggghgggghggggt",
   "tggggggggggggggt",
-  "tttttttIIttttttt",
+  "tttttttFFttttttt",
 ];
 const ROOM_FOREST = [
   "tttttttttttttttt",
@@ -785,7 +785,7 @@ function fillActiveSimRoom(g: Game, index: number): void {
 }
 
 /** the Amber Blade thaws BOTH meadow ice seals: the north quest gate and the
- *  south Frozen Playground door — one warm edge, both walls of ancient ice */
+ *  south Frozen Falls curtain — one warm edge, both walls of ancient ice */
 function meltMeadowIce(g: Game): void {
   g.gateMelted = true;
   setTile(g, 7, 0, "g");
@@ -1748,7 +1748,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
   }
 
-  // meadow ice — both the north quest gate and the south Frozen Playground door
+  // meadow ice — both the north quest gate and the south Frozen Falls curtain
   // are sealed by ancient ice; only the Amber Blade's warm edge melts them
   // (mirror mechanic — the south entrance is frozen until the blade is claimed)
   if (!g.gateMelted && g.room === 0 && inp.u) {
@@ -1770,15 +1770,15 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (!g.gateMelted && g.room === 0 && inp.d) {
     const tx = Math.floor((p.x + PLAYER_W / 2) / TILE);
     const ty = Math.floor((p.y + PLAYER_H) / TILE) + 1;
-    if (ty < ROWS && tileAt(g, tx, ty) === "I") {
+    if (ty < ROWS && tileAt(g, tx, ty) === "F") {
       if (g.amberClaimed) {
         meltMeadowIce(g);
-        g.message = "The Amber Blade melts the ice! The playground opens";
+        g.message = "The Amber Blade wakes the Frozen Falls!";
         g.messageT = 200;
         burst(g, 7.5 * TILE + 8, H - 8, "#9fe8ff", 14);
         sfx(g, "melt");
       } else if (g.messageT === 0) {
-        g.message = "A wall of ancient ice. Something warm could melt it...";
+        g.message = "A frozen underground fall blocks the way. Something warm could wake the water...";
         g.messageT = 150;
       }
     }
