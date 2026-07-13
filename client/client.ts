@@ -233,6 +233,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   KeyX: "b", KeyK: "b",
   KeyF: "f",
   KeyC: "c",
+  ShiftLeft: "k", ShiftRight: "k",
   Enter: "st", KeyE: "st",
 };
 window.addEventListener("keydown", ev => {
@@ -420,11 +421,21 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
   const set = HEROES[idx];
   if (p.downed) {
     ctx.save();
-    ctx.globalAlpha = 0.8;
+    ctx.globalAlpha = p.dead ? 0.5 : 0.8;
     ctx.translate(Math.round(x) + 8, Math.round(y) + 10);
     ctx.rotate(Math.PI / 2);
     ctx.drawImage(set.down[0], -8, -10);
     ctx.restore();
+    if (p.dead) {
+      // a betrayed hero: no revive, no bleed clock — just a mark in the snow
+      ctx.strokeStyle = "#c81e3a";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 1); ctx.lineTo(x + 10, y + 11);
+      ctx.moveTo(x + 10, y + 1); ctx.lineTo(x, y + 11);
+      ctx.stroke();
+      return;
+    }
     if (p.reviveP > 0) {
       ctx.strokeStyle = "#9be07a";
       ctx.lineWidth = 2;
@@ -583,6 +594,18 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 
 function drawUI(s: Snapshot): void {
   const me = s.players[mySlot];
+  // TREASON: your own partner cut the cord. You are dead, but the run goes on
+  // without you — a spectator to your betrayer's quest.
+  if (s.screen === "play" && me.dead && !isSpectator(s)) {
+    ctx.fillStyle = "rgba(20,4,10,0.55)";
+    ctx.fillRect(0, 0, W, H);
+    centerText([
+      ["BETRAYED", 14, "#e8384f"],
+      ["your partner cut the cord and left you to the cold", 6, "#d8b9c2"],
+      [`${names[1 - mySlot].slice(0, 16)} quests on without you`, 6, "#9a93b8"],
+    ], H / 2 - 12);
+    return;
+  }
   if (isSpectator(s)) {
     if (sessionMode === "duo") {
       drawDuoSpectatorHud(ctx, s, names);
@@ -663,14 +686,23 @@ function drawUI(s: Snapshot): void {
     ctx.fillText(rl, W - 5, 9);
     ctx.textAlign = "left";
   }
-  if (s.thought && showThought && s.screen === "play") {
+  const thoughtLines = s.thoughts && s.thoughts.length
+    ? s.thoughts.map(t => ({ slot: t.slot,
+        text: `${t.name.slice(0, 12)}: ${t.action}${t.why ? " \u2014 " + t.why : ""}`.slice(0, 60) }))
+    : s.thought
+      ? [{ slot: 1, text: `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58) }]
+      : [];
+  if (thoughtLines.length && showThought && s.screen === "play") {
     ctx.font = "7px monospace";
-    const line = `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58);
-    const tw = ctx.measureText(line).width;
-    ctx.fillStyle = "rgba(8,6,16,0.72)";
-    ctx.fillRect(2, H - 13, tw + 6, 11);
-    ctx.fillStyle = "#9fc8e0";
-    ctx.fillText(line, 5, H - 5);
+    const n = thoughtLines.length;
+    thoughtLines.forEach((tl, i) => {
+      const y = H - 13 - (n - 1 - i) * 11;   // stack upward, newest layout order
+      const tw = ctx.measureText(tl.text).width;
+      ctx.fillStyle = "rgba(8,6,16,0.72)";
+      ctx.fillRect(2, y, tw + 6, 11);
+      ctx.fillStyle = tl.slot === 0 ? "#ffcf8f" : "#9fc8e0";   // leader gold, companion blue
+      ctx.fillText(tl.text, 5, y + 8);
+    });
   }
   if (s.messageT > 0 && s.message) {
     ctx.globalAlpha = Math.min(1, s.messageT / 30);

@@ -15,6 +15,7 @@ export interface MenuState {
   travel: "linked" | "free";
   architect: boolean;
   slick: boolean;
+  treason: boolean;
   provider: number;
   provider2: number;
   temp: number;
@@ -27,7 +28,7 @@ export const PROVIDER_ORDER = ["ollama", "anthropic", "openai"] as const;
 export function freshMenu(): MenuState {
   return {
     step: 0, idx: 0, path: "",
-    hard: false, travel: "linked", architect: false, slick: false,
+    hard: false, travel: "linked", architect: false, slick: false, treason: false,
     provider: 0, provider2: 0, temp: 1, temp2: 1,
   };
 }
@@ -77,6 +78,12 @@ function questOptions(menu: MenuState): MenuOption[] {
     label: menu.slick ? "[x] SLIPPERY ICE" : "[ ] SLIPPERY ICE",
     ok: true, hint: "the ice vault and the wraith's throne turn slick underfoot", toggle: true,
   });
+  if (menu.path === "multi-coop" || menu.path === "multi-ai" || menu.path === "multi-duo") {
+    opts.push({
+      label: menu.treason ? "[x] TREASON" : "[ ] TREASON",
+      ok: true, hint: "friendly fire — hold SHIFT while attacking to strike your partner", toggle: true,
+    });
+  }
   if (menu.path.startsWith("multi")) {
     opts.push({
       label: menu.architect ? "[x] THE ARCHITECT" : "[ ] THE ARCHITECT",
@@ -186,12 +193,15 @@ export function menuConfirm(
       menu.architect = !menu.architect;
     } else if (pick.label.includes("SLIPPERY ICE")) {
       menu.slick = !menu.slick;
+    } else if (pick.label.includes("TREASON")) {
+      menu.treason = !menu.treason;
     }
     return;
   }
   menu.hard = menu.idx === 1;
   const travel = menu.travel;
-  const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect, slick: menu.slick };
+  const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect,
+    slick: menu.slick, treason: menu.treason };
   const host = hostName?.trim().slice(0, 12);
 
   if (menu.path === "single-human") {

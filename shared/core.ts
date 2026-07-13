@@ -537,6 +537,7 @@ const WRAITH_REVIVE_NEEDED = 90;
 export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
+  betray?: boolean;   // TREASON: a "friendly" arrow that also strikes the shooter's partner
 }
 
 export interface Player {
@@ -552,6 +553,7 @@ export interface Player {
   walk: number;
   moving: boolean;
   downed: boolean;
+  dead: boolean;        // TREASON: cut down for good by a partner's abandonment — no revive, no re-bleed
   elixir: boolean;      // carried Elixir of Life (auto-revive on fall)
   reviveP: number;      // 0..90 revive progress while partner touches
   bleedT: number;       // FREE ROAM alone-down countdown (ticks)
@@ -573,12 +575,13 @@ export interface Input {
   l: boolean; r: boolean; u: boolean; d: boolean;
   a: boolean; b: boolean; st: boolean; f: boolean;
   c: boolean;   // ring the Frost Bell (one-use room freeze)
+  k: boolean;   // TREASON modifier: hold while attacking to also strike your partner
 }
 export interface LatchedInput extends Input {
-  aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean;   // fresh-press edges
+  aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean; kE: boolean;   // fresh-press edges
 }
 export const emptyInput = (): Input =>
-  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false });
+  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false, k: false });
 
 export interface Ending { id: string; title: string; lines: string[]; }
 
@@ -588,6 +591,15 @@ export interface Ending { id: string; title: string; lines: string[]; }
 export function endingFor(g: Game): Ending {
   const solo = !g.players[1].present || !g.players[0].present;
   const totalDowns = g.stats[0].downs + g.stats[1].downs;
+  // TREASON outranks everything: a hero who reached spring over their partner's
+  // body owns the epilogue, even once the betrayal left them questing "solo".
+  // Only reachable with the treason toggle on (g.betrayed never set otherwise),
+  // so the canon path stays byte-identical.
+  if (g.betrayed) {
+    return { id: "betrayal", title: "THE BLADE THAT TURNED", lines: [
+      "spring came — but one hero reached it over the other's blood.",
+      "the songs will name a traitor, and the winter will smile." ] };
+  }
   if (solo) {
     if (g.wraithSpared) {
       return { id: "mercy", title: "WINTER'S COMPANION", lines: [
@@ -684,6 +696,8 @@ export interface Game {
   charmClaimed: boolean;
   hardGate: boolean;   // seal the glacier behind the charm (menu choice)
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
+  treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
+  betrayed: boolean;   // a hero was downed by their partner's blade/arrow (drives the betrayal ending)
   wraithSpared: boolean;
   companion: { x: number; y: number; t: number; sim: number } | null;   // the spared wraith (lives in ONE sim)
   ending: Ending | null;
@@ -716,9 +730,11 @@ export const SLIDE_SPEED = 1.7;
 export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
   dmgTaken: number; downs: number; revives: number; elixirsUsed: number;
+  betrayalDmg: number; betrayalDowns: number;   // TREASON: harm this hero dealt to their PARTNER
 }
 export const emptyStats = (): PlayerStats =>
-  ({ dmgDealt: 0, bossDmg: 0, kills: 0, dmgTaken: 0, downs: 0, revives: 0, elixirsUsed: 0 });
+  ({ dmgDealt: 0, bossDmg: 0, kills: 0, dmgTaken: 0, downs: 0, revives: 0, elixirsUsed: 0,
+     betrayalDmg: 0, betrayalDowns: 0 });
 
 function sfx(g: Game, name: string): void { g.events.push({ t: "sfx", name }); }
 function burst(g: Game, x: number, y: number, color: string, n = 8): void {
@@ -730,7 +746,7 @@ export function newPlayer(idx: number): Player {
     x: (3 + idx * 1.5) * TILE, y: 6.5 * TILE, dir: 0,
     hp: 6, maxHp: 6, keys: 0,
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, vx: 0, vy: 0, walk: 0, moving: false,
-    downed: false, elixir: false, reviveP: 0, bleedT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
+    downed: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
   };
 }
@@ -945,7 +961,7 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; g.companion.sim = 0; }
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
-    if (p.downed) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; }
+    if (p.downed && !p.dead) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; }
   }
   transitionBanner(g, index);
 }
@@ -960,7 +976,7 @@ export function newGame(): Game {
     hasBow: false, hasFeather: false, hasBell: false, hasMirror: false, mirrorLost: false,
     containers: {}, elixirs: {}, feathers: {}, bells: {}, mirrors: {},
     wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
-    slick: false,
+    slick: false, treason: false, betrayed: false,
     wraithSpared: false, companion: null, ending: null,
     fade: 0, message: "", messageT: 0, ticks: 0, shake: 0,
     events: [] as GameEvent[], stats: [emptyStats(), emptyStats()] as [PlayerStats, PlayerStats],
@@ -1209,6 +1225,40 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
   g.messageT = 180;
 }
 
+/** TREASON — deliberate abandonment. A partner is bleeding out alone in another
+ *  room and the countdown is what usually decides their fate: run out and it is
+ *  a shared gameover ("help came too late", the `abandoned` ending). Holding the
+ *  treason gesture while they bleed CUTS THE CORD instead — the timer ends now,
+ *  the abandoned hero dies for good (`dead`), but the traitor's quest goes on
+ *  (no gameover). That is the observable that tells "didn't make it" apart from
+ *  "I chose to let you die". The fallen hero's personal Elixir spills back into
+ *  their room, free for the survivor to claim. Treason toggle gates it all. */
+function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
+  if (!g.treason || !inp.k) return;
+  const oi = 1 - pi;
+  const o = g.players[oi];
+  if (!o.present || !o.downed || o.dead || o.bleedT <= 0) return;
+
+  o.bleedT = 0;
+  o.dead = true;
+  o.reviveP = 0;
+  g.stats[pi].betrayalDowns += 1;
+  g.betrayed = true;
+  if (o.elixir) {
+    o.elixir = false;
+    simOf(g, oi).pickups.push({
+      kind: "elixir",
+      x: o.x + PLAYER_W / 2,
+      y: o.y + PLAYER_H / 2,
+      t: 0,
+    });
+  }
+  burst(g, o.x + 5, o.y + 6, "#c81e3a", 14);
+  sfx(g, "down");
+  g.message = "The bond breaks in the cold — one hero is left behind, the other walks on alone.";
+  g.messageT = 220;
+}
+
 /** Mirror Shard quirk: it only reveals itself to a lone hero. The instant two
  *  heroes share the Amber Lake with the shard still unclaimed, it shatters and
  *  is gone for the rest of the run (`mirrorLost`). A quiet reward for solitude —
@@ -1236,11 +1286,17 @@ function bleedoutEnding(g: Game): Ending {
     "spring will not forget who was left behind." ] };
 }
 
-function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: number): void {
+function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: number,
+                    attacker?: number): void {
   const p = g.players[pi];
   if (p.invuln > 0 || p.downed) return;
   p.hp -= dmg;
   g.stats[pi].dmgTaken += dmg;
+  // TREASON: attribute harm dealt by a partner (the interpretability corpus
+  // wants the traitor's ledger, not just the victim's). A down flags the ending.
+  if (attacker !== undefined && attacker !== pi) {
+    g.stats[attacker].betrayalDmg += dmg;
+  }
   p.invuln = 60;
   const dx = p.x - fromX, dy = p.y - fromY;
   const len = Math.hypot(dx, dy) || 1;
@@ -1261,6 +1317,10 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   }
   if (p.hp <= 0) {
     g.stats[pi].downs += 1;
+    if (attacker !== undefined && attacker !== pi) {
+      g.stats[attacker].betrayalDowns += 1;
+      g.betrayed = true;
+    }
     p.hp = 0;
     p.downed = true;
     p.reviveP = 0;
@@ -1332,8 +1392,8 @@ function wraithTeleport(g: Game, e: Enemy): void {
 }
 
 function shoot(g: Game, x: number, y: number, vx: number, vy: number,
-               friendly: boolean, owner?: number): void {
-  g.projectiles.push({ x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner });
+               friendly: boolean, owner?: number, betray?: boolean): void {
+  g.projectiles.push({ x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray });
 }
 
 /** does the sentinel's raised shield face this attack origin? */
@@ -1623,6 +1683,7 @@ function killEnemy(g: Game, e: Enemy): void {
 function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   const p = g.players[pi];
   if (!p.present) return;
+  if (p.dead) return;   // TREASON: a betrayed corpse — no timers, no revive, no re-bleed
   if (p.invuln > 0) p.invuln--;
   if (p.transitionCd > 0) p.transitionCd--;
   if (p.crossFade > 0) p.crossFade = Math.max(0, p.crossFade - 0.05);
@@ -1635,6 +1696,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
 
   if (!p.downed) tryFeatherRevive(g, pi, inp);
   if (!p.downed) tryFrostBell(g, pi, inp);
+  if (!p.downed) tryBetrayAbandon(g, pi, inp);
 
   if (p.downed) {
     const other = g.players[1 - pi];
@@ -1758,13 +1820,25 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
       }
     }
+    // TREASON: hold the modifier and the live blade also bites your partner
+    // (same room only — you cannot stab across a FREE ROAM split).
+    if (g.treason && inp.k) {
+      const oi = 1 - pi;
+      const o = g.players[oi];
+      if (o.present && !o.downed && o.simIndex === p.simIndex &&
+          overlap(box.x, box.y, box.w, box.h, o.x, o.y, PLAYER_W, PLAYER_H)) {
+        hurtPlayer(g, oi, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        burst(g, o.x + 5, o.y + 6, "#c81e3a", 8);
+      }
+    }
   }
 
   // bow
   if (g.hasBow && inp.bE && p.bowCd === 0) {
     p.bowCd = 24;
     const [vx, vy] = DIRV[p.dir];
-    shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi);
+    shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
+      g.treason && inp.k);
     sfx(g, "bow");
   } else if (!g.hasBow && inp.bE && g.messageT === 0) {
     g.message = "You don't have a bow yet... seek it in the snow";
@@ -2011,6 +2085,16 @@ function tickSimPhysics(g: Game): void {
           break;
         }
       }
+      // TREASON: a betray arrow also strikes the shooter's partner
+      if (pr.betray && pr.life > 0) {
+        const oi = 1 - (pr.owner ?? 0);
+        const o = g.players[oi];
+        if (o.present && !o.downed && o.simIndex === si &&
+            pr.x > o.x && pr.x < o.x + PLAYER_W && pr.y > o.y && pr.y < o.y + PLAYER_H) {
+          hurtPlayer(g, oi, g.charmClaimed ? 2 : 1, pr.x - pr.vx * 8, pr.y - pr.vy * 8, pr.owner);
+          pr.life = 0;
+        }
+      }
     } else {
       g.players.forEach((p, pi) => {
         if (p.downed || !p.present || p.simIndex !== si || pr.life <= 0) return;
@@ -2151,6 +2235,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         const hardGate = g.hardGate;
         const travelMode = g.travelMode;
         const slick = g.slick;
+        const treason = g.treason;
         Object.assign(g, newGame());
         g.players[0].present = present0;
         g.players[1].present = present1;
@@ -2158,6 +2243,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         g.hardGate = hardGate;
         g.travelMode = travelMode;
         g.slick = slick;
+        g.treason = treason;
         g.screen = "play";
       }
       break;
@@ -2191,7 +2277,7 @@ export interface Snapshot {
   players: {
     x: number; y: number; dir: Dir; hp: number; maxHp: number; keys: number;
     attack: number; invuln: number; walk: number; moving: boolean;
-    downed: boolean; elixir: boolean; reviveP: number; bleedT: number;
+    downed: boolean; dead: boolean; elixir: boolean; reviveP: number; bleedT: number;
     doorCamp: boolean;
     say: string; sayT: number; present: boolean;
   }[];
@@ -2211,9 +2297,14 @@ export interface Snapshot {
   stats: [PlayerStats, PlayerStats];
   ending: Ending | null;
   thought?: { action: string; why?: string; ms: number } | null;
+  // AI DUO: one entry per questing agent (slot 0 leader + slot 1 companion), so
+  // spectators read both minds. Single-AI modes carry one entry. `thought` above
+  // is kept for legacy single-line renderers.
+  thoughts?: { slot: number; name: string; action: string; why?: string; ms: number }[] | null;
   partnerView?: PartnerView | null;
   mode?: string | null;   // session mode — clients use for spectator UI
   slick?: boolean;        // slippery ice on — client prediction must mirror it
+  treason?: boolean;      // friendly fire enabled — clients hint the traitor's blade
   ack?: number;           // last input seq the server applied for this viewer
   ackX?: number;          // where the hero stood when that input arrived — the
   ackY?: number;          // twin of the client's own anchor, so lag cancels out
@@ -2231,7 +2322,7 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
   return {
     x: p.x, y: p.y, dir: p.dir, hp: p.hp, maxHp: p.maxHp, keys: p.keys,
     attack: p.attack, invuln: p.invuln, walk: p.walk, moving: p.moving,
-    downed: p.downed, elixir: p.elixir, reviveP: p.reviveP, bleedT: p.bleedT,
+    downed: p.downed, dead: p.dead, elixir: p.elixir, reviveP: p.reviveP, bleedT: p.bleedT,
     doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
   };
@@ -2299,6 +2390,7 @@ export function toSnapshot(g: Game, names: [string, string],
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
     hasBell: g.hasBell, hasMirror: g.hasMirror,
     slick: g.slick,
+    treason: g.treason,
     message: overlay.message, messageT: overlay.messageT,
     shake: g.shake, ticks: g.ticks, fade: overlay.fade,
     events: g.events.slice(),
@@ -2319,5 +2411,6 @@ export function latch(cur: Input, prev: Input): LatchedInput {
     stE: cur.st && !prev.st,
     fE: cur.f && !prev.f,
     cE: cur.c && !prev.c,
+    kE: cur.k && !prev.k,
   };
 }

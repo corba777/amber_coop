@@ -5,12 +5,16 @@
  *  MODE=rink: Frozen Playground commit-slide puzzle — agent must cross the
  *  rink to rejoin a stationary partner at the north grip landing. Measures
  *  icePlan success vs controller fallback per provider.
+ *  MODE=duo: AI DUO coordination dyad — BOTH heroes are agents (leader slot 0 +
+ *  companion slot 1) fighting the golem together. Team outcome + per-slot
+ *  metrics. PROVIDERS/TEMPERAMENTS take a colon pair (slot0:slot1).
  *
  *  Usage:
  *    PROVIDERS=mock,anthropic N=10 node dist/bench.js
  *    MODE=rink PROVIDERS=mock,anthropic N=10 PLAN_TICKS=90 node dist/bench.js
+ *    MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter node dist/bench.js
  *
- *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, MODE (arena|rink)
+ *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, TEMPERAMENTS, MODE (arena|rink|duo)
  * ========================================================================= */
 
 import fs from "node:fs";
@@ -18,7 +22,7 @@ import {
   Game, Input, emptyInput, latch, newGame, loadRoom, TILE, PlayerStats,
 } from "../shared/core";
 import { update } from "../shared/core";
-import { AgentPlayer, IcePlanStats } from "../server/agent";
+import { AgentPlayer, IcePlanStats, Temperament } from "../server/agent";
 import { ProviderName, configFromEnv, loadDotEnv, makeLLM, mock } from "../server/llm";
 
 loadDotEnv();
@@ -47,6 +51,29 @@ interface ArenaEpisode extends EpisodeBase {
 interface RinkEpisode extends EpisodeBase {
   outcome: "success" | "timeout";
   finalDist: number;
+}
+
+interface DuoEpisode {
+  outcome: "win" | "loss" | "timeout";
+  ticks: number;
+  p0: PlayerStats; p1: PlayerStats;
+  plans0: number; plans1: number;
+  avgLatencyMs0: number; avgLatencyMs1: number;
+  assists0: number; assists1: number;
+  fails0: number; fails1: number;
+}
+
+/** Parse a colon pair (slot0:slot1) for duo; falls back to comma / single value. */
+function duoPair(): { p: [ProviderName, ProviderName]; t: [Temperament, Temperament] } {
+  const rawP = process.env.PROVIDERS || "mock:mock";
+  const pp = (rawP.includes(":") ? rawP.split(":") : rawP.split(",")).map(s => s.trim());
+  const p0 = (pp[0] || "mock") as ProviderName;
+  const p1 = (pp[1] || pp[0] || "mock") as ProviderName;
+  const rawT = process.env.TEMPERAMENTS || `${TEMPERAMENT}:${TEMPERAMENT}`;
+  const tt = (rawT.includes(":") ? rawT.split(":") : rawT.split(",")).map(s => s.trim());
+  const t0 = (tt[0] || "companion") as Temperament;
+  const t1 = (tt[1] || tt[0] || "companion") as Temperament;
+  return { p: [p0, p1], t: [t0, t1] };
 }
 
 function freshArena(): Game {
@@ -154,6 +181,49 @@ export async function rinkEpisode(provider: ProviderName, maxTicks = RINK_MAX_TI
   };
 }
 
+/** One golem fight with BOTH heroes under LLM control (leader + companion). */
+export async function duoEpisode(
+  p: [ProviderName, ProviderName], t: [Temperament, Temperament],
+): Promise<DuoEpisode> {
+  const cfg = configFromEnv();
+  const g = freshArena();
+  g.players[0].npc = false;   // leader may transition (LINKED drag carries the mate)
+  g.players[1].npc = true;
+  const leader = new AgentPlayer(
+    p[0] === "mock" ? mock() : makeLLM(p[0], cfg), 0,
+    { planMs: 0, temperament: t[0], leader: true });
+  const mate = new AgentPlayer(
+    p[1] === "mock" ? mock() : makeLLM(p[1], cfg), 1,
+    { planMs: 0, temperament: t[1] });
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+
+  let ticks = 0;
+  while (ticks < MAX_TICKS && g.screen === "play") {
+    if (ticks % PLAN_TICKS === 0) {
+      await leader.planOnce(g);
+      await mate.planOnce(g);
+    }
+    const i0 = leader.control(g);
+    const i1 = mate.control(g);
+    update(g, [latch(i0, prev[0]), latch(i1, prev[1])]);
+    prev[0] = { ...i0 };
+    prev[1] = { ...i1 };
+    ticks++;
+    if (g.enemies.length > 0 && g.enemies.every(e => e.dead)) break;
+  }
+
+  return {
+    outcome: g.golemDead ? "win" : g.screen === "gameover" ? "loss" : "timeout",
+    ticks,
+    p0: g.stats[0], p1: g.stats[1],
+    plans0: leader.planCount, plans1: mate.planCount,
+    avgLatencyMs0: leader.planCount ? Math.round(leader.latencySum / leader.planCount) : 0,
+    avgLatencyMs1: mate.planCount ? Math.round(mate.latencySum / mate.planCount) : 0,
+    assists0: leader.routeAssists, assists1: mate.routeAssists,
+    fails0: leader.parseFailures, fails1: mate.parseFailures,
+  };
+}
+
 function median(xs: number[]): number | null {
   if (xs.length === 0) return null;
   const s = xs.slice().sort((a, b) => a - b);
@@ -246,11 +316,53 @@ async function runRink(): Promise<void> {
   console.table(out);
 }
 
+async function runDuo(): Promise<void> {
+  const { p, t } = duoPair();
+  console.log(`AMBER BENCH · AI DUO golem coordination · ${N} episodes · ${p[0]}[${t[0]}] + ${p[1]}[${t[1]}] · plan every ${PLAN_TICKS} ticks\n`);
+  const eps: DuoEpisode[] = [];
+  process.stdout.write(`${p[0]}+${p[1]} `.padEnd(20));
+  for (let i = 0; i < N; i++) {
+    const e = await duoEpisode(p, t);
+    eps.push(e);
+    process.stdout.write(e.outcome === "win" ? "W" : e.outcome === "loss" ? "L" : "T");
+  }
+  const wins = eps.filter(e => e.outcome === "win");
+  const avg = (f: (e: DuoEpisode) => number): number => +(eps.reduce((a, e) => a + f(e), 0) / N).toFixed(2);
+  const rate = (num: (e: DuoEpisode) => number, den: (e: DuoEpisode) => number): number =>
+    +(eps.reduce((a, e) => a + num(e), 0) / Math.max(1, eps.reduce((a, e) => a + den(e), 0))).toFixed(3);
+  const latW = (lat: (e: DuoEpisode) => number, pl: (e: DuoEpisode) => number): number =>
+    Math.round(eps.reduce((a, e) => a + lat(e) * pl(e), 0) / Math.max(1, eps.reduce((a, e) => a + pl(e), 0)));
+  const row = {
+    mode: "duo",
+    pair: `${p[0]}+${p[1]} [${t[0]}+${t[1]}]`,
+    provider1: p[0], provider2: p[1], temperament1: t[0], temperament2: t[1],
+    episodes: N,
+    winrate: +(wins.length / N).toFixed(2),
+    medianWinTicks: median(wins.map(e => e.ticks)),
+    avgTeamBossDmg: avg(e => e.p0.bossDmg + e.p1.bossDmg),
+    avgTeamTaken: avg(e => e.p0.dmgTaken + e.p1.dmgTaken),
+    avgTeamDowns: avg(e => e.p0.downs + e.p1.downs),
+    avgTeamRevives: avg(e => e.p0.revives + e.p1.revives),
+    avgAssists0: avg(e => e.assists0),
+    avgAssists1: avg(e => e.assists1),
+    parseFailRate0: rate(e => e.fails0, e => e.plans0),
+    parseFailRate1: rate(e => e.fails1, e => e.plans1),
+    avgLatencyMs0: latW(e => e.avgLatencyMs0, e => e.plans0),
+    avgLatencyMs1: latW(e => e.avgLatencyMs1, e => e.plans1),
+  };
+  console.log("");
+  fs.appendFileSync("bench-results.jsonl",
+    JSON.stringify({ t: new Date().toISOString(), ...row, episodes_detail: eps }) + "\n");
+  console.log("");
+  console.table([row]);
+}
+
 async function main(): Promise<void> {
   if (MODE === "rink") await runRink();
   else if (MODE === "arena") await runArena();
+  else if (MODE === "duo") await runDuo();
   else {
-    console.error(`Unknown MODE=${MODE} — use arena or rink`);
+    console.error(`Unknown MODE=${MODE} — use arena, rink or duo`);
     process.exit(1);
   }
   console.log("details → bench-results.jsonl");
