@@ -121,6 +121,7 @@ export const TILES: Record<string, HTMLCanvasElement> = {
   e: bakeTile(x => { x.fillStyle = "#3a2620"; x.fillRect(0, 0, 16, 16); speckle(x, "#57342a", 8, 5); speckle(x, "#ff7a3d", 3, 23); speckle(x, "#2a1a16", 6, 31); }),
   v: bakeTile(x => { x.fillStyle = "#e8501e"; x.fillRect(0, 0, 16, 16); x.fillStyle = "#ffb545"; x.fillRect(1, 4, 6, 2); x.fillRect(8, 10, 7, 2); x.fillRect(4, 13, 4, 1); x.fillStyle = "#8f1626"; x.fillRect(0, 0, 16, 1); x.fillRect(0, 8, 5, 1); x.fillRect(11, 5, 5, 1); }),
   I: bakeTile(x => { x.fillStyle = "#8fd4f2"; x.fillRect(0, 0, 16, 16); x.fillStyle = "#cfeefc"; x.fillRect(2, 2, 4, 10); x.fillRect(9, 4, 3, 9); x.strokeStyle = "#5fb2d8"; x.strokeRect(0.5, 0.5, 15, 15); }),
+  F: bakeTile(x => { x.fillStyle = "#67bfe7"; x.fillRect(0, 0, 16, 16); x.fillStyle = "#bff0ff"; x.fillRect(2, 0, 2, 16); x.fillRect(7, 0, 3, 16); x.fillRect(13, 0, 1, 16); x.fillStyle = "#eefbff"; x.fillRect(1, 2, 5, 1); x.fillRect(8, 8, 6, 1); x.fillRect(4, 13, 7, 1); x.strokeStyle = "#438fb8"; x.strokeRect(0.5, 0.5, 15, 15); }),
   z: bakeTile(x => { x.fillStyle = "#9ecff0"; x.fillRect(0, 0, 16, 16); x.fillStyle = "#c7ecff"; x.fillRect(0, 0, 16, 5); x.fillStyle = "#7db8dd"; x.fillRect(0, 12, 16, 4); x.strokeStyle = "#ffffff"; x.lineWidth = 1; x.beginPath(); x.moveTo(2, 4); x.lineTo(9, 4); x.moveTo(7, 9); x.lineTo(14, 9); x.stroke(); x.strokeStyle = "#6fa8ce"; x.strokeRect(0.5, 0.5, 15, 15); }),
 };
 

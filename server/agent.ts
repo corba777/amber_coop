@@ -1039,9 +1039,15 @@ export class AgentPlayer {
     const passive = this.intent.action === "follow" || this.intent.action === "idle";
     const errand = this.intent.action === "pickup" || this.intent.action === "goto"
       || this.intent.action === "exit";
+    // On the commit-slide rink the "chase the nearest foe" reflex is a TRAP:
+    // enemies skate away and swinging freezes the hero mid-tile, so a hunter
+    // (infinite engage radius) roots itself in the Frozen Playground forever,
+    // never questing or rescuing. Skip the chase on the ice — meleeGuard still
+    // strikes whatever skates into arm's reach while the route/exit proceeds.
+    const slideRoom = this.roomRows(g).some(r => r.includes("z"));
     if (passive || errand) {
       let best = -1, bestScore = Infinity;
-      g.enemies.forEach((e, i) => {
+      if (!slideRoom) g.enemies.forEach((e, i) => {
         if (e.dead) return;
         if (e.kind === "wraith" && e.phase === 9) return;
         const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
@@ -1285,9 +1291,19 @@ export class AgentPlayer {
           return inp;
         }
         this.waypointSeek(g, inp, me, t[0], t[1]);
-        // Force the exit key only off the ice: on a commit-slide tile a second
-        // axis would corrupt the slide commit (waypointSeek already steers).
-        if (!this.onSlideTile(g, me)) (inp[t[2]] as boolean) = true;
+        // Commit the threshold key only once lined up with the doorway on the
+        // CROSS axis. A blindly-forced exit key fights waypointSeek whenever the
+        // door is off to a corner and the route must first go the other way —
+        // e.g. entering the Meadow from the south Playground stair and having to
+        // climb north before the right gate: forced "r" cancelled the pathing
+        // "l"/"u" and the agent creeped in place. On a commit-slide tile never
+        // force a second axis (it corrupts the single-axis slide commit).
+        if (!this.onSlideTile(g, me)) {
+          const horiz = it.dir === "left" || it.dir === "right";
+          const aligned = horiz ? Math.abs(me.y - t[1]) < TILE
+                                : Math.abs(me.x - t[0]) < TILE;
+          if (aligned) (inp[t[2]] as boolean) = true;
+        }
       }
       this.meleeGuard(inp, g, me, mcx, mcy);
       return inp;
@@ -1524,14 +1540,19 @@ export class AgentPlayer {
     const dx = tx - me.x, dy = ty - me.y;
     const mcx = me.x + PLAYER_W / 2, mcy = me.y + PLAYER_H / 2;
     const probe = 10;
+    // Probe the body's ACTUAL span (top/middle/bottom, left/middle/right). The
+    // old form offset from the CENTRE (mcy + PLAYER_H - 2), so it sampled ~4px
+    // BELOW the feet and never the head — a hero standing one row above a solid
+    // border (e.g. entering the Meadow on the melted south stair, trees in the
+    // row below) wrongly read sideways moves as blocked and wedged in the gap.
     const canH = (sign: number): boolean =>
+      !solidAt(g, mcx + sign * probe, me.y + 2) &&
       !solidAt(g, mcx + sign * probe, mcy) &&
-      !solidAt(g, mcx + sign * probe, mcy + 2) &&
-      !solidAt(g, mcx + sign * probe, mcy + PLAYER_H - 2);
+      !solidAt(g, mcx + sign * probe, me.y + PLAYER_H - 2);
     const canV = (sign: number): boolean =>
+      !solidAt(g, me.x + 2, mcy + sign * probe) &&
       !solidAt(g, mcx, mcy + sign * probe) &&
-      !solidAt(g, mcx + 2, mcy + sign * probe) &&
-      !solidAt(g, mcx + PLAYER_W - 2, mcy + sign * probe);
+      !solidAt(g, me.x + PLAYER_W - 2, mcy + sign * probe);
 
     let h = false, v = false;
     if (Math.abs(dx) > 2) {

@@ -4,7 +4,7 @@
  * ========================================================================= */
 
 import {
-  newGame, update, latch, emptyInput, toSnapshot, validateRooms,
+  newGame, update, latch, emptyInput, toSnapshot, validateRooms, tileAt,
   Game, Input, LatchedInput, TILE, W, H, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
 } from "../shared/core";
 import { AgentPlayer } from "../server/agent";
@@ -589,9 +589,18 @@ function freshPlay(): Game {
   const src3d = fs.readFileSync("dist/client3d.html", "utf8");
   // anchors must be CODE, not comments — esbuild strips comments from bundles
   ok(src3d.includes('ch === "w"'), "3D builder renders water tiles");
+  ok(src3d.includes('ch === "F"'), "3D builder renders the Frozen Falls");
   ok(src3d.split("SOLID.has(ch)").length - 1 >= 2, "3D has the unhandled-solid fallback");
+  // the golem-drop pedestal appears mid-room: it must fold into the rebuild key,
+  // or the Amber Blade never shows in 3D without leaving and re-entering the room
+  ok(src3d.includes("pedKey") || src3d.includes("s.pedestal ?"),
+     "3D folds the pedestal into the room-rebuild key");
   for (const file of ["dist/client.html", "dist/client3d.html"]) {
     const src = fs.readFileSync(file, "utf8");
+    // both clients must count the local swing visual down or the own-hero sword
+    // freezes at localAttack=16 while the partner (server p.attack) still animates
+    ok(src.includes("localAttack--"),
+       `${file}: local swing visual counts down (own-hero sword animates)`);
     ok(src.includes("namegate"), `${file}: name gate present`);
     ok(src.includes("copylink"), `${file}: invite-copy button present`);
     ok(src.includes("input.select()"), `${file}: name gate asks on every load (prefilled)`);
@@ -2649,19 +2658,21 @@ function freshPlay(): Game {
      "after a weak LLM plan the safety slide-router still makes north progress");
 }
 
-// ------------------------------------------------- 67. Frozen Playground: ice-gated entrance
-// author request (Artem, 2026-07-12): the south meadow door to the rink is
-// SEALED by ancient ice until the Amber Blade is claimed — mirror of the north
-// gate; once the blade melts the meadow ice, both doors open (LINKED + FREE ROAM).
+// ------------------------------------------------- 67. Frozen Playground: Frozen Falls entrance
+// author request (Artem, 2026-07-12): the south meadow door to the rink is a
+// frozen underground waterfall until the Amber Blade wakes the water — mirror
+// of the north gate; once the blade melts the meadow ice, both doors open.
 {
-  console.log("[67] Frozen Playground: south door frozen until the Amber Blade, then open");
+  console.log("[67] Frozen Playground: Frozen Falls sealed until the Amber Blade, then open");
   const down = { ...emptyInput(), d: true };
 
-  // BEFORE the blade: the south door is a wall of ice — the hero cannot pass
+  // BEFORE the blade: Frozen Falls is solid ice — the hero cannot pass
   const gLocked = freshPlay();
   gLocked.players[1].present = false;
   gLocked.players[0].x = 7 * TILE + 3;
   gLocked.players[0].y = 12 * TILE;
+  ok(tileAt(gLocked, 7, 13) === "F" && tileAt(gLocked, 8, 13) === "F",
+     "the south entrance is drawn as Frozen Falls");
   const prL: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 20; i++) step(gLocked, down, emptyInput(), prL);
   ok(gLocked.room === 0, "without the Amber Blade the frozen south door blocks the rink");
@@ -2674,8 +2685,11 @@ function freshPlay(): Game {
   g.players[0].x = 7 * TILE + 3;
   g.players[0].y = 12 * TILE;
   const pr: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 40 && g.room === 0; i++) step(g, down, emptyInput(), pr);
+  step(g, down, emptyInput(), pr);
   ok(g.gateMelted, "the Amber Blade melts the meadow ice");
+  ok(tileAt(g, 7, 13) === "g" && tileAt(g, 8, 13) === "g",
+     "the Frozen Falls thaw into a meadow passage");
+  for (let i = 0; i < 40 && g.room === 0; i++) step(g, down, emptyInput(), pr);
   ok(g.room === 17, "melted south door leads into the Frozen Playground");
   ok(g.enemies.length === 3, "the rink is populated with its skating dwellers");
 
@@ -2739,6 +2753,43 @@ function freshPlay(): Game {
   }
   ok(exited >= 0, "the agent reached the north door and crossed out of the rink");
   ok(g.room === 0, "the up exit lands back in the Sunlit Meadow");
+}
+
+// ------------------------------------------------- 74. rink is not a trap: a
+// hunter quests OUT of the Frozen Playground past the skating dwellers and
+// clears the Meadow's south stair without wedging in the tree gap.
+// (author Artem 2026-07-13 — tester report: hunter stuck in the Playground,
+// then jammed in the Meadow bushes, then looping back into the rink.)
+{
+  console.log("[74] Frozen Playground: hunter escapes the rink and its dwellers, quests on");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.players[1].npc = true;
+  g.players[0].present = false;           // partner elsewhere → the hunter roams
+  // long-quest progress: blade claimed, gate melted, charm still to fetch (room 16)
+  g.golemDead = true; g.amberClaimed = true; g.gateMelted = true;
+  g.hardGate = true; g.charmClaimed = false; g.hasBow = false;
+  core.loadRoom(g, 17, 7.5 * TILE, 10 * TILE);
+  g.players[1].x = 7.5 * TILE; g.players[1].y = 10 * TILE;
+  ok(g.enemies.filter(e => !e.dead).length >= 2, "the rink keeps its skating dwellers");
+
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string } };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const seen = new Set<number>();
+  let leftRink = -1;
+  for (let i = 0; i < 2500; i++) {
+    g.activeSim = g.players[1].simIndex;
+    (agent as unknown as Mut).intent = { action: "follow" };
+    step(g, emptyInput(), agent.control(g), prev);
+    const r = g.sims[g.players[1].simIndex].room;
+    seen.add(r);
+    if (leftRink < 0 && r !== 17) leftRink = i;
+  }
+  ok(leftRink >= 0, "the hunter leaves the rink instead of rooting on the skating enemies");
+  ok(seen.has(0), "it crosses back through the Sunlit Meadow");
+  ok(seen.has(1), "it clears the Meadow south stair and reaches the Forest, questing on");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

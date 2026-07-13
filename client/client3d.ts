@@ -562,6 +562,32 @@ const trunkGeo = new THREE.CylinderGeometry(0.09, 0.12, 0.5, 6);
 const coneGeo = new THREE.ConeGeometry(0.42, 0.9, 7);
 const rockGeo = new THREE.DodecahedronGeometry(0.34);
 const knobGeo = new THREE.SphereGeometry(0.05, 8, 8);
+const snowCapGeo = new THREE.ConeGeometry(0.3, 0.4, 7);
+const pedestalBaseGeo = new THREE.BoxGeometry(0.7, 0.5, 0.7);
+const pedestalRelicGeo = new THREE.BoxGeometry(0.1, 0.62, 0.1);
+
+// Room props have constant colours/maps — share one material each instead of
+// allocating new ones on every room rebuild. roomGroup.clear() does NOT dispose
+// GPU resources, so per-build materials used to leak and slowly starve the GPU
+// over a session's worth of room transitions (the "3D got slow" regression).
+const trunkMat = new THREE.MeshLambertMaterial({ color: 0x5a3a26 });
+const crownMatGreen = new THREE.MeshLambertMaterial({ color: 0x2d5b23 });
+const crownMatSnow = new THREE.MeshLambertMaterial({ color: 0x4a7a6e });
+const snowCapMat = new THREE.MeshLambertMaterial({ color: 0xeef4fb });
+const rockMat = new THREE.MeshLambertMaterial({ color: 0x8d8da0 });
+const lockedDoorMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2a });
+const knobMat = new THREE.MeshBasicMaterial({ color: 0xffd257 });
+const iceGateMat = new THREE.MeshPhysicalMaterial({ color: 0x8fd4f2, transparent: true, opacity: 0.62, roughness: 0.15 });
+const fallsMat = new THREE.MeshPhysicalMaterial({ color: 0x67bfe7, transparent: true, opacity: 0.72, roughness: 0.08 });
+const fallsStreakMat = new THREE.MeshBasicMaterial({ color: 0xeefbff, transparent: true, opacity: 0.85 });
+const waterMat = new THREE.MeshLambertMaterial({ map: waterTex });
+const lavaMat = new THREE.MeshBasicMaterial({ map: tileTex("v") });
+const pedestalBaseMat = new THREE.MeshLambertMaterial({ color: 0x5c5c70 });
+const pedestalRelicMat = new THREE.MeshBasicMaterial({ color: 0xffb545 });
+
+// cached each buildRoom so the animate loop can bob it without an O(tiles)
+// getObjectByName scene traversal every frame
+let relicMesh: THREE.Mesh | null = null;
 
 function floorCharFor(tiles: string[]): string {
   const count: Record<string, number> = {};
@@ -596,13 +622,13 @@ function buildRoom(s: Snapshot): void {
       roomGroup.add(g);
 
       if (ch === "w") {                            // water: the long-lost lake
-        const m = new THREE.Mesh(planeGeo, new THREE.MeshLambertMaterial({ map: waterTex }));
+        const m = new THREE.Mesh(planeGeo, waterMat);
         m.rotation.x = -Math.PI / 2;
         m.position.set(x, 0.013, z);
         m.receiveShadow = true;
         roomGroup.add(m);
       } else if (ch === "v") {                     // lava: glowing pool
-        const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ map: tileTex("v") }));
+        const m = new THREE.Mesh(planeGeo, lavaMat);
         m.rotation.x = -Math.PI / 2;
         m.position.set(x, 0.012, z);
         roomGroup.add(m);
@@ -615,40 +641,45 @@ function buildRoom(s: Snapshot): void {
         m.castShadow = true; m.receiveShadow = true;
         roomGroup.add(m);
       } else if (ch === "t" || ch === "d") {       // trees (green / snowy)
-        const trunk = new THREE.Mesh(trunkGeo, new THREE.MeshLambertMaterial({ color: 0x5a3a26 }));
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
         trunk.position.set(x, 0.25, z);
-        const crown = new THREE.Mesh(coneGeo, new THREE.MeshLambertMaterial({
-          color: ch === "t" ? 0x2d5b23 : 0x4a7a6e,
-        }));
+        const crown = new THREE.Mesh(coneGeo, ch === "t" ? crownMatGreen : crownMatSnow);
         crown.position.set(x, 0.85, z);
         crown.castShadow = true;
         if (ch === "d") {
-          const cap = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.4, 7),
-            new THREE.MeshLambertMaterial({ color: 0xeef4fb }));
+          const cap = new THREE.Mesh(snowCapGeo, snowCapMat);
           cap.position.set(x, 1.2, z);
           roomGroup.add(cap);
         }
         trunk.castShadow = true;
         roomGroup.add(trunk, crown);
       } else if (ch === "r") {                     // rocks
-        const m = new THREE.Mesh(rockGeo, new THREE.MeshLambertMaterial({ color: 0x8d8da0 }));
+        const m = new THREE.Mesh(rockGeo, rockMat);
         m.position.set(x, 0.26, z);
         m.rotation.set(0.4, i * 1.7, 0.2);
         m.castShadow = true;
         roomGroup.add(m);
       } else if (ch === "L") {                     // locked door
-        const m = new THREE.Mesh(boxGeo, new THREE.MeshLambertMaterial({ color: 0x6b4a2a }));
+        const m = new THREE.Mesh(boxGeo, lockedDoorMat);
         m.position.set(x, 0.5, z);
         m.castShadow = true;
-        const knob = new THREE.Mesh(knobGeo, new THREE.MeshBasicMaterial({ color: 0xffd257 }));
+        const knob = new THREE.Mesh(knobGeo, knobMat);
         knob.position.set(x, 0.55, z + 0.51);
         roomGroup.add(m, knob);
       } else if (ch === "I") {                     // ancient ice gate
-        const m = new THREE.Mesh(boxGeo, new THREE.MeshPhysicalMaterial({
-          color: 0x8fd4f2, transparent: true, opacity: 0.62, roughness: 0.15,
-        }));
+        const m = new THREE.Mesh(boxGeo, iceGateMat);
         m.position.set(x, 0.5, z);
         roomGroup.add(m);
+      } else if (ch === "F") {                     // frozen underground falls
+        const m = new THREE.Mesh(boxGeo, fallsMat);
+        m.position.set(x, 0.5, z);
+        const s1 = new THREE.Mesh(planeGeo, fallsStreakMat);
+        s1.scale.set(0.12, 1, 0.9);
+        s1.position.set(x - 0.22, 0.54, z - 0.51);
+        const s2 = new THREE.Mesh(planeGeo, fallsStreakMat);
+        s2.scale.set(0.16, 1, 0.9);
+        s2.position.set(x + 0.16, 0.54, z - 0.51);
+        roomGroup.add(m, s1, s2);
       } else if (ch === "c") {                     // cave mouth
         const m = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ color: 0x07060c }));
         m.rotation.x = -Math.PI / 2;
@@ -667,21 +698,20 @@ function buildRoom(s: Snapshot): void {
   }
 
   // pedestal
+  relicMesh = null;
   if (s.pedestal) {
     const px = s.pedestal.x / TILE + 0.5, pz = s.pedestal.y / TILE + 0.7;
-    const base = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.7),
-      new THREE.MeshLambertMaterial({ color: 0x5c5c70 }));
+    const base = new THREE.Mesh(pedestalBaseGeo, pedestalBaseMat);
     base.position.set(px, 0.25, pz);
     base.castShadow = true;
-    const relicMat = new THREE.MeshBasicMaterial({
-      color: s.pedestal.final ? 0xbfe9ff : 0xffb545,
-    });
-    const relic = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.62, 0.1), relicMat);
+    pedestalRelicMat.color.set(s.pedestal.final ? 0xbfe9ff : 0xffb545);
+    const relic = new THREE.Mesh(pedestalRelicGeo, pedestalRelicMat);
     relic.name = "relic";
     relic.position.set(px, 0.95, pz);
     const glow = new THREE.PointLight(s.pedestal.final ? 0xbfe9ff : 0xffb545, 6, 5);
     glow.position.set(px, 1.1, pz);
     roomGroup.add(base, relic, glow);
+    relicMesh = relic;
   }
 }
 
@@ -1032,7 +1062,16 @@ function render(): void {
   const s = snap;
   music.mode = musicModeFor(s);
 
-  const roomKey = s.room + "|" + s.tiles.join("");
+  // local swing / bow visuals count down every frame — WITHOUT this the own-hero
+  // sword sticks at localAttack=16 forever (t=0, a frozen blade) while the partner,
+  // drawn from the server's decaying p.attack, animates normally
+  if (localAttack > 0) localAttack--;
+  if (localBowFlash > 0) localBowFlash--;
+
+  // the pedestal is NOT a tile — it appears mid-room when the golem falls, so
+  // fold it into the rebuild key or the Amber Blade never shows without a reload
+  const pedKey = s.pedestal ? `${s.pedestal.x},${s.pedestal.y},${s.pedestal.final}` : "none";
+  const roomKey = s.room + "|" + s.tiles.join("") + "|" + pedKey;
   if (roomKey !== builtRoomKey) { buildRoom(s); builtRoomKey = roomKey; }
 
   const alpha = Math.min(1, (performance.now() - snapTime) / snapInterval);
@@ -1050,9 +1089,8 @@ function render(): void {
   // water drift
   waterTex.offset.set(Math.sin(now * 0.0006) * 0.06, (now * 0.00004) % 1);
 
-  // relic bobbing
-  const relic = roomGroup.getObjectByName("relic");
-  if (relic) relic.position.y = 0.95 + Math.sin(now * 0.004) * 0.08;
+  // relic bobbing (cached ref — no per-frame scene traversal)
+  if (relicMesh) relicMesh.position.y = 0.95 + Math.sin(now * 0.004) * 0.08;
 
   // heroes
   s.players.forEach((p, i) => {
