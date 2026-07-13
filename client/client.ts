@@ -232,6 +232,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   Space: "a", KeyJ: "a", KeyZ: "a",
   KeyX: "b", KeyK: "b",
   KeyF: "f",
+  KeyC: "c",
   Enter: "st", KeyE: "st",
 };
 window.addEventListener("keydown", ev => {
@@ -385,7 +386,7 @@ function drawPartnerMirror(s: Snapshot): void {
     pipCanvas.style.display = "block";
     pipCtx.clearRect(0, 0, pipSize.w, pipSize.h);
     drawPartnerPip(pipCtx, s.partnerView, names[1 - mySlot], 1 - mySlot, s.ticks,
-      pipOrigin.ox, pipOrigin.oy);
+      pipOrigin.ox, pipOrigin.oy, !!s.hasMirror);
   } else {
     pipCanvas.style.display = "none";
   }
@@ -534,6 +535,16 @@ function drawEnemy(e: SnapEnemy, ticks: number, x: number, y: number): void {
     }
   }
   ctx.globalAlpha = 1;
+  // Frost Bell freeze: a pale rime shell over the held foe
+  if (e.frozen > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.4 + 0.15 * Math.sin(ticks * 0.3);
+    ctx.fillStyle = "#cdefff";
+    ctx.fillRect(Math.round(x) - 2, Math.round(y) - 2, 16, 16);
+    ctx.strokeStyle = "#eaffff";
+    ctx.strokeRect(Math.round(x) - 1.5, Math.round(y) - 1.5, 15, 15);
+    ctx.restore();
+  }
 }
 
 function drawPedestal(s: Snapshot): void {
@@ -621,9 +632,18 @@ function drawUI(s: Snapshot): void {
   }
   const keys = s.players[0].keys + s.players[1].keys;
   for (let i = 0; i < keys; i++) ctx.drawImage(SPR.key, W - 18 - i * 12, 1, 14, 14);
-  if (s.hasBow) ctx.drawImage(SPR.bow, W - 18 - keys * 12 - 14, 1, 14, 14);
-  if (s.players[mySlot].elixir) {
-    ctx.drawImage(SPR.elixir, W - 18 - keys * 12 - (s.hasBow ? 28 : 14), 1, 14, 14);
+  // artifact strip, drawn leftward from the key column
+  const artifacts: [boolean, HTMLCanvasElement][] = [
+    [s.hasBow, SPR.bow],
+    [s.players[mySlot].elixir, SPR.elixir],
+    [!!s.hasBell, SPR.bell],
+    [!!s.hasMirror, SPR.mirror],
+  ];
+  let artX = W - 18 - keys * 12;
+  for (const [have, spr] of artifacts) {
+    if (!have) continue;
+    artX -= 14;
+    ctx.drawImage(spr, artX, 1, 14, 14);
   }
   const boss = s.enemies.find(e => (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember") && !e.dead);
   if (boss) {
@@ -720,6 +740,18 @@ function render(): void {
       ctx.save();
       ctx.shadowColor = "#ffd257"; ctx.shadowBlur = 6;
       ctx.drawImage(SPR.charm, px, py);
+      ctx.restore();
+    }
+    else if (it.kind === "frostbell") {
+      ctx.save();
+      ctx.shadowColor = "#bff0ff"; ctx.shadowBlur = 7;
+      ctx.drawImage(SPR.bell, px, py);
+      ctx.restore();
+    }
+    else if (it.kind === "mirror") {
+      ctx.save();
+      ctx.shadowColor = "#bcd7ff"; ctx.shadowBlur = 8;
+      ctx.drawImage(SPR.mirror, px, py);
       ctx.restore();
     }
     else {

@@ -2208,7 +2208,7 @@ function freshPlay(): Game {
   g.players[0].y = 6 * TILE;
   g.players[1].x = W - PLAYER_W - 4;
   g.players[1].y = 6 * TILE;
-  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0 };
+  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0, sim: 0 };
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 220 && g.players[0].downed; i++) {
     step(g, emptyInput(), emptyInput(), prev);
@@ -2235,7 +2235,7 @@ function freshPlay(): Game {
   g.players[1].simIndex = 1;
   g.players[1].x = 6 * TILE;
   g.players[1].y = 6 * TILE;
-  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0 };
+  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0, sim: 1 };
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 20; i++) step(g, emptyInput(), emptyInput(), prev);
   ok(g.players[0].downed, "wraith in the partner wing does not remote-revive");
@@ -2691,7 +2691,9 @@ function freshPlay(): Game {
      "the Frozen Falls thaw into a meadow passage");
   for (let i = 0; i < 40 && g.room === 0; i++) step(g, down, emptyInput(), pr);
   ok(g.room === 17, "melted south door leads into the Frozen Playground");
-  ok(g.enemies.length === 3, "the rink is populated with its skating dwellers");
+  ok(g.enemies.length === 5, "the rink is populated with its skating dwellers + bell guards");
+  ok(g.enemies.filter(e => e.kind === "sentinel").length === 2,
+     "two sentinels stand guard over the Frost Bell");
 
   // the same thaw opens the NORTH quest gate too (one warm edge, both seals)
   const gNorth = freshPlay();
@@ -2790,6 +2792,158 @@ function freshPlay(): Game {
   ok(leftRink >= 0, "the hunter leaves the rink instead of rooting on the skating enemies");
   ok(seen.has(0), "it crosses back through the Sunlit Meadow");
   ok(seen.has(1), "it clears the Meadow south stair and reaches the Forest, questing on");
+}
+
+// ------------------------------------------------- 75. Frost Bell: an optional
+// sentinel-guarded Frozen Playground consumable. Grab it, ring it (C), and the
+// room's lesser foes freeze for ~3s — bosses shrug it off, and it refuses to
+// waste its one charge on an empty room. (author Artem 2026-07-13, tester wish:
+// "Playground чуть посложнее" + a non-mandatory Frost Bell reward.)
+{
+  console.log("[75] Frost Bell: grab, ring to freeze the rink, one use, bosses immune");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  core.loadRoom(g, 17, 7.5 * TILE, 10 * TILE);
+  const bell = g.pickups.find(p => p.kind === "frostbell");
+  ok(!!bell, "the Frost Bell waits in the Frozen Playground");
+  ok(!g.hasBell, "not yet carried");
+
+  // walk player 0 onto the bell and let updatePlayer collect it
+  g.players[0].x = bell!.x - 5; g.players[0].y = bell!.y - 6;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(g.hasBell, "collecting the bell arms the team charge");
+  ok(!g.pickups.some(p => p.kind === "frostbell" && p.t >= 0), "the pickup is consumed");
+
+  // drop a boss into the sim to prove the chill spares it
+  g.enemies.push(core.makeEnemy("wraith", 7 * TILE, 3 * TILE));
+  const lesser = g.enemies.filter(e => e.kind !== "wraith");
+  ok(lesser.length >= 3, "lesser skating foes are present to freeze");
+
+  // ring it: fresh press of C (prev.c false → cE true)
+  const ring = { ...emptyInput(), c: true };
+  step(g, ring, emptyInput(), prev);
+  ok(!g.hasBell, "the Frost Bell is a one-use charge");
+  ok(g.enemies.filter(e => e.kind !== "wraith").every(e => e.frozen > 0),
+     "every lesser foe in the room is frozen");
+  ok(g.enemies.find(e => e.kind === "wraith")!.frozen === 0,
+     "the boss shrugs off the chill (mercy stays untouchable)");
+
+  // a frozen skater holds still instead of sliding at the hero
+  const skater = g.enemies.find(e => e.kind !== "wraith")!;
+  const sx = skater.x, sy = skater.y;
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(Math.abs(skater.x - sx) < 1 && Math.abs(skater.y - sy) < 1,
+     "winter holds the frozen skater in place");
+
+  // ringing into an empty room must NOT spend the charge
+  const g2 = freshPlay();
+  core.loadRoom(g2, 17, 7.5 * TILE, 10 * TILE);
+  g2.enemies = [];
+  g2.hasBell = true;
+  const pr2: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g2, { ...emptyInput(), c: true }, emptyInput(), pr2);
+  ok(g2.hasBell, "the bell refuses to ring into an empty room — charge saved");
+
+  // and it survives the wire
+  const snap = toSnapshot(g, NAMES, 0, false);
+  ok(snap.enemies.some(e => e.frozen > 0), "frozen state reaches the client");
+}
+
+// ------------------------------------------------- 76. Mirror Shard: an Amber
+// Lake artifact that only reveals itself to a LONE hero. Claimed solo it sharpens
+// the partner scry-window (snapshot flag); but the instant two heroes share the
+// lake with it unclaimed, it shatters FOREVER. (author Artem 2026-07-13 — a
+// reward for solitude, a small wager against always grouping up.)
+{
+  console.log("[76] Mirror Shard: lone hero claims it; two heroes shatter it forever");
+  const core = await import("../shared/core");
+
+  // solo claim: partner absent, one hero walks onto the shard at the lake
+  const g = freshPlay();
+  g.players[1].present = false;
+  core.loadRoom(g, 2, 3 * TILE, 6 * TILE);
+  const shard = g.pickups.find(p => p.kind === "mirror");
+  ok(!!shard, "the Mirror Shard rests at the Amber Lake for a lone hero");
+  g.players[0].x = shard!.x - 5; g.players[0].y = shard!.y - 6;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(g.hasMirror, "the lone hero claims the shard");
+  ok(!g.mirrorLost, "claimed, not shattered");
+  ok(toSnapshot(g, NAMES, 0, false).hasMirror === true, "hasMirror rides the wire");
+
+  // two heroes together: the shard shatters and never returns
+  const g2 = freshPlay();          // both present, LINKED → share the lake
+  core.loadRoom(g2, 2, 3 * TILE, 6 * TILE);
+  ok(g2.pickups.some(p => p.kind === "mirror" && p.t >= 0), "the shard spawns for the pair");
+  const pr2: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g2, emptyInput(), emptyInput(), pr2);
+  ok(g2.mirrorLost, "two shadows on the shard shatter it");
+  ok(!g2.hasMirror, "the pair never claims it");
+  ok(!g2.pickups.some(p => p.kind === "mirror" && p.t >= 0), "the shattered shard is gone");
+  core.loadRoom(g2, 3, 8 * TILE, 8 * TILE);
+  core.loadRoom(g2, 2, 3 * TILE, 6 * TILE);
+  ok(!g2.pickups.some(p => p.kind === "mirror"), "and it never respawns — lost forever");
+}
+
+// ------------------------------------------------- 77. spared wraith is ONE
+// spirit: in FREE ROAM with heroes split across rooms the companion must render
+// in exactly one view, never cloned into both the main screen and the PiP.
+// (author Artem 2026-07-12 — tester report: "агент помиловал Wraith и теперь у
+// нас два Wraith" — the companion doubled across the primary snapshot + partner
+// scry-window.)
+{
+  console.log("[77] spared wraith renders in ONE room, never doubled into the PiP");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.wraithSpared = true;
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 0;
+  g.players[1].simIndex = 1;
+  g.players[1].x = 6 * TILE; g.players[1].y = 6 * TILE;
+  // the spirit walks with hero 1 (sim 1)
+  g.companion = { x: 6 * TILE, y: 6 * TILE, t: 0, sim: 1 };
+
+  // hero 0's view: partner (and the wraith) are in the OTHER room
+  const s0 = toSnapshot(g, NAMES, 0, false);
+  ok(s0.companion === null, "viewer's own room shows no wraith (it's with the partner)");
+  ok(!!s0.partnerView && s0.partnerView.companion !== null,
+     "the wraith shows once, in the partner scry-window");
+
+  // hero 1's view: the wraith is in THIS room, and the PiP (hero 0's room) is empty of it
+  const s1 = toSnapshot(g, NAMES, 1, false);
+  ok(s1.companion !== null, "the partner sees the wraith in their own room");
+  ok(!!s1.partnerView && s1.partnerView.companion === null,
+     "and it is NOT cloned into their scry-window — one spirit, one room");
+}
+
+// ------------------------------------------------- 78. AI DUO quest driver: with
+// the golem down and the Amber Blade on its pedestal IN the room, the leader must
+// walk ONTO the pedestal and claim it — not idle beside it. (author Artem
+// 2026-07-12 — AI+AI tester report: "победили босса, взяли сердце и встали".
+// targetRoom == current room made the route-hop a no-op, so the driver stalled.)
+{
+  console.log("[78] AI DUO leader claims the Amber Blade instead of idling beside it");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  g.golemDead = true;                       // boss down → the blade is revealed
+  core.loadRoom(g, 5, 3 * TILE, 2 * TILE);  // both heroes drop in the top corner
+  ok(!!g.pedestal && !g.pedestal.final, "the Amber Blade waits on its pedestal");
+  ok(!g.amberClaimed, "not yet claimed");
+  g.players[1].npc = true;                  // slot 1 is the companion
+
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "companion", leader: true });
+  type Mut = { intent: { action: string } };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 600 && !g.amberClaimed; i++) {
+    (leader as unknown as Mut).intent = { action: "follow" };
+    step(g, leader.control(g), emptyInput(), prev);
+  }
+  ok(g.amberClaimed, "the leader walked onto the pedestal and claimed the Amber Blade");
+  ok(g.pedestal === null, "the pedestal is spent");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

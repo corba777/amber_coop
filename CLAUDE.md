@@ -86,7 +86,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (382 assertions as of last trunk).
+test/selftest.ts    the whole safety net (411 assertions as of last trunk).
                     test/bench.ts — virtual-time benchmarks (MODE=arena golem,
                     MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -145,6 +145,19 @@ inertia; a blocked arrow staggers (45 ticks, still advancing). Keys are
 team-shared. Endings (endingFor, priority order): solo → lone-thaw → mercy
 (spare the yielding wraith by standing close; it becomes a companion) →
 flawless → ember-pact → classic.
+
+**Optional artifacts (all non-mandatory, additive — canon path untouched):**
+Elixir of Life (auto-revive on fall), Phoenix Feather (press **F**, one remote
+FREE-ROAM revive), Miner's Charm (fire arrows), Heart Containers.
+- **Frost Bell** (room 17, guarded by two skating sentinels; doors stay open):
+  press **C** to freeze the current room's lesser foes ~3s — bosses shrug it off
+  (mercy sacred), and it won't ring into an empty room (saves its one charge).
+  `g.hasBell`/`g.bells`, `Enemy.frozen`, `Input.c`, `tryFrostBell` ([75]).
+- **Mirror Shard** (room 2, Amber Lake): reveals itself only to a LONE hero and
+  sharpens the partner scry-window (`hasMirror` → PiP shows partner HP + a bright
+  ice frame). The instant two heroes share the lake with it unclaimed it shatters
+  FOREVER (`g.mirrorLost`, `checkMirrorShatter`) — a reward for solitude, a small
+  wager against always grouping up ([76]).
 
 ## Roadmap (agreed with the author — stage numbers matter)
 
@@ -214,9 +227,15 @@ temperament. Rescue mutual with symmetric patience + failsafe. Architect toggle
 stored on setup (`architect` field) — bench-first stub, not wired.
 
 **Post–Stage 4 mechanics (landed, guarded):**
-- **Wraith spirit anchor** ([58]–[59]): spared wraith revives a downed hero
+- **Wraith spirit anchor** ([58]–[59], [77]): spared wraith revives a downed hero
   only while a living partner shares the room — half-speed hug, no remote save
-  when split; bleed-out unchanged.
+  when split; bleed-out unchanged. The companion is a SINGLE spirit tied to one
+  sim (`companion.sim`): only its own sim ticks it, and it re-homes when its room
+  empties of heroes. Serialized into exactly ONE view — `toSnapshot` shows it only
+  when `companion.sim === viewer sim`, `partnerViewFor` only when it matches the
+  partner's sim — so a FREE ROAM split can't clone it into both the main screen
+  and the PiP scry-window ([77], tester report: "агент помиловал Wraith и теперь
+  у нас два Wraith").
 - **Hunter in-room rescue** ([60]): bodyguard/companion keep attack-first
   patience; hunter drops attack to touch-revive when partner is downed in-room.
 - **Collision-aware agent routing** ([61]): `roomRows(g)` for BFS; `waypointSeek`
@@ -275,6 +294,27 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   (`mcy + PLAYER_H - 2`, ~4px below the feet, never the head), so a hero one row
   above a solid border read sideways moves as blocked and wedged in the tree gap
   — now probes the body's true top/middle/bottom (left/middle/right) span.
+- **Quest driver claims in-room pedestals** ([78], author Artem 2026-07-12 —
+  AI+AI tester report: "победили босса, взяли сердце и встали"). `targetRoom`
+  returns the CURRENT room while the Amber Blade (room 5) / final pedestal
+  (room 11) is unclaimed, so `applyRouteHop` was a no-op and the leader idled
+  beside the prize. Fix (controller/mechanics): when passive and a `g.pedestal`
+  sits in the room, the quest driver (`opts.leader` in AI DUO, or solo autopilot
+  with no partner) sets a `goto` intent onto the pedestal and walks in to claim
+  it (touch = overlap in core). The human+AI companion never auto-grabs it — the
+  human leads and decides the ending (mercy/final touch stays a human call).
+- **Frost Bell + Mirror Shard** ([75], [76], author Artem 2026-07-13 — tester
+  wish: make the Playground "чуть посложнее" with a non-mandatory reward). Two
+  optional artifacts on the Phoenix-Feather template (team item, dict-persisted,
+  restart-cleared). Frost Bell: room 17 gains two skating sentinels guarding a
+  centre bell (doors stay OPEN — a challenge, never a lock-in); **C** freezes the
+  room's lesser foes (`Enemy.frozen`, updateEnemy holds the AI/skate but leaves
+  them hittable), bosses immune, no-op into an empty room. Mirror Shard: Amber
+  Lake artifact with a solitude quirk — `checkMirrorShatter(g)` shatters it
+  FOREVER (`g.mirrorLost`) the tick two heroes share the lake unclaimed; claimed
+  solo it sets `hasMirror`, and the PiP scry-window then draws the partner's HP +
+  a bright ice frame (`drawPartnerPip(..., hasMirror)`). New `Input.c/cE` plumbed
+  through latch / both client keymaps (KeyC) / the server input copy.
 
 **Optional idea — Playground refreeze (design-only, NOT implemented; author Artem
 2026-07-13).** A menu toggle (e.g. `refreeze`, default OFF) that recrystallises

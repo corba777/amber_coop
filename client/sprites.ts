@@ -41,6 +41,10 @@ const SPITTER_SPR = ["................", "................", "......gGGg......",
 const CHARM_SPR = ["................", "................", ".....KKKKKK.....", "....KK....KK....", "....KK....KK....", "................", "....aAAAAAAa....", "...aAAKKKKAAa...", "...AAKAAAAKAA...", "...AAKAWWAKAA...", "...AAKAAAAKAA...", "...aAAKKKKAAa...", "....aAAAAAAa....", "................", "................", "................"];
 const ELIXIR_SPR = ["................", "......BBBB......", ".......BB.......", "......CBBC......", "......C..C......", ".....C....C.....", "....C......C....", "....C.KKKK.C....", "...C.KKKKKK.C...", "...C.KKWKKK.C...", "...C.KKKKKK.C...", "...C.KKKKK.C....", "....C.KKK.C.....", ".....CCCCC......", "................", "................"];
 const BOW_SPR = ["................", "......BBB.......", ".....B...W......", "....B.....W.....", "....B......W....", "...B.......W....", "...B........W...", "...B.KKK....W...", "...B........W...", "...B.......W....", "....B......W....", "....B.....W.....", ".....B...W......", "......BBB.......", "................", "................"];
+// Frost Bell: an icy blue bell with a gold crown and clapper
+const BELL_SPR = ["................", ".......KK.......", ".......cc.......", "......cCCc......", ".....cCCCCc.....", ".....cCWCCc.....", "....cCCCCCCc....", "....cCCCCCCc....", "...cCCCCCCCCc...", "...cCCCCCCCCc...", "..cCCCCCCCCCCc..", "..cccccccccccc..", "....KK....KK....", "......KKKK......", "................", "................"];
+// Mirror Shard: a pale-blue diamond of ice glass with a white glint
+const MIRROR_SPR = ["................", ".......W........", "......YCY.......", ".....YCCCY......", "....YCCWCCY.....", "...YCCCWCCCY....", "..YCCCWWWCCCY...", "...YCCCWCCCY....", "....YCCCCCY.....", ".....YCCCY......", "......YCY.......", ".......Y........", "................", "................", "................", "................"];
 
 export function bake(map: string[], scale = 1, swap?: Record<string, string>): HTMLCanvasElement {
   const c = document.createElement("canvas");
@@ -80,6 +84,8 @@ export const SPR = {
   key: bake(KEY_SPR),
   bow: bake(BOW_SPR),
   elixir: bake(ELIXIR_SPR),
+  bell: bake(BELL_SPR),
+  mirror: bake(MIRROR_SPR),
 };
 
 // ----------------------------------------------------------------- tiles
