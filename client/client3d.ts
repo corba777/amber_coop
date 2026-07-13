@@ -174,7 +174,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r",
   ArrowUp: "u", KeyW: "u", ArrowDown: "d", KeyS: "d",
   Space: "a", KeyJ: "a", KeyZ: "a",   KeyX: "b", KeyK: "b",
-  KeyF: "f",
+  KeyF: "f", KeyC: "c",
   Enter: "st", KeyE: "st",
 };
 
@@ -378,7 +378,7 @@ function drawPartnerMirror(s: Snapshot): void {
     pipCanvas.style.display = "block";
     pipCtx.clearRect(0, 0, pipSize.w, pipSize.h);
     drawPartnerPip(pipCtx, s.partnerView, names[1 - mySlot], 1 - mySlot, s.ticks,
-      pipOrigin.ox, pipOrigin.oy);
+      pipOrigin.ox, pipOrigin.oy, !!s.hasMirror);
   } else {
     pipCanvas.style.display = "none";
   }
@@ -549,6 +549,8 @@ const pickupTex = {
   bow: spriteTex(SPR.bow),
   elixir: spriteTex(SPR.elixir),
   charm: spriteTex(SPR.charm),
+  frostbell: spriteTex(SPR.bell),
+  mirror: spriteTex(SPR.mirror),
 };
 
 // ------------------------------------------------------------- room build
@@ -865,9 +867,17 @@ function drawHud(s: Snapshot): void {
   }
   const keys = s.players[0].keys + s.players[1].keys;
   for (let i = 0; i < keys; i++) uictx.drawImage(SPR.key, W - 18 - i * 12, 1, 14, 14);
-  if (s.hasBow) uictx.drawImage(SPR.bow, W - 18 - keys * 12 - 14, 1, 14, 14);
-  if (s.players[mySlot].elixir) {
-    uictx.drawImage(SPR.elixir, W - 18 - keys * 12 - (s.hasBow ? 28 : 14), 1, 14, 14);
+  const artifacts3d: [boolean, HTMLCanvasElement][] = [
+    [s.hasBow, SPR.bow],
+    [s.players[mySlot].elixir, SPR.elixir],
+    [!!s.hasBell, SPR.bell],
+    [!!s.hasMirror, SPR.mirror],
+  ];
+  let artX3d = W - 18 - keys * 12;
+  for (const [have, spr] of artifacts3d) {
+    if (!have) continue;
+    artX3d -= 14;
+    uictx.drawImage(spr, artX3d, 1, 14, 14);
   }
   const boss = s.enemies.find(e => (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember") && !e.dead);
   if (boss) {
@@ -1203,7 +1213,9 @@ function render(): void {
       it.kind === "key" ? pickupTex.key :
       it.kind === "bow" ? pickupTex.bow :
       it.kind === "elixir" ? pickupTex.elixir :
-      it.kind === "charm" ? pickupTex.charm : pickupTex.heart;
+      it.kind === "charm" ? pickupTex.charm :
+      it.kind === "frostbell" ? pickupTex.frostbell :
+      it.kind === "mirror" ? pickupTex.mirror : pickupTex.heart;
     const sc = it.kind === "container" ? 1.15 : 0.7;
     bb.mesh.scale.set(sc, sc, 1);
     bb.shadow.scale.setScalar(0.5);

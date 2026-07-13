@@ -474,6 +474,7 @@ wss.on("connection", (ws, req) => {
         session.rawInputs[slot] = {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
           a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
+          c: !!msg.s.c,
         };
         // anchor the seq to where the hero stands right now: this is the state
         // the freshly-received held input will first act on (guard out-of-order)

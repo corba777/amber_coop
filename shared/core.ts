@@ -454,6 +454,10 @@ export const ROOMS: RoomSpec[] = [
       { kind: "slime", x: 5 * TILE, y: 4 * TILE },
       { kind: "slime", x: 11 * TILE, y: 8 * TILE },
       { kind: "bat", x: 8 * TILE, y: 5 * TILE },
+      // two sentinels skate a slow guard around the Frost Bell in the centre;
+      // the doors stay open — this is an optional challenge, never a lock-in
+      { kind: "sentinel", x: 4 * TILE, y: 6 * TILE },
+      { kind: "sentinel", x: 11 * TILE, y: 6 * TILE },
     ],
   },
 ];
@@ -483,9 +487,11 @@ export interface Enemy {
   dead: boolean;
   spareP: number;      // mercy progress while a player stands beside a yielding foe
   stagger: number;     // shield rocked aside by a blocked arrow (sentinel)
+  frozen: number;      // Frost Bell: ticks held still by winter's ring (still hittable)
 }
 
-export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm" | "feather";
+export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm"
+  | "feather" | "frostbell" | "mirror";
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
 
 /** heart containers: overworld secrets + boss drops. The golem entry only
@@ -507,6 +513,20 @@ export const ELIXIRS: { id: string; room: number; x: number; y: number }[] = [
 /** phoenix feather: team item, one remote revive in FREE ROAM (Frozen Crypt wing) */
 export const FEATHERS: { id: string; room: number; x: number; y: number }[] = [
   { id: "crypt", room: 13, x: 3 * TILE + 8, y: 10 * TILE + 8 },
+];
+
+/** Frost Bell: optional Frozen Playground reward, sentinel-guarded. One use —
+ *  press C to freeze the current room's lesser foes (~3s). Never mandatory. */
+export const BELLS: { id: string; room: number; x: number; y: number }[] = [
+  { id: "rink", room: 17, x: 7.5 * TILE, y: 6 * TILE + 8 },
+];
+
+/** Mirror Shard: optional Amber Lake artifact that sharpens the partner scry
+ *  window. QUIRK: only claimable while you stand ALONE in the lake — the moment
+ *  a second hero enters, the shard shatters FOREVER (a reward for solitude; a
+ *  small moral hazard against always grouping up). See mirrorLost. */
+export const MIRRORS: { id: string; room: number; x: number; y: number }[] = [
+  { id: "lake", room: 2, x: 5 * TILE + 8, y: 3 * TILE + 8 },
 ];
 
 /** FREE ROAM alone-down bleed window — 30s at 60 Hz */
@@ -552,12 +572,13 @@ export type TravelMode = "linked" | "free";
 export interface Input {
   l: boolean; r: boolean; u: boolean; d: boolean;
   a: boolean; b: boolean; st: boolean; f: boolean;
+  c: boolean;   // ring the Frost Bell (one-use room freeze)
 }
 export interface LatchedInput extends Input {
-  aE: boolean; bE: boolean; stE: boolean; fE: boolean;   // fresh-press edges
+  aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean;   // fresh-press edges
 }
 export const emptyInput = (): Input =>
-  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false });
+  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false });
 
 export interface Ending { id: string; title: string; lines: string[]; }
 
@@ -650,16 +671,21 @@ export interface Game {
   gateMelted: boolean;
   hasBow: boolean;
   hasFeather: boolean;
+  hasBell: boolean;        // Frost Bell carried (team, one use)
+  hasMirror: boolean;      // Mirror Shard claimed — sharpens the partner scry window
+  mirrorLost: boolean;     // the shard shattered (two heroes shared the lake) — gone forever
   containers: Record<string, boolean>;
   elixirs: Record<string, boolean>;
   feathers: Record<string, boolean>;
+  bells: Record<string, boolean>;
+  mirrors: Record<string, boolean>;
   wraithDead: boolean;
   emberDead: boolean;
   charmClaimed: boolean;
   hardGate: boolean;   // seal the glacier behind the charm (menu choice)
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   wraithSpared: boolean;
-  companion: { x: number; y: number; t: number } | null;   // the spared wraith
+  companion: { x: number; y: number; t: number; sim: number } | null;   // the spared wraith (lives in ONE sim)
   ending: Ending | null;
   pedestal: { x: number; y: number; final: boolean } | null;   // accessor → sims[0]
   fade: number;
@@ -723,6 +749,7 @@ export function makeEnemy(kind: EnemyKind, x: number, y: number): Enemy {
     w: big ? 28 : 12, h: big ? 28 : 12,
     hp, maxHp: hp,
     hurt: 0, kx: 0, ky: 0, t: 0, phase: 0, vx: 0, vy: 0, dead: false, spareP: 0, stagger: 0,
+    frozen: 0,
   };
 }
 
@@ -769,6 +796,16 @@ function fillActiveSimRoom(g: Game, index: number): void {
   for (const fe of FEATHERS) {
     if (fe.room === index && !g.feathers[fe.id] && !g.hasFeather) {
       pushPickup(g, { kind: "feather", x: fe.x, y: fe.y, t: 0, cid: fe.id });
+    }
+  }
+  for (const be of BELLS) {
+    if (be.room === index && !g.bells[be.id] && !g.hasBell) {
+      pushPickup(g, { kind: "frostbell", x: be.x, y: be.y, t: 0, cid: be.id });
+    }
+  }
+  for (const mi of MIRRORS) {
+    if (mi.room === index && !g.mirrors[mi.id] && !g.hasMirror && !g.mirrorLost) {
+      pushPickup(g, { kind: "mirror", x: mi.x, y: mi.y, t: 0, cid: mi.id });
     }
   }
   if (g.doors[index]) {
@@ -905,7 +942,7 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   p1.x = px; p1.y = py;
   p2.x = Math.max(2, Math.min(W - PLAYER_W - 2, px + (px < W / 2 ? 14 : -14)));
   p2.y = py;
-  if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; }
+  if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; g.companion.sim = 0; }
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
     if (p.downed) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; }
@@ -920,7 +957,8 @@ export function newGame(): Game {
     players: [newPlayer(0), newPlayer(1)] as [Player, Player],
     cleared: {}, doors: {},
     golemDead: false, amberClaimed: false, gateMelted: false,
-    hasBow: false, hasFeather: false, containers: {}, elixirs: {}, feathers: {},
+    hasBow: false, hasFeather: false, hasBell: false, hasMirror: false, mirrorLost: false,
+    containers: {}, elixirs: {}, feathers: {}, bells: {}, mirrors: {},
     wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
     slick: false,
     wraithSpared: false, companion: null, ending: null,
@@ -1147,6 +1185,51 @@ function tryFeatherRevive(g: Game, pi: number, inp: LatchedInput): void {
   g.messageT = 200;
 }
 
+/** Frost Bell (one use): ring it to hold the current room's lesser foes still
+ *  for ~3s. Bosses shrug off the chill (and the yielding wraith is never touched
+ *  — mercy stays sacred). Refuses to fire into an empty room so the charge isn't
+ *  wasted. Room-local: the freeze lives on the enemies in the ringer's own sim. */
+function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
+  if (!inp.cE || !g.hasBell) return;
+  const p = g.players[pi];
+  if (p.downed) return;
+  const sim = simOf(g, pi);
+  let any = false;
+  for (const e of sim.enemies) {
+    if (e.dead || isBoss(e.kind)) continue;
+    e.frozen = 180;
+    any = true;
+  }
+  if (!any) return;
+  g.hasBell = false;
+  g.shake = 8;
+  burst(g, p.x + 5, p.y + 6, "#bff0ff", 20);
+  sfx(g, "melt");
+  g.message = "The Frost Bell rings — winter holds the foes still!";
+  g.messageT = 180;
+}
+
+/** Mirror Shard quirk: it only reveals itself to a lone hero. The instant two
+ *  heroes share the Amber Lake with the shard still unclaimed, it shatters and
+ *  is gone for the rest of the run (`mirrorLost`). A quiet reward for solitude —
+ *  and a small wager against always travelling as a pair. */
+function checkMirrorShatter(g: Game): void {
+  if (g.hasMirror || g.mirrorLost) return;
+  const heroesInLake = g.players.filter((p, pi) => p.present && simOf(g, pi).room === 2).length;
+  if (heroesInLake < 2) return;
+  let shattered = false;
+  for (const sim of g.sims) {
+    if (sim.room !== 2) continue;
+    const mir = sim.pickups.find(it => it.kind === "mirror" && it.t >= 0);
+    if (mir) { mir.t = -1; burst(g, mir.x, mir.y, "#bcd7ff", 14); shattered = true; }
+  }
+  if (!shattered) return;
+  g.mirrorLost = true;
+  sfx(g, "clang");
+  g.message = "Two shadows cross the shard — it shatters. The mirror keeps only the lonely";
+  g.messageT = 200;
+}
+
 function bleedoutEnding(g: Game): Ending {
   return { id: "abandoned", title: "LEFT IN THE COLD", lines: [
     "your partner bled out alone while winter pressed in.",
@@ -1284,6 +1367,11 @@ function updateEnemy(g: Game, e: Enemy): void {
     moveBody(g, e, e.w, e.h, e.kx, e.ky);
     e.kx *= 0.85; e.ky *= 0.85;
   }
+
+  // Frost Bell: held still by winter's ring — no AI, no skating (knockback above
+  // still lands so it can be shoved), but it stays fully hittable. The chill
+  // even holds it on puzzle ice, so a rung rink stops skating mid-glide.
+  if (e.frozen > 0) { e.frozen--; e.vx = 0; e.vy = 0; return; }
 
   // puzzle ice: the room's dwellers skate too — they slide toward the nearest
   // hero and re-aim off the walls, no kind-specific AI while on the rink
@@ -1434,7 +1522,7 @@ function updateEnemy(g: Game, e: Enemy): void {
       if (e.spareP >= 75) {
         e.dead = true;
         g.wraithSpared = true;
-        g.companion = { x: e.x, y: e.y, t: 0 };
+        g.companion = { x: e.x, y: e.y, t: 0, sim: g.activeSim ?? 0 };
         g.pedestal = { x: 7.5 * TILE, y: 3 * TILE, final: true };
         g.message = "The storm quiets. Winter walks beside you now";
         g.messageT = 260;
@@ -1546,6 +1634,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (p.sayT > 0) p.sayT--;
 
   if (!p.downed) tryFeatherRevive(g, pi, inp);
+  if (!p.downed) tryFrostBell(g, pi, inp);
 
   if (p.downed) {
     const other = g.players[1 - pi];
@@ -1715,6 +1804,18 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         g.hasFeather = true;
         g.feathers[it.cid ?? "?"] = true;
         g.message = "Phoenix Feather! Press F to remotely lift a downed partner (one use)";
+        g.messageT = 220;
+        sfx(g, "secret");
+      } else if (it.kind === "frostbell") {
+        g.hasBell = true;
+        g.bells[it.cid ?? "?"] = true;
+        g.message = "Frost Bell! Press C to freeze the room's foes (one use)";
+        g.messageT = 220;
+        sfx(g, "secret");
+      } else if (it.kind === "mirror") {
+        g.hasMirror = true;
+        g.mirrors[it.cid ?? "?"] = true;
+        g.message = "Mirror Shard! The scry-window now shows your partner clearly";
         g.messageT = 220;
         sfx(g, "secret");
       } else {
@@ -1924,9 +2025,16 @@ function tickSimPhysics(g: Game): void {
 
   for (const e of g.enemies) if (!e.dead) updateEnemy(g, e);
 
-  // the spared wraith drifts with heroes in this sim and joins the fight
+  // the spared wraith drifts with heroes in this sim and joins the fight.
+  // it is a SINGLE spirit that lives in exactly ONE sim — only its own sim
+  // ticks (and renders) it, so a FREE ROAM split can't clone it into the PiP.
+  // If its room has emptied of heroes but this one holds the party, it re-homes.
   if (g.companion) {
     const c = g.companion;
+    const heroesHere = g.players.some(p => p.present && p.simIndex === si);
+    const heroesHome = g.players.some(p => p.present && p.simIndex === c.sim);
+    if (!heroesHome && heroesHere) c.sim = si;
+    if (c.sim === si) {
     c.t++;
     let tx = 0, ty = 0, n = 0;
     // spirit anchor: stay on a downed hero while a living partner shares the room
@@ -1972,6 +2080,7 @@ function tickSimPhysics(g: Game): void {
         }
         sfx(g, "shard");
       }
+    }
     }
   }
   for (const it of g.pickups) {
@@ -2031,6 +2140,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         }
         tickSimPhysics(g);
       }
+      checkMirrorShatter(g);
       break;
     }
     case "gameover":
@@ -2066,7 +2176,8 @@ export interface PartnerView {
     downed: boolean; say: string; sayT: number;
   };
   enemies: { kind: EnemyKind; x: number; y: number; hp: number; maxHp: number;
-             hurt: number; phase: number; t: number; dead: boolean; spareP: number; stagger: number }[];
+             hurt: number; phase: number; t: number; dead: boolean; spareP: number;
+             stagger: number; frozen: number }[];
   pickups: { kind: PickupKind; x: number; y: number }[];
   projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
   companion: { x: number; y: number; t: number } | null;
@@ -2085,12 +2196,14 @@ export interface Snapshot {
     say: string; sayT: number; present: boolean;
   }[];
   enemies: { kind: EnemyKind; x: number; y: number; hp: number; maxHp: number;
-             hurt: number; phase: number; t: number; dead: boolean; spareP: number; stagger: number }[];
+             hurt: number; phase: number; t: number; dead: boolean; spareP: number;
+             stagger: number; frozen: number }[];
   companion: { x: number; y: number; t: number } | null;
   pickups: { kind: PickupKind; x: number; y: number }[];
   projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
   pedestal: { x: number; y: number; final: boolean } | null;
   hasBow: boolean; amberClaimed: boolean; charm: boolean; hasFeather: boolean;
+  hasBell: boolean; hasMirror: boolean;
   message: string; messageT: number;
   shake: number; ticks: number; fade: number;
   events: GameEvent[];
@@ -2109,7 +2222,8 @@ export interface Snapshot {
 function serEnemy(e: Enemy): Snapshot["enemies"][number] {
   return {
     kind: e.kind, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp,
-    hurt: e.hurt, phase: e.phase, t: e.t, dead: e.dead, spareP: e.spareP, stagger: e.stagger,
+    hurt: e.hurt, phase: e.phase, t: e.t, dead: e.dead, spareP: e.spareP,
+    stagger: e.stagger, frozen: e.frozen,
   };
 }
 
@@ -2141,7 +2255,10 @@ function partnerViewFor(g: Game, viewerSlot: number, viewerSimIdx: number): Part
     projectiles: sim.projectiles.map(pr => ({
       x: pr.x, y: pr.y, vx: pr.vx, vy: pr.vy, friendly: pr.friendly,
     })),
-    companion: g.companion,
+    // the spared wraith belongs to exactly one sim — show it only if it lives
+    // in the PARTNER's room, else it doubles into both the main view and the PiP
+    companion: g.companion && g.companion.sim === partner.simIndex
+      ? { x: g.companion.x, y: g.companion.y, t: g.companion.t } : null,
   };
 }
 
@@ -2172,13 +2289,15 @@ export function toSnapshot(g: Game, names: [string, string],
     tiles: (sim.tiles[sim.room] ?? ROOMS[sim.room].tiles).slice(),
     players: g.players.map(p => serPlayer(p, p.simIndex === simIdx)),
     enemies: sim.enemies.map(serEnemy),
-    companion: g.companion ? { ...g.companion } : null,
+    companion: g.companion && g.companion.sim === simIdx
+      ? { x: g.companion.x, y: g.companion.y, t: g.companion.t } : null,
     pickups: sim.pickups.filter(it => it.t >= 0).map(it => ({ kind: it.kind, x: it.x, y: it.y })),
     projectiles: sim.projectiles.map(pr => ({
       x: pr.x, y: pr.y, vx: pr.vx, vy: pr.vy, friendly: pr.friendly,
     })),
     pedestal: sim.pedestal,
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
+    hasBell: g.hasBell, hasMirror: g.hasMirror,
     slick: g.slick,
     message: overlay.message, messageT: overlay.messageT,
     shake: g.shake, ticks: g.ticks, fade: overlay.fade,
@@ -2199,5 +2318,6 @@ export function latch(cur: Input, prev: Input): LatchedInput {
     bE: cur.b && !prev.b,
     stE: cur.st && !prev.st,
     fE: cur.f && !prev.f,
+    cE: cur.c && !prev.c,
   };
 }

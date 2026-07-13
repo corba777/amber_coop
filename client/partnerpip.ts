@@ -69,19 +69,33 @@ export function drawPartnerPip(
   ticks: number,
   ox: number,
   oy: number,
+  hasMirror = false,
 ): void {
   ctx.save();
   ctx.fillStyle = "rgba(8,6,16,0.82)";
   ctx.fillRect(ox - 2, oy - 12, PIP_W + 4, PIP_H + 14);
-  ctx.strokeStyle = "#5a5470";
+  // Mirror Shard: a bright ice-glass frame so the sharpened scry reads at a glance
+  ctx.strokeStyle = hasMirror ? "#bcd7ff" : "#5a5470";
   ctx.lineWidth = 1;
   ctx.strokeRect(ox - 0.5, oy - 0.5, PIP_W + 1, PIP_H + 1);
 
   ctx.font = "6px monospace";
-  ctx.fillStyle = "#9a93b8";
+  ctx.fillStyle = hasMirror ? "#dfe9ff" : "#9a93b8";
   ctx.textAlign = "left";
   const label = `${partnerName.slice(0, 10)} · ${pv.roomName}`.slice(0, 28);
   ctx.fillText(label, ox, oy - 4);
+
+  // with the shard, the mirror also reflects the partner's health — small hearts
+  // pinned to the right of the label strip
+  if (hasMirror) {
+    const hearts = Math.ceil(pv.player.maxHp / 2);
+    const hx = ox + PIP_W - hearts * 8;
+    for (let i = 0; i < hearts; i++) {
+      ctx.globalAlpha = pv.player.hp >= (i + 1) * 2 ? 1 : pv.player.hp === i * 2 + 1 ? 0.55 : 0.2;
+      ctx.drawImage(SPR.heart, hx + i * 8, oy - 11, 7, 7);
+    }
+    ctx.globalAlpha = 1;
+  }
 
   ctx.translate(ox, oy);
   ctx.scale(PIP_SCALE, PIP_SCALE);
@@ -99,6 +113,8 @@ export function drawPartnerPip(
     if (it.kind === "heart") ctx.drawImage(SPR.heart, px, py);
     else if (it.kind === "key") ctx.drawImage(SPR.key, px, py);
     else if (it.kind === "bow") ctx.drawImage(SPR.bow, px, py);
+    else if (it.kind === "frostbell") ctx.drawImage(SPR.bell, px, py);
+    else if (it.kind === "mirror") ctx.drawImage(SPR.mirror, px, py);
     else ctx.drawImage(SPR.heart, px - 2, py - 2, 20, 20);
   }
 

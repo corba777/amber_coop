@@ -1083,7 +1083,19 @@ export class AgentPlayer {
         }
       }
       if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
-        if (this.opts.leader && this.exitGiveUpT <= 0) {
+        const ped = g.pedestal;
+        if (ped && (this.opts.leader || !mate.present)) {
+          // the objective is IN this room — walk ONTO the pedestal (the Amber
+          // Blade at the Old Vault, the final pedestal at the throne). A route-hop
+          // is a no-op when the target room equals the current one, so without
+          // this the quest driver just idles beside the prize (tester report,
+          // AI DUO: "победили босса, взяли сердце и встали"). The human+AI
+          // companion never auto-grabs it — the human leads and decides the end.
+          this.intent = { action: "goto",
+            point: { x: ped.x - PLAYER_W / 2, y: ped.y },
+            say: ped.final ? "This ends the long winter" : "The Amber Blade is ours",
+            why: "the pedestal is the objective in this room" };
+        } else if (this.opts.leader && this.exitGiveUpT <= 0) {
           this.applyRouteHop(g, this.routeDestination(g));
         } else if (!mate.present) {
           this.applyRouteHop(g, this.routeDestination(g));
