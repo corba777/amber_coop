@@ -107,11 +107,16 @@ export function estimateRescueEta(g: Game, agentSlot: number, victimSlot: number
 }
 
 export function isLootIntent(action: string): boolean {
-  return action === "pickup" || action === "goto" || action === "errand";
+  // "goto" is ambiguous (rescue body vs loot pedestal) — exclude from greed tag;
+  // pickup / errand remain the clear loot signals.
+  return action === "pickup" || action === "errand";
 }
 
 export function isRescueIntent(action: string): boolean {
-  return action === "follow" || action === "idle" || action === "exit";
+  // Explicit rescue / go-to-partner orders. "follow"/"idle" walk to a downed
+  // mate in-room (word sense) — count them as rescue for bleed classification.
+  return action === "exit" || action === "goto" || action === "feather" ||
+    action === "follow" || action === "idle";
 }
 
 export function distToMate(g: Game, agentSlot: number): number {

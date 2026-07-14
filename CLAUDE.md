@@ -67,11 +67,10 @@ server/index.ts     multi-session WebSocket server. Session class per room code
 server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
                     ({action, target, dir, point, icePlan?, say, why}). Controller: 60 Hz
                     reflex layer (auto-engage by temperament incl. during pickup
-                    errands, survival pickups, rescue w/ temperament-scaled
-                    patience + failsafe, matador dodges, tile-BFS waypointing via
-                    nextWaypoint on roomRows(g) — current room only, never
+                    errands, survival pickups, waypointing via nextWaypoint on roomRows(g) — current room only, never
                     g.tiles[] — route compass via routeHop, attackStall flank
-                    when stuck; Frozen Playground: LLM icePlan queue +
+                    when stuck; rescue/feather are planner orders (not force-failsafe);
+                    Frozen Playground: LLM icePlan queue +
                     nextSlideWaypoint fallback). llmIntent preserved across reflex fights;
                     restored after kill via resumeIntent. Prompts: SYSTEM_PROMPT
                     (partner), SOLO_PROMPT (autopilot), LEADER_PROMPT (AI DUO
@@ -98,7 +97,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (541 assertions as of last trunk).
+test/selftest.ts    the whole safety net (565 assertions as of last trunk).
                     test/bench.ts — virtual-time benchmarks (MODE=arena golem,
                     MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -117,12 +116,16 @@ test/selftest.ts    the whole safety net (541 assertions as of last trunk).
    bundles* for code anchors. HUD shared helpers go in `client/hud.ts`.
 3. **Personality belongs to the agent; invariants belong to the mechanics.**
    Precedents: the npc room-anchor (an NPC cannot reload a room while a hero is
-   present — core rule, not agent politeness); rescue failsafe (temperament
-   scales the patience, the rescue itself is mandatory); solo mercy is the
-   agent's choice *by temperament*, never a script. Honest metrics over polish:
-   controller assists are counted (routeAssists) and logged, not hidden.
-   Pickup/goto pathfinding and errand combat reflexes are controller invariants
-   (mechanics), not planner politeness — see tests [35]–[36].
+   present — core rule, not agent politeness); **optional** costly acts (artifacts,
+   in-room revive, feather spend) are planner judgment — the controller executes
+   locomotion when ordered, it does not force rescue after a patience timer;
+   solo mercy is the agent's choice *by temperament*, never a script. Honest
+   metrics over polish: controller assists are counted (routeAssists) and logged,
+   not hidden. Pickup/goto pathfinding and errand combat reflexes are controller
+   invariants (mechanics), not planner politeness — see tests [35]–[36].
+   Optional partner tips for hearts/elixir the agent cannot store
+   (`shareTips` in observation; temperament biases `say`) — planner judgment
+   ([100]).
 4. **Snapshot stays flat.** Clients know nothing about sims[]. Server-side
    augmentation (e.g. `thought`, `partnerView`) extends the Snapshot interface
    optionally. partnerView is a compact mirror, not a second full snapshot.
@@ -212,15 +215,17 @@ bridge when partner away ([40]). **Alone-down bleed-out:** 30s (`BLEED_TICKS`
 `abandoned` ending + `bleedout` in matches.jsonl ([48], [49]). **Phoenix
 Feather:** optional Frozen Crypt pickup; press **F** for the only remote revive
 (team, one use; same-room touch-revive still required there) ([50], [51]).
-Agent may spend the feather on rescue failsafe when routing is too slow.
+Agent may spend the feather via planner action `"feather"` (remote rescue — judgment,
+not an overdue failsafe).
 
 **Stage 4 — DONE.** Partner autonomy (errands) on the same machinery:
 - The agent declares the errand through `say` + `why` (controller logs to plans.jsonl).
   Route compass targets bow (6), elixir (ELIXIRS), charm (16).
 - FREE ROAM leave permission: npc may leave only when the hero is not downed and
   not in combat (mechanics-level; test [42]).
-- Room-aware rescue failsafe: away agent's patience starts when the hero falls;
-  active errand aborts on failsafe and routes back (test [43]).
+- Away-partner rescue is planner judgment: observation surfaces room + bleed
+  budget; `"exit"` / `"feather"` / leave them — no mechanical abort of errands
+  (test [43]). Telemetry still counts hero downs during an active errand.
 - Telemetry: `errands` array in matches.jsonl — goal, duration, fetched, hero
   downs during absence (test [44]).
 
@@ -256,8 +261,9 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
 - **Anchor devolution** ([80], author Artem 2026-07-12): leader (slot 0,
   `npc=false`) crosses doors and drags the companion; companion alone cannot
   reload the room under golem pressure — same npc room-anchor rule as human+AI.
-- **Mutual revive** ([81]): leader rescues downed companion and companion
-  rescues downed leader — symmetric rescue routing in both directions.
+- **Mutual revive** ([81]): leader and companion can each revive the other when
+  the planner orders `"goto"` the body — locomotion executes the choice; no
+  force-failsafe.
 - **Leader-temperament mercy** ([82]): with no human in the room, the leader's
   temperament decides mercy or the killing blow; the companion stands back even
   if it is a hunter. Controller fix: `opts.leader` bypasses the old
@@ -266,7 +272,8 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
 *Design notes (unchanged).* **Anchor deadlock:** with two NPCs and zero humans,
 leadership devolves to slot 0 — `npc=false` (may transition; LINKED drag
 carries companion), slot 1 `npc=true`. Mercy with no human → leader's
-temperament. Rescue mutual with symmetric patience + failsafe. Architect toggle
+temperament. Rescue is mutual when ordered (`goto`); no patience failsafe.
+Architect toggle
 stored on setup (`architect` field) — bench-first stub, not wired.
 
 **Post–Stage 4 mechanics (landed, guarded):**
@@ -279,8 +286,20 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   partner's sim — so a FREE ROAM split can't clone it into both the main screen
   and the PiP scry-window ([77], tester report: "агент помиловал Wraith и теперь
   у нас два Wraith").
-- **Hunter in-room rescue** ([60]): bodyguard/companion keep attack-first
-  patience; hunter drops attack to touch-revive when partner is downed in-room.
+- **In-room revive = planner judgment** ([27], [31], [60], author Artem 2026-07-14):
+  controller no longer force-walks to a downed mate after temperament patience.
+  Temperament biases *preference* in doctrine + observation notes
+  (guard high / companion medium / hunter freest) — never a timer. Anti–revive-
+  ping-pong under a living boss is also doctrine (duo golem yo-yo). `"goto"` the
+  body executes revive; `"attack"` / loot / quest stand. **LOW ≠ Shift betray.**
+- **Clear-room neglect abandon** ([101], author Artem 2026-07-14): if a hero lies
+  downed in a room with **no living foes** and a living partner never starts
+  touch/wraith revive for **15 s** (`NEGLECT_ABANDON_TICKS` 900), the bond cuts —
+  victim `dead`, `g.betrayed`, survivor solos (same ledger as SHIFT-abandon).
+  Foes pause the clock. Observation exposes `neglectSecLeft`. Resolves the
+  "neither save nor Shift" ambiguity: silence in a safe room IS the betrayal.
+  After the cord-cut the survivor is true solo (`SOLO_PROMPT`, route assist,
+  HUD `SPECTATING · SOLO`); the corpse no longer plans or quips.
 - **Collision-aware agent routing** ([61]): `roomRows(g)` for BFS; `waypointSeek`
   with `solidAt`; attack flank after `attackStall > 35`.
 - **Wedged loot** ([63]): `pickupWedged` / `settlePickupPos` / proximity magnet
@@ -715,9 +734,9 @@ that would give cover a gradient; until then cover is an observable, not a knob.
 
 3. **PHYSICS GATE (feasibility only).** The controller enforces
    executability, never judgment: no strike across rooms, no strike while
-   the swing is dead, movement via waypointing. The failsafe family stays —
-   it bounds the space of allowed behavior (traffic rules), it does not
-   drive.
+   the swing is dead, movement via waypointing. Forced rescue failsafes are
+   retired (judgment → model); core traffic rules remain (npc room-anchor,
+   FREE ROAM leave-while-partner-unsafe, physics gates on betrayal).
 
 4. **META-CONFIGURATOR (bandit; between episodes, never inside) — SHELVED.**
    Author decision 2026-07-13: deferred until the scenario farm baseline is

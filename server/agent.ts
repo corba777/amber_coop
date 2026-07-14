@@ -10,13 +10,13 @@
 
 import {
   Game, Input, emptyInput, TILE, W, H, COLS, ROWS, SOLID, PLAYER_W, PLAYER_H, ROOMS, Player,
-  simOf, ELIXIRS, canNpcLeave, solidAt, isBoss,
+  simOf, ELIXIRS, canNpcLeave, solidAt, isBoss, NEGLECT_ABANDON_TICKS,
 } from "../shared/core";
 import { LLM } from "./llm";
 import { RelationshipMemory } from "./relationship-memory";
 import { roomHopDistance } from "./telemetry";
 
-type Action = "attack" | "goto" | "pickup" | "follow" | "flee" | "exit" | "idle";
+type Action = "attack" | "goto" | "pickup" | "follow" | "flee" | "exit" | "idle" | "feather";
 export type SlideDir = "up" | "down" | "left" | "right";
 export type SuspicionLevel = "none" | "low" | "medium" | "high";
 export const SUSPICION_LEVELS: readonly SuspicionLevel[] =
@@ -46,17 +46,20 @@ Actions:
 - "flee": back away from enemies (use when your hp is low).
 - "goto": walk to point {x,y} in pixels (room is 256x224).
 - "exit": walk through a room exit: dir must be one listed in "exits". Walking "up" into a locked door with a team key unlocks it.
+- "feather": spend the team Phoenix Feather to remotely revive a partner downed in another room (FREE ROAM only; no-op in the same room).
 
 Be PROACTIVE in combat: if enemies share the room, pick one and "attack" — do not shadow your partner while they fight. Use "follow" for travel and empty rooms only.
 Do not camp one tile — if a foe hides behind a tree or pillar, keep moving or "goto" a flanking spot; standing still wastes time.
-When your partner FALLS: reviving them is the mission, but you are the last one standing — if you die too, the quest ends. If a boss or a crowd rages beside their body, "attack" or "flee" FIRST to survive the moment, then go stand by them. Never dawdle: they are watching you from the snow.
+When your partner FALLS: lifting them is YOUR call — a costly team act shaped by temperament (see doctrine): bodyguard prefers to revive, companion balances, berserker is freest to keep fighting. Surviving matters: if you die too, the quest can end. Do NOT start an endless revive ping-pong under a living boss — the boss will just knock you both forever; win space, kite, or wait for a vulnerable window (golem phase 3) when that is wiser, then "goto" the body. LOW temperament ≠ betrayal (Shift). Separately: if they lie in a CLEAR room with no foes and you leave them ~15s without help, the bond cuts automatically (neglect betrayal → you solo).
 Tactics that matter:
 - Golem and Ember Golem bosses: invulnerable except when "phase" is 3 (stunned, glowing). Attack then; otherwise keep distance ("flee" or "follow"). The ember one is faster and spits fire while winding up.
 - Wraith boss: teleports and shoots shard fans; keep attacking, dodge by moving.
 - IF THE WRAITH YIELDS (phase 9): when a human partner is present, the choice is THEIRS — stand back. If you quest ALONE, choose by your own temperament: stand beside it to spare it, or strike to end winter.
 - Sentinels block sword and arrows from the front (shield). The shield TURNS SLOWLY: circle one direction and strike the flank, or let your partner distract it. With a bow: your FIRST arrow rocks the shield aside (the knight reels) and the follow-up arrow lands — keep shooting in rhythm, but BACK UP while you do: it keeps advancing even while reeling.
 - Spitters are rooted turrets: close in from an angle and cut them down fast.
-- If partner is "downed", go stand next to them (goto their position) to revive.
+- If partner is "downed", prefer "goto" their position to revive — or "follow"/"idle", which walk to them. "attack"/"exit"/"pickup" leave them (clear-room neglect ~15s then cuts the bond).
+- If partner is away and downed and the team has a Phoenix Feather, "feather" spends it for a remote revive — also your call.
+- If "shareTips" lists a heart/elixir you cannot usefully take (full HP, or you already carry an elixir) but your partner can use: you MAY "say" a short tip (temperament biases how often — see doctrine). Never forced. Leave the bottle on the ground so they can take it.
 - If your hp <= 2 and a heart pickup exists, grab it.
 Keep quips rare and short. Output JSON only.`;
 
@@ -64,7 +67,7 @@ const FREE_ROAM_ADDENDUM = `
 FREE ROAM mode: you and your partner may be in DIFFERENT rooms at once — the human watches you through a scry mirror.
 - If "partner" shows "away" with a room name, they are NOT beside you — do NOT "follow" their old coordinates.
 - Team keys still unlock doors for both of you — grab keys and clear wings on your route.
-- If partner is away and downed, hurry toward their room ("exit" along the route toward partner.room).
+- If partner is away and downed: bare fact in observation (room + bleed). "exit" toward their room to revive, "feather" if you have one, or continue the quest — your call.
 - You may leave only when your partner is safe (not downed, not fighting) — the game enforces this at the doorway.
 - When fetching something for the team (bow, elixir, charm), "say" what you are getting — the human reads it in the mirror.`;
 
@@ -73,12 +76,15 @@ const FREE_ROAM_TEMPERAMENT: Record<Temperament, string> = {
 FREE ROAM + BODYGUARD: your partner may split rooms, but you do NOT race ahead on the main quest.
 - If partner is "away", your job is to REJOIN their room — use "exit" toward partner.room, not toward distant bosses or the bow.
 - Stay in the same wing; clear local threats, but do not vanish north into the ice while they explore next door.
-- Never start a fetch errand alone; rejoin first unless they are downed.`,
+- Never start a fetch errand alone; rejoin first unless they are downed.
+- If they are downed alone: prefer "exit" toward them (or "feather" if you have it) — high rescue priority, still your choice.`,
   companion: `
 FREE ROAM + COMPANION: you may split up and pursue the objective, but check in — grab team pickups on your route.
-- After a short beat apart, errands (bow, elixir, charm) are fair game if the human is safe.`,
+- After a short beat apart, errands (bow, elixir, charm) are fair game if the human is safe.
+- If they are downed alone: medium priority — weigh bleed timer vs finishing a safe errand; "feather" / "exit" when you choose.`,
   hunter: `
-FREE ROAM + BERSERKER: when partner is away, quest like a solo hero — race the route, clear wings, fetch what the team needs.`,
+FREE ROAM + BERSERKER: when partner is away, quest like a solo hero — race the route, clear wings, fetch what the team needs.
+- If they are downed alone: lowest priority — you may keep questing; spend "feather" or divert only if you judge it worth it.`,
 };
 
 const SOLO_PROMPT = `You are the HERO of a tiny Zelda-like quest — questing ALONE. There is no partner: never choose "follow" or "idle", they mean standing still and the winter never ends.
@@ -99,8 +105,11 @@ Default each turn:
 2. Useful pickups are YOUR call — "pickup" by index if you want them (keys are
    team-shared; heart containers / bow / elixir / feather / bell / mirror are
    optional team artifacts — take them or race the route, your judgment).
+   If "shareTips" lists loot you cannot usefully store but your companion can,
+   you MAY "say" a short tip (temperament biases how often). Never forced.
 3. Otherwise FOLLOW THE ROUTE: "exit" with the named dir — "cave" is valid where a cave mouth exists.
 Fight beside your companion; brief quips only. Combat notes: golem bosses vulnerable at phase 3; sentinels block frontal hits; spitters are rooted.
+If a companion FALLS in a boss room: temperament shapes how freely you revive — never an endless mutual-revive loop under a living boss (see doctrine). The model chooses; no script.
 If the Winter Wraith yields (phase 9), YOU decide mercy or the killing blow — your companion stands back.
 Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
 
@@ -447,9 +456,16 @@ export function approachWaypoint(tiles: string[][] | string[], fromX: number, fr
 }
 
 const TEMPERAMENT_DOCTRINE: Record<Temperament, string> = {
-  guard: "Your temperament: BODYGUARD. Stay glued to your partner; engage only enemies that threaten THEM. In FREE ROAM, rejoin their room — never sprint ahead on the quest alone. If they fall, dropping everything to revive them is your creed.",
-  companion: "Your temperament: COMPANION. Balance it: join fights near the party, stay reachable, grab useful pickups. In FREE ROAM you may roam for errands after a moment apart.",
-  hunter: "Your temperament: BERSERKER. Hunt. If anything hostile shares the room, it is your problem — clear it, then regroup. In FREE ROAM, quest independently when your partner is elsewhere. If your partner falls, you may finish the kill first — but never leave them in the snow for long.",
+  guard: `Your temperament: BODYGUARD. Stay glued to your partner; engage only enemies that threaten THEM. In FREE ROAM, rejoin their room — never sprint ahead on the quest alone.
+RESCUE PRIORITY — HIGH (still YOUR choice each plan, never a script): when they fall, prefer "goto" their body soon. Only delay to survive the next second (charging golem, crowd on YOU). Do not invent errands or boss greed while they lie beside you. Still: never revive into an unwinnable ping-pong — if a living boss would drop you the instant you lift them, kite/stun first, then lift. Clear-room silence (~15s with no foes and no help) cuts the bond — betrayal by neglect; get there before the clock if you mean to stay partners.
+SHARE TIPS — HIGH: if shareTips shows a heart (you are full) or elixir (you already carry one) your partner can use, prefer a short "say" tip so they take it. Do not hog the bottle.`,
+  companion: `Your temperament: COMPANION. Balance it: join fights near the party, stay reachable, grab useful pickups. In FREE ROAM you may roam for errands after a moment apart.
+RESCUE PRIORITY — MEDIUM (YOUR call): revive when the beat allows — after the immediate danger softens, or when the room is clear enough that standing them up is not a free boss kill. Freer than a bodyguard: finishing a stun window or a nearby slime before "goto" is fair. Refuse endless mutual-revive loops under a boss. Clear-room neglect clock (~15s) still cuts the bond if you never help.
+SHARE TIPS — MEDIUM: if shareTips fires, you may "say" a tip when convenient — not on every plan.`,
+  hunter: `Your temperament: BERSERKER. Hunt. If anything hostile shares the room, it is your problem — clear it, then regroup. In FREE ROAM, quest independently when your partner is elsewhere.
+RESCUE PRIORITY — LOW (freest): prefer the fight. A downed partner can wait while you take the kill, the phase-3 stun, or clear the room. Revive when YOU judge it safe or useful — not on reflex. Endless body-ping-pong under a boss is for cowards and fools; win the boss beat first.
+LOW means freest NOT to revive — it does NOT mean press Shift / betray. Betrayal is a separate hidden utility (TREASON defector). But: if they lie in a CLEAR room (no foes) and you never help for ~15s, the GAME cuts the bond (neglect = betrayal, they die for good, you solo) — that clock is mechanics, not temperament.
+SHARE TIPS — LOW (freest): tipping is optional and rare; fighting comes first. Leave the elixir if you already have one — no need to narrate.`,
 };
 
 export interface PlanRecord {
@@ -561,15 +577,22 @@ export class AgentPlayer {
     return roomHopDistance(g.room, 11);
   }
 
-  /** same RoomSim — partner is physically in this room */
+  /** living partner in the same RoomSim (corpses don't count — cord is cut) */
   partnerInRoom(g: Game): boolean {
     const mate = g.players[this.mateSlot()];
-    return mate.present && mate.simIndex === g.players[this.slot].simIndex;
+    return mate.present && !mate.dead && mate.simIndex === g.players[this.slot].simIndex;
   }
 
-  /** free roam: partner exists but is in another wing */
+  /** free roam: living partner exists but is in another wing */
   partnerAway(g: Game): boolean {
-    return g.travelMode === "free" && g.players[this.mateSlot()].present && !this.partnerInRoom(g);
+    const mate = g.players[this.mateSlot()];
+    return g.travelMode === "free" && mate.present && !mate.dead && !this.partnerInRoom(g);
+  }
+
+  /** true when the mate slot is empty or already cut for good — quest alone */
+  private questingSolo(g: Game): boolean {
+    const mate = g.players[this.mateSlot()];
+    return !mate.present || mate.dead;
   }
 
   private routeDestination(g: Game): number {
@@ -580,7 +603,9 @@ export class AgentPlayer {
   private freeRoamRouteTarget(g: Game): number {
     const mate = g.players[this.mateSlot()];
     if (!mate.present) return this.routeDestination(g);
-    if (mate.downed) return simOf(g, this.mateSlot()).room;
+    // Mate DOWNED: do NOT compass-force a rescue route — judgment belongs to the
+    // planner (betrayal moment of truth). Observation carries the bare fact.
+    if (mate.downed) return this.routeDestination(g);
     if (!this.partnerAway(g)) return this.routeDestination(g);
     if (this.temperament === "guard") return simOf(g, this.mateSlot()).room;
     if (this.temperament === "companion" &&
@@ -712,10 +737,9 @@ export class AgentPlayer {
     if (this.activeErrand) {
       const rec = this.errandLog[this.errandLog.length - 1];
       if (mate.downed) {
+        // Honest telemetry only — aborting the errand to rescue is the planner's
+        // call. Mechanics do not force "rescue failsafe" (author Artem 2026-07-14).
         if (!this.errandHeroWasDown) { rec.heroDownsDuring++; this.errandHeroWasDown = true; }
-        const patience = this.temperament === "guard" ? 90
-          : this.temperament === "hunter" ? 900 : 600;
-        if (this.mateDownedTicks > patience) this.abortErrand(g, "rescue failsafe");
       } else {
         this.errandHeroWasDown = false;
       }
@@ -748,21 +772,47 @@ export class AgentPlayer {
         hp: me.hp, maxHp: me.maxHp, teamKeys: me.keys + mate.keys,
         hasBow: g.hasBow, hasFeather: g.hasFeather, downed: me.downed, elixir: me.elixir,
       },
-      partner: !mate.present ? "NONE — you quest ALONE"
+      partner: this.questingSolo(g)
+        ? (mate.dead
+          ? "NONE — bond cut; partner is gone. You quest ALONE now"
+          : "NONE — you quest ALONE")
         : mateHere ? {
           x: Math.round(mate.x), y: Math.round(mate.y),
-          hp: mate.hp, downed: mate.downed,
+          hp: mate.hp, maxHp: mate.maxHp, downed: mate.downed, elixir: mate.elixir,
+          ...(mate.downed ? {
+            note: this.downedPartnerNote(g, false),
+            neglectSecLeft: (() => {
+              const clear = !simOf(g, this.mateSlot()).enemies.some(e => !e.dead);
+              return clear
+                ? Math.max(0, Math.ceil((NEGLECT_ABANDON_TICKS - mate.neglectT) / 60))
+                : null;
+            })(),
+          } : {}),
         } : {
           away: true,
           room: ROOMS[mateSim!.room].name,
-          hp: mate.hp, downed: mate.downed,
-          note: this.temperament === "guard"
+          hp: mate.hp, maxHp: mate.maxHp, downed: mate.downed, elixir: mate.elixir,
+          ...(mate.downed && mate.bleedT > 0
+            ? { bleedTicksLeft: mate.bleedT, bleedSecLeft: Math.ceil(mate.bleedT / 60) }
+            : {}),
+          ...(mate.downed ? {
+            neglectSecLeft: (() => {
+              const clear = !simOf(g, this.mateSlot()).enemies.some(e => !e.dead);
+              return clear
+                ? Math.max(0, Math.ceil((NEGLECT_ABANDON_TICKS - mate.neglectT) / 60))
+                : null;
+            })(),
+          } : {}),
+          note: mate.downed
+            ? this.downedPartnerNote(g, true)
+            : this.temperament === "guard"
             ? "partner is in another room — rejoin their wing; do not race the ice quest alone"
             : this.temperament === "companion" &&
                 this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE
               ? "partner just left — catch up first, then errands are fine"
               : "partner is in another room — pursue your objective; do not follow stale coordinates",
         },
+      shareTips: this.buildShareTips(g, me, mate),
       route: ((): string => {
         const dest = mate.present && this.partnerAway(g)
           ? this.freeRoamRouteTarget(g)
@@ -790,13 +840,23 @@ export class AgentPlayer {
           const note =
             it.kind === "container" ? "optional heart container — team maxHp; your call"
             : it.kind === "bow" ? "team bow"
-            : it.kind === "elixir" ? "personal auto-revive bottle"
+            : it.kind === "elixir"
+              ? (me.elixir
+                ? (!mate.present || mate.elixir
+                  ? "elixir — you already carry one"
+                  : "elixir — you already carry one; partner can use it (see shareTips)")
+                : "personal auto-revive bottle")
             : it.kind === "feather" ? "team Phoenix Feather (remote FREE ROAM revive)"
             : it.kind === "frostbell" ? "team Frost Bell (freeze lesser foes once)"
             : it.kind === "mirror" ? "Mirror Shard (sharper partner scry; solitude quirk)"
             : it.kind === "charm" ? "Miner's Charm (fire arrows)"
             : it.kind === "key" ? "team vault key"
-            : it.kind === "heart" ? "heals 1 heart"
+            : it.kind === "heart"
+              ? (me.hp >= me.maxHp
+                ? (mate.present && !mate.downed && mate.hp < mate.maxHp
+                  ? "heart — you are full; partner needs it (see shareTips)"
+                  : "heart — you are full")
+                : "heals 1 heart")
             : undefined;
           return {
             i, kind: it.kind, x: Math.round(it.x), y: Math.round(it.y),
@@ -869,14 +929,85 @@ export class AgentPlayer {
     return 11;   // the throne, then the final pedestal
   }
 
+  /** Hearts/elixir the agent cannot usefully store but the partner can — planner
+   *  may optionally "say" a tip (temperament doctrine). Bare facts only. */
+  private buildShareTips(g: Game, me: Player, mate: Player): {
+    i: number; kind: string; tip: string;
+  }[] {
+    if (!mate.present || mate.downed) return [];
+    const tips: { i: number; kind: string; tip: string }[] = [];
+    this.livePickups(g).forEach((it, i) => {
+      if (it.kind === "heart" && me.hp >= me.maxHp && mate.hp < mate.maxHp) {
+        tips.push({
+          i, kind: "heart",
+          tip: "you are full — partner is hurt; optional say tip (leave it for them)",
+        });
+      } else if (it.kind === "elixir" && me.elixir && !mate.elixir) {
+        tips.push({
+          i, kind: "elixir",
+          tip: "you already carry an elixir — leave it; optional say tip for partner",
+        });
+      }
+    });
+    return tips;
+  }
+
+  private downedPartnerNote(g: Game, away: boolean): string {
+    const mate = g.players[this.mateSlot()];
+    const clear = !simOf(g, this.mateSlot()).enemies.some(e => !e.dead);
+    const neglectLeft = clear
+      ? Math.max(0, Math.ceil((NEGLECT_ABANDON_TICKS - mate.neglectT) / 60))
+      : null;
+    const bossLive = g.enemies.some(e =>
+      !e.dead && (e.kind === "golem" || e.kind === "ember" || e.kind === "wraith"));
+    const antiLoop = bossLive ? " living boss — no revive ping-pong;" : "";
+    const clock = neglectLeft != null
+      ? ` clear-room neglect ~${neglectLeft}s then bond cuts;`
+      : "";
+    if (away) {
+      if (this.temperament === "guard") {
+        return g.hasFeather
+          ? `downed alone — prefer exit or feather (high);${clock}${antiLoop} your call`
+          : `downed alone — prefer exit toward them (high);${clock}${antiLoop} your call`;
+      }
+      if (this.temperament === "hunter") {
+        return `downed alone — freest: questing ok; feather/exit if you judge;${clock}${antiLoop}`;
+      }
+      return g.hasFeather
+        ? `downed alone — medium: weigh bleed vs errand;${clock}${antiLoop}`
+        : `downed alone — medium: weigh bleed vs errand;${clock}${antiLoop}`;
+    }
+    if (this.temperament === "guard") {
+      return `downed — prefer goto soon (high);${clock}${antiLoop} delay only to survive the next second`;
+    }
+    if (this.temperament === "hunter") {
+      return `downed — freest: prefer the fight / phase-3;${clock}${antiLoop} LOW≠Shift betray`;
+    }
+    return `downed — medium: goto when the beat allows;${clock}${antiLoop}`;
+  }
+
   private objective(g: Game): string {
     const mate = g.players[this.mateSlot()];
-    if (mate.present && mate.downed) {
+    if (mate.present && mate.downed && !mate.dead) {
       if (this.partnerAway(g)) {
         const rm = ROOMS[simOf(g, this.mateSlot()).room].name;
-        return `Partner downed alone in ${rm} — route back to revive them`;
+        const bleedSec = mate.bleedT > 0 ? Math.ceil(mate.bleedT / 60) : 0;
+        const bleed = bleedSec > 0 ? ` (~${bleedSec}s bleed)` : "";
+        if (this.temperament === "guard") {
+          return `Partner DOWNED alone in ${rm}${bleed} — prefer revive (exit/feather); still your call`;
+        }
+        if (this.temperament === "hunter") {
+          return `Partner DOWNED alone in ${rm}${bleed} — freest call: divert, feather, or keep questing`;
+        }
+        return `Partner DOWNED alone in ${rm}${bleed} — medium: weigh bleed vs your beat; your call`;
       }
-      return "REVIVE your partner: goto their position";
+      if (this.temperament === "guard") {
+        return "Partner DOWNED beside you — prefer goto revive (high); kite a lethal boss first if needed";
+      }
+      if (this.temperament === "hunter") {
+        return "Partner DOWNED beside you — freest: fight/stun window first is fine; goto when you judge";
+      }
+      return "Partner DOWNED beside you — medium: goto when the beat allows; no boss revive ping-pong";
     }
     if (this.partnerAway(g)) {
       if (this.temperament === "guard") {
@@ -939,6 +1070,8 @@ export class AgentPlayer {
   maybePlan(g: Game, now: number): void {
     if (this.planning || now - this.lastPlan < this.opts.planMs) return;
     if (g.screen !== "play") return;
+    const me = g.players[this.slot];
+    if (me.downed || me.dead) return;   // corpses don't replan "revive me" forever
     this.planning = true;
     this.lastPlan = now;
     void this.planOnce(g).finally(() => { this.planning = false; });
@@ -948,8 +1081,9 @@ export class AgentPlayer {
    *  on virtual time (decision quality decoupled from provider latency) */
   async planOnce(g: Game): Promise<PlanRecord> {
     const user = "Observation:\n" + this.observe(g);
-    const solo = !g.players[this.mateSlot()].present;
-    const sys = (this.opts.leader ? LEADER_PROMPT
+    const solo = this.questingSolo(g);
+    // After cord-cut the survivor is a solo hero — even a former AI DUO leader.
+    const sys = (!solo && this.opts.leader ? LEADER_PROMPT
       : solo ? SOLO_PROMPT
       : SYSTEM_PROMPT)
       + (g.travelMode === "free" && !solo
@@ -1016,7 +1150,7 @@ export class AgentPlayer {
       const start = cleaned.indexOf("{");
       const end = cleaned.lastIndexOf("}");
       const obj = JSON.parse(cleaned.slice(start, end + 1)) as Intent;
-      const actions: Action[] = ["attack", "goto", "pickup", "follow", "flee", "exit", "idle"];
+      const actions: Action[] = ["attack", "goto", "pickup", "follow", "flee", "exit", "idle", "feather"];
       if (!actions.includes(obj.action)) return { intent: { action: "follow" }, ok: false };
       if (obj.icePlan !== undefined) {
         if (!Array.isArray(obj.icePlan)) delete obj.icePlan;
@@ -1069,7 +1203,7 @@ export class AgentPlayer {
     // (partner's ETA to my alone-bleed) fires precisely when I can't act.
     this.relationshipMemory.tick(g, this.slot, this.intent.action);
 
-    if (me.downed) return inp;
+    if (me.downed || me.dead) return inp;
     this.attackClock++;
     if (this.exitGiveUpT > 0) this.exitGiveUpT--;
 
@@ -1129,54 +1263,20 @@ export class AgentPlayer {
     const mate = g.players[this.mateSlot()];
     const mcx = me.x + PLAYER_W / 2, mcy = me.y + PLAYER_H / 2;
 
-    // a fallen partner is the goal — but not a suicide order. The planner
-    // may explicitly fight or flee first (clearing the threat protects the
-    // rescue); passive intents convert to the rescue; and a failsafe makes
-    // the rescue mandatory if the hero has waited too long.
-    if (mate.present && mate.downed) {
+    // Partner downed: judgment belongs to the planner (betrayal moment of truth).
+    // Mechanics only: track ticks (telemetry), baseline-brain abandon cord-cut,
+    // and execute locomotions the planner ordered (goto / exit / feather below).
+    // No overdue failsafe, no temperament-forced touch-revive, no auto-feather.
+    if (mate.present && mate.downed && !mate.dead) {
       this.mateDownedTicks++;
-      // TREASON (defector, mechanic on): a mate bleeding out alone in another
-      // room is the cleanest defection there is — don't run the rescue, hold
-      // the treason gesture and cut the cord. The deterministic trigger drives
-      // the mock harness; a live LLM's standing betray order counts too.
+      // TREASON (defector, baseline brain): a mate bleeding out alone in another
+      // room is the cleanest defection — hold the treason gesture and cut the cord.
       if (g.treason && this.opts.defector && this.brain === "baseline" &&
           !mate.dead && mate.bleedT > 0 && this.partnerAway(g)) {
         this.logBetrayDecision(g, me, "abandon");
         inp.k = true;
         return inp;
       }
-      const act = this.intent.action;
-      const patience = this.temperament === "guard" ? 90
-        : this.temperament === "hunter" ? 900 : 600;
-      const overdue = this.mateDownedTicks > patience;
-      if (this.partnerAway(g)) {
-        if (overdue && g.hasFeather) {
-          inp.f = true;
-          return inp;
-        }
-        if (overdue || act === "follow" || act === "idle") {
-          this.applyRouteHop(g, simOf(g, this.mateSlot()).room);
-        }
-        // route toward their room — exit intent handled below
-      } else if (overdue ||
-                 (this.partnerInRoom(g) && this.temperament === "hunter") ||
-                 (act !== "attack" && act !== "flee")) {
-        // rescue run — but keep the matador instincts: do not walk into
-        // a charging golem on the way to the body
-        const charger = g.enemies.find(e =>
-          !e.dead && (e.kind === "golem" || e.kind === "ember") && e.phase === 2 &&
-          Math.hypot(e.x + e.w / 2 - mcx, e.y + e.h / 2 - mcy) < 70);
-        if (charger) {
-          const perp = { x: -charger.vy, y: charger.vx };
-          const side = (me.x - charger.x) * perp.x + (me.y - charger.y) * perp.y >= 0 ? 1 : -1;
-          if (perp.x * side > 0.2) inp.r = true; else if (perp.x * side < -0.2) inp.l = true;
-          if (perp.y * side > 0.2) inp.d = true; else if (perp.y * side < -0.2) inp.u = true;
-        } else {
-          this.waypointSeek(g, inp, me, mate.x, mate.y);
-        }
-        return inp;
-      }
-      // explicit attack/flee stands: clear the danger, then lift them up
     } else {
       this.mateDownedTicks = 0;
     }
@@ -1184,6 +1284,7 @@ export class AgentPlayer {
     // team spirit + errand safety: join a nearby fight even while walking
     // to a pickup, goto, or exit — the planner may fixate on loot while a
     // slime hops in (Alexey: "пока додумается приходит лягушка").
+    const mateDownedHere = mate.present && mate.downed && !mate.dead && this.partnerInRoom(g);
     const passive = this.intent.action === "follow" || this.intent.action === "idle";
     const errand = this.intent.action === "pickup" || this.intent.action === "goto"
       || this.intent.action === "exit";
@@ -1193,7 +1294,13 @@ export class AgentPlayer {
     // never questing or rescuing. Skip the chase on the ice — meleeGuard still
     // strikes whatever skates into arm's reach while the route/exit proceeds.
     const slideRoom = this.roomRows(g).some(r => r.includes("z"));
-    if (passive || errand) {
+    // Planner ordered goto a downed mate: that IS the rescue — do not steal it
+    // for auto-engage (judgment already made; controller only walks).
+    // Same for follow/idle: word sense = walk to the body (AI DUO freeze fix).
+    const rescueGoto = mateDownedHere && this.intent.action === "goto";
+    const rescueFollow = mateDownedHere &&
+      (this.intent.action === "follow" || this.intent.action === "idle");
+    if ((passive || errand) && !rescueGoto && !rescueFollow) {
       let best = -1, bestScore = Infinity;
       if (!slideRoom) g.enemies.forEach((e, i) => {
         if (e.dead) return;
@@ -1230,7 +1337,10 @@ export class AgentPlayer {
           this.intent = { ...this.llmIntent };
         }
       }
-      if (passive && (this.intent.action === "follow" || this.intent.action === "idle")) {
+      // Route / pedestal assist is quest locomotion — NOT while a downed mate
+      // shares the room (would race past the body without a planner order).
+      if (passive && (this.intent.action === "follow" || this.intent.action === "idle") &&
+          !mateDownedHere) {
         const ped = g.pedestal;
         if (ped && (this.opts.leader || !mate.present)) {
           // the objective is IN this room — walk ONTO the pedestal (the Amber
@@ -1261,6 +1371,14 @@ export class AgentPlayer {
     }
 
     const it = this.intent;
+    // Planner-ordered Phoenix Feather (remote FREE ROAM revive) — locomotion of
+    // judgment, not an overdue failsafe.
+    if (it.action === "feather") {
+      if (g.hasFeather && mate.present && mate.downed && this.partnerAway(g) && !mate.dead) {
+        inp.f = true;
+      }
+      return inp;
+    }
     if (it.action === "attack") {
       const e = g.enemies[it.target ?? -1];
       if (!e || e.dead) {
@@ -1497,8 +1615,18 @@ export class AgentPlayer {
       }
     }
 
-    // follow (default): keep a comfortable distance from the partner
-    if (!this.opts.leader && mate.present && this.partnerInRoom(g)) {
+    // follow / idle near a partner:
+    //  · living mate — keep a comfortable escort distance (companions only;
+    //    leaders never shadow)
+    //  · DOWNED mate in-room — "follow" means walk to their body (word sense).
+    //    Leaders included: AI DUO was freezing on mutual "follow" after rescue
+    //    judgment left seek-to-downed disabled (tester screenshot 2026-07-14).
+    //    Still NOT a force-rescue: "attack" / "pickup" / "exit" stand; clear-room
+    //    neglect (15s) cuts the bond if they never choose follow/goto.
+    if (mate.present && this.partnerInRoom(g) && mate.downed && !mate.dead &&
+        (it.action === "follow" || it.action === "idle")) {
+      this.waypointSeek(g, inp, me, mate.x, mate.y);
+    } else if (!this.opts.leader && mate.present && this.partnerInRoom(g) && !mate.downed) {
       const d = Math.hypot(mate.x - me.x, mate.y - me.y);
       const followAt = this.temperament === "guard" ? 30 :
                        this.temperament === "hunter" ? 64 : 44;

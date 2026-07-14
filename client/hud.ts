@@ -24,12 +24,22 @@ export function drawHearts(
   ctx.globalAlpha = 1;
 }
 
-/** AI+AI spectator: both heroes' hearts under the spectate tag */
+/** AI+AI spectator: both heroes' hearts — or SOLO after the bond is cut */
 export function drawDuoSpectatorHud(
   ctx: Ctx, s: Snapshot, names: [string, string],
 ): void {
   ctx.font = "7px monospace";
   ctx.fillStyle = "#ffb545";
+  const living = ([0, 1] as const).filter(i => s.players[i].present && !s.players[i].dead);
+  if (living.length === 1) {
+    const pi = living[0];
+    ctx.fillText(`SPECTATING \u00b7 SOLO \u00b7 ${names[pi].slice(0, 28)}`, 4, 10);
+    ctx.fillStyle = "#ffe5b2";
+    ctx.font = "6px monospace";
+    ctx.fillText(names[pi].slice(0, 16), 4, 18);
+    drawHearts(ctx, s.players[pi].hp, s.players[pi].maxHp, 4, 20, 10, 11);
+    return;
+  }
   ctx.fillText(`SPECTATING \u00b7 ${names[0]} + ${names[1]}`, 4, 10);
   for (const pi of [0, 1] as const) {
     const yName = pi === 0 ? 18 : 32;

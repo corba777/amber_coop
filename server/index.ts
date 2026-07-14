@@ -335,7 +335,7 @@ class Session {
 
   tick(tickCount: number): void {
     try {
-      if (this.leaderAgent) {
+      if (this.leaderAgent && !this.game.players[0].dead) {
         this.game.activeSim = this.game.players[0].simIndex;
         this.leaderAgent.maybePlan(this.game, Date.now());
         this.rawInputs[0] = this.leaderAgent.control(this.game);
@@ -344,8 +344,10 @@ class Session {
           this.game.players[0].say = quip0;
           this.game.players[0].sayT = 180;
         }
+      } else if (this.leaderAgent && this.game.players[0].dead) {
+        this.rawInputs[0] = emptyInput();
       }
-      if (this.agent) {
+      if (this.agent && !this.game.players[1].dead) {
         this.game.activeSim = this.game.players[1].simIndex;
         this.agent.maybePlan(this.game, Date.now());
         this.rawInputs[1] = this.agent.control(this.game);
@@ -354,6 +356,8 @@ class Session {
           this.game.players[1].say = quip;
           this.game.players[1].sayT = 180;
         }
+      } else if (this.agent && this.game.players[1].dead) {
+        this.rawInputs[1] = emptyInput();
       }
       const latched: [LatchedInput, LatchedInput] = [
         latch(this.rawInputs[0], this.prevInputs[0]),
