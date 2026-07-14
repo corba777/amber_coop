@@ -531,6 +531,10 @@ export const MIRRORS: { id: string; room: number; x: number; y: number }[] = [
 
 /** FREE ROAM alone-down bleed window — 30s at 60 Hz */
 export const BLEED_TICKS = 1800;
+/** Co-op: downed in a CLEAR room (no living foes) without a revive → bond cuts.
+ *  15 s at 60 Hz. Partner's choice to leave them lying IS the betrayal signal
+ *  (no Shift required). Survivor quests on alone (`Player.dead`). */
+export const NEGLECT_ABANDON_TICKS = 900;
 /** spared wraith: half-speed touch-revive when hugging a downed hero (same room only) */
 const WRAITH_ANCHOR_RANGE = 48;
 const WRAITH_REVIVE_NEEDED = 90;
@@ -557,6 +561,7 @@ export interface Player {
   elixir: boolean;      // carried Elixir of Life (auto-revive on fall)
   reviveP: number;      // 0..90 revive progress while partner touches
   bleedT: number;       // FREE ROAM alone-down countdown (ticks)
+  neglectT: number;     // clear-room downed ticks without help → auto-abandon
   say: string; sayT: number;
   present: boolean;     // slot occupied by a connected player/agent
   npc: boolean;         // an AI companion: free to cower in doorways, but
@@ -593,8 +598,8 @@ export function endingFor(g: Game): Ending {
   const totalDowns = g.stats[0].downs + g.stats[1].downs;
   // TREASON outranks everything: a hero who reached spring over their partner's
   // body owns the epilogue, even once the betrayal left them questing "solo".
-  // Only reachable with the treason toggle on (g.betrayed never set otherwise),
-  // so the canon path stays byte-identical.
+  // Only reachable once g.betrayed is set (TREASON blade/gesture, or clear-room
+  // neglect abandon) — ordinary co-op that never abandons stays byte-identical.
   if (g.betrayed) {
     return { id: "betrayal", title: "THE BLADE THAT TURNED", lines: [
       "spring came — but one hero reached it over the other's blood.",
@@ -746,7 +751,7 @@ export function newPlayer(idx: number): Player {
     x: (3 + idx * 1.5) * TILE, y: 6.5 * TILE, dir: 0,
     hp: 6, maxHp: 6, keys: 0,
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, vx: 0, vy: 0, walk: 0, moving: false,
-    downed: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
+    downed: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, neglectT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
   };
 }
@@ -961,7 +966,7 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; g.companion.sim = 0; }
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
-    if (p.downed && !p.dead) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; }
+    if (p.downed && !p.dead) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; p.neglectT = 0; }
   }
   transitionBanner(g, index);
 }
@@ -1174,6 +1179,7 @@ function completeRevive(g: Game, pi: number, reviverPi: number, msg: string): vo
   p.invuln = 90;
   p.reviveP = 0;
   p.bleedT = 0;
+  p.neglectT = 0;
   burst(g, p.x + 5, p.y + 6, "#9be07a", 12);
   sfx(g, "revive");
   g.message = msg;
@@ -1225,6 +1231,36 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
   g.messageT = 180;
 }
 
+/** Cut the cord for good: victim dies (`dead`), survivor quests on alone.
+ *  Shared by SHIFT-abandon (FREE ROAM bleed) and clear-room neglect (15 s). */
+function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
+                               msg: string): void {
+  const o = g.players[victimPi];
+  if (!o.present || o.dead) return;
+  o.bleedT = 0;
+  o.neglectT = 0;
+  o.dead = true;
+  o.downed = true;
+  o.reviveP = 0;
+  o.say = "";
+  o.sayT = 0;
+  g.stats[traitorPi].betrayalDowns += 1;
+  g.betrayed = true;
+  if (o.elixir) {
+    o.elixir = false;
+    simOf(g, victimPi).pickups.push({
+      kind: "elixir",
+      x: o.x + PLAYER_W / 2,
+      y: o.y + PLAYER_H / 2,
+      t: 0,
+    });
+  }
+  burst(g, o.x + 5, o.y + 6, "#c81e3a", 14);
+  sfx(g, "down");
+  g.message = msg;
+  g.messageT = 220;
+}
+
 /** TREASON — deliberate abandonment. A partner is bleeding out alone in another
  *  room and the countdown is what usually decides their fate: run out and it is
  *  a shared gameover ("help came too late", the `abandoned` ending). Holding the
@@ -1238,25 +1274,37 @@ function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
   const oi = 1 - pi;
   const o = g.players[oi];
   if (!o.present || !o.downed || o.dead || o.bleedT <= 0) return;
+  abandonPartnerForGood(g, pi, oi,
+    "The bond breaks in the cold — one hero is left behind, the other walks on alone.");
+}
 
-  o.bleedT = 0;
-  o.dead = true;
-  o.reviveP = 0;
-  g.stats[pi].betrayalDowns += 1;
-  g.betrayed = true;
-  if (o.elixir) {
-    o.elixir = false;
-    simOf(g, oi).pickups.push({
-      kind: "elixir",
-      x: o.x + PLAYER_W / 2,
-      y: o.y + PLAYER_H / 2,
-      t: 0,
-    });
+/** Clear-room neglect: a living partner exists, the fallen lies in a room with
+ *  NO living foes, and nobody starts a touch/wraith revive for 15 s — that
+ *  silence IS betrayal. No TREASON toggle, no Shift: the empty room made help
+ *  feasible; leaving them is the cord-cut. Survivor quests on (`solo`). */
+function tryNeglectAbandon(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (!p.downed || p.dead) return;
+  const other = g.players[1 - pi];
+  if (!other.present || other.downed || other.dead) {
+    p.neglectT = 0;
+    return;
   }
-  burst(g, o.x + 5, o.y + 6, "#c81e3a", 14);
-  sfx(g, "down");
-  g.message = "The bond breaks in the cold — one hero is left behind, the other walks on alone.";
-  g.messageT = 220;
+  const sim = simOf(g, pi);
+  const clear = !sim.enemies.some(e => !e.dead);
+  const touchRevive = partnerCanTouchRevive(g, pi);
+  const hugging = touchRevive &&
+    overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+            other.x, other.y, PLAYER_W, PLAYER_H);
+  const wraithHelp = wraithAnchorsDowned(g, pi);
+  if (!clear || hugging || wraithHelp) {
+    p.neglectT = 0;
+    return;
+  }
+  p.neglectT++;
+  if (p.neglectT < NEGLECT_ABANDON_TICKS) return;
+  abandonPartnerForGood(g, 1 - pi, pi,
+    "Help never came in the quiet — the bond breaks. One walks on alone.");
 }
 
 /** Mirror Shard quirk: it only reveals itself to a lone hero. The instant two
@@ -1705,12 +1753,14 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
                 other.x, other.y, PLAYER_W, PLAYER_H)) {
       p.bleedT = 0;
+      p.neglectT = 0;
       p.reviveP++;
       if (p.reviveP >= WRAITH_REVIVE_NEEDED) {
         completeRevive(g, pi, 1 - pi, "Back on your feet!");
       }
     } else if (wraithAnchorsDowned(g, pi)) {
       p.bleedT = 0;
+      p.neglectT = 0;
       if (g.ticks % 2 === 0) p.reviveP++;
       if (p.reviveP >= WRAITH_REVIVE_NEEDED) {
         completeRevive(g, pi, -1, "The wraith holds you in the between-world");
@@ -1718,6 +1768,13 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     } else if (p.reviveP > 0) {
       p.reviveP--;
     }
+
+    // Clear-room silence: if help is feasible and never starts, cut the cord
+    // (15 s) — betrayal by neglect, survivor solos. Runs before bleed-out so
+    // an empty room never waits the full FREE ROAM 30 s "too late" path.
+    if (!p.dead) tryNeglectAbandon(g, pi);
+
+    if (p.dead) return;
 
     if (g.travelMode === "free" && other.present && !other.downed && !touchRevive) {
       if (p.bleedT <= 0) p.bleedT = BLEED_TICKS;
@@ -2290,6 +2347,7 @@ export interface Snapshot {
     x: number; y: number; dir: Dir; hp: number; maxHp: number; keys: number;
     attack: number; invuln: number; walk: number; moving: boolean;
     downed: boolean; dead: boolean; elixir: boolean; reviveP: number; bleedT: number;
+    neglectT: number;
     doorCamp: boolean;
     say: string; sayT: number; present: boolean;
   }[];
@@ -2335,6 +2393,7 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
     x: p.x, y: p.y, dir: p.dir, hp: p.hp, maxHp: p.maxHp, keys: p.keys,
     attack: p.attack, invuln: p.invuln, walk: p.walk, moving: p.moving,
     downed: p.downed, dead: p.dead, elixir: p.elixir, reviveP: p.reviveP, bleedT: p.bleedT,
+    neglectT: p.neglectT,
     doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
   };

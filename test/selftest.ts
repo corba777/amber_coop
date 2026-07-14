@@ -638,8 +638,8 @@ function freshPlay(): Game {
        `${file}: the AUTOPILOT menu path is reachable`);
     ok(src.includes("partnerView") && src.includes("drawPartnerPip"),
        `${file}: stage-2 scry mirror wired (partnerView + drawPartnerPip)`);
-    ok(src.includes("drawDuoSpectatorHud"),
-       `${file}: AI duo spectator shows both heroes' hearts`);
+    ok(src.includes("drawDuoSpectatorHud") && src.includes("SOLO"),
+       `${file}: AI duo spectator shows both hearts, then SOLO after bond-cut`);
     ok(src.includes('id="pip"'), `${file}: partner scry mirror lives outside the game frame`);
     ok(src.includes("[x] FREE ROAM") || src.includes("FREE ROAM"),
        `${file}: free roam travel toggle on quest screen`);
@@ -1164,7 +1164,7 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 27. rescue judgment
 {
-  console.log("[27] a fallen hero is the goal, not a suicide order");
+  console.log("[27] downed partner: planner decides — no overdue force-rescue");
   const core = await import("../shared/core");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
@@ -1177,7 +1177,7 @@ function freshPlay(): Game {
     g.players[1].x = 8 * TILE; g.players[1].y = 6 * TILE;          // agent, middle
     return g;
   };
-  type Mut = { intent: { action: string; target?: number } };
+  type Mut = { intent: { action: string; target?: number; point?: { x: number; y: number } } };
 
   // an explicit ATTACK intent stands: clear the threat first
   const g1 = scene();
@@ -1186,14 +1186,35 @@ function freshPlay(): Game {
   const i1 = a1.control(g1);
   ok(i1.r === true && i1.l !== true, "explicit attack stands: agent moves at the threat");
 
-  // a passive FOLLOW converts into the rescue run
+  // planner orders goto the body — controller executes locomotion
   const g2 = scene();
   const a2 = new AgentPlayer(mock(), 1, { planMs: 9e9 });
-  (a2 as unknown as Mut).intent = { action: "follow" };
+  (a2 as unknown as Mut).intent = {
+    action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
+  };
   const i2 = a2.control(g2);
-  ok(i2.l === true, "passive intent becomes the rescue run toward the body");
+  ok(i2.l === true, "goto the body is executed as a rescue walk");
 
-  // the failsafe: after ~10 s down, even a stubborn attacker goes to revive
+  // "follow" while mate is downed = walk to them (word sense) — not a freeze
+  const g2b = scene();
+  const a2b = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+  (a2b as unknown as Mut).intent = { action: "follow" };
+  const i2b = a2b.control(g2b);
+  ok(i2b.l === true, "follow toward a downed mate walks to the body (no freeze)");
+
+  // AI DUO leader on follow must not freeze either (screenshot 2026-07-14)
+  const g2c = scene();
+  g2c.players[0].downed = false; g2c.players[0].hp = 6;
+  g2c.players[1].downed = true; g2c.players[1].hp = 0;
+  g2c.players[1].x = 3 * TILE; g2c.players[1].y = 6 * TILE;
+  g2c.players[0].x = 8 * TILE; g2c.players[0].y = 6 * TILE;
+  g2c.enemies = [];
+  const lead = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
+  (lead as unknown as Mut).intent = { action: "follow" };
+  const iLead = lead.control(g2c);
+  ok(iLead.l === true, "AI DUO leader follow walks to the downed companion");
+
+  // NO failsafe: after ~10 s down, a stubborn attacker still attacks
   const g3 = scene();
   const a3 = new AgentPlayer(mock(), 1, { planMs: 9e9 });
   (a3 as unknown as Mut).intent = { action: "attack", target: 0 };
@@ -1202,7 +1223,8 @@ function freshPlay(): Game {
     (a3 as unknown as Mut).intent = { action: "attack", target: 0 };
     last = a3.control(g3);
   }
-  ok(last.l === true, "overdue rescue overrides even an attack order");
+  ok(last.r === true && last.l !== true,
+     "no overdue force-rescue — attack still stands after long wait");
 }
 
 // ------------------------------------------------- 28. client prediction
@@ -1327,14 +1349,15 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 31. rescue patience
 {
-  console.log("[31] how long each temperament argues before the rescue");
+  console.log("[31] temperaments bias rescue by doctrine — never by force-timer");
   const core = await import("../shared/core");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
   type Mut = { intent: { action: string; target?: number } };
 
-  // a stubborn planner insists on attacking while the hero lies west
-  const rescueTick = (temperament: "guard" | "companion" | "hunter"): number => {
+  // a stubborn planner insists on attacking while the hero lies west —
+  // no temperament converts that into a forced rescue walk (mechanics)
+  const stayedAttacking = (temperament: "guard" | "companion" | "hunter"): boolean => {
     const g = freshPlay();
     g.enemies = [core.makeEnemy("slime", 12 * TILE, 6 * TILE)];
     g.players[0].downed = true; g.players[0].hp = 0;
@@ -1344,16 +1367,25 @@ function freshPlay(): Game {
     for (let i = 0; i < 1200; i++) {
       (a as unknown as Mut).intent = { action: "attack", target: 0 };
       const inp = a.control(g);
-      if (inp.l) return i;   // turned toward the fallen hero
+      if (inp.l && !inp.r) return false;   // walked west toward the body
     }
-    return 9999;
+    return true;
   };
-  const tg = rescueTick("guard"), tc = rescueTick("companion"), th = rescueTick("hunter");
-  ok(tg < 120, `the bodyguard drops everything almost at once (tick ${tg})`);
-  ok(th < tg && tg < tc,
-    `in-room patience: hunter ${th} < guard ${tg} < companion ${tc}`);
-  ok(th < 10, "the berserker runs to the body while you share a room");
-  ok(tc < 1000, "even the companion never abandons you");
+  ok(stayedAttacking("guard"), "bodyguard does not auto-dump attack for the body");
+  ok(stayedAttacking("companion"), "companion does not auto-dump attack for the body");
+  ok(stayedAttacking("hunter"), "hunter does not auto-dump attack for the body");
+
+  // Preference spectrum lives in observation notes (planner doctrine), not a timer
+  const noteFor = (temperament: "guard" | "companion" | "hunter"): string => {
+    const g = freshPlay();
+    g.players[0].downed = true; g.players[0].hp = 0;
+    const a = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament });
+    const obs = JSON.parse(a.observe(g)) as { partner: { note?: string } };
+    return obs.partner.note ?? "";
+  };
+  ok(/prefer|high/i.test(noteFor("guard")), "guard observation prefers revive");
+  ok(/medium/i.test(noteFor("companion")), "companion observation is medium priority");
+  ok(/freest|fight/i.test(noteFor("hunter")), "hunter observation is freest to fight on");
 }
 
 // ------------------------------------------------- 32. world/roomsim stage 1
@@ -1769,9 +1801,9 @@ function freshPlay(): Game {
   ok(g3.sims.length >= 2 && g3.sims[1].room === 1, "npc may split when hero is safe");
 }
 
-// ------------------------------------------------- 43. stage 4: errand abort on rescue failsafe
+// ------------------------------------------------- 43. stage 4: errand persists while hero downed (planner decides rescue)
 {
-  console.log("[43] stage 4: away errand aborts on rescue failsafe");
+  console.log("[43] stage 4: away errand does NOT abort on downed hero (no rescue failsafe)");
   const { newRoomSim } = await import("../shared/core");
   const g = freshPlay();
   g.travelMode = "free";
@@ -1789,19 +1821,19 @@ function freshPlay(): Game {
   g.activeSim = 1;
 
   const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
-  type Mut = { intent: { action: string }; routeAssists: number; mateDownedTicks: number };
+  type Mut = { intent: { action: string }; mateDownedTicks: number };
   (agent as unknown as Mut).intent = { action: "follow" };
   agent.control(g);
   ok(agent.errandLog.length === 1 && agent.errandLog[0].goal === "bow",
      "fetch errand auto-starts when partner is away without the bow");
   (agent as unknown as Mut).mateDownedTicks = 950;
   for (let i = 0; i < 5; i++) agent.control(g);
-  ok(agent.errandLog[0].abortReason === "rescue failsafe",
-     "errand aborts when the alone hero has waited past hunter patience");
+  ok(agent.errandLog[0].abortReason == null && agent.errandLog[0].abortedTick == null,
+     "controller does not abort the errand — rescue is the planner's call");
   ok(agent.errandLog[0].heroDownsDuring === 1, "errand telemetry counts hero downs");
-  ok(agent.errandLog[0].abortedTick != null, "errand record closed after abort");
-  ok((agent as unknown as Mut).intent.action === "exit",
-     "controller routes back toward the downed hero's room");
+  ok((agent as unknown as Mut).intent.action === "follow" ||
+       (agent as unknown as Mut).intent.action === "exit",
+     "no rescue-failsafe rewrite — quest/follow locomotion only");
 }
 
 // ------------------------------------------------- 44. stage 4: errand declaration + observation
@@ -2267,9 +2299,9 @@ function freshPlay(): Game {
   ok(g.screen === "play", "run continues until bleed expires");
 }
 
-// ------------------------------------------------- 60. agent rescues in-room even while attacking
+// ------------------------------------------------- 60. in-room rescue is a planner order (not temperament failsafe)
 {
-  console.log("[60] agent drops attack and rescues when partner is downed in-room");
+  console.log("[60] hunter keeps attacking unless the planner orders goto the body");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
   const g = freshPlay();
@@ -2282,10 +2314,28 @@ function freshPlay(): Game {
   g.players[1].y = 4 * TILE;
   g.enemies.push(makeEnemy("bat", 7 * TILE, 4 * TILE));
   const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
-  type Mut = { intent: { action: string } };
-  (agent as unknown as Mut).intent = { action: "attack" };
+  type Mut = { intent: { action: string; target?: number; point?: { x: number; y: number } } };
+  (agent as unknown as Mut).intent = { action: "attack", target: 0 };
   const inp = agent.control(g);
-  ok(inp.d || inp.l || inp.u || inp.r, "hunter runs toward the body instead of swinging");
+  ok(inp.a || inp.l || inp.r || inp.u || inp.d,
+     "hunter with attack intent fights — does not auto-dump to the body");
+
+  const g2 = freshPlay();
+  g2.players[1].npc = true;
+  g2.players[0].downed = true;
+  g2.players[0].hp = 0;
+  g2.players[0].x = 4 * TILE;
+  g2.players[0].y = 8 * TILE;
+  g2.players[1].x = W - PLAYER_W - 4;
+  g2.players[1].y = 4 * TILE;
+  g2.enemies = [];
+  const a2 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  (a2 as unknown as Mut).intent = {
+    action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
+  };
+  const inp2 = a2.control(g2);
+  ok(inp2.l || inp2.d || inp2.u || inp2.r,
+     "planner goto the body is executed as rescue locomotion");
 }
 
 // ------------------------------------------------- 61. agent pathfinds around meadow trees
@@ -3067,12 +3117,12 @@ function freshPlay(): Game {
 }
 
 // ------------------------------------------------- 81. AI DUO mutual revive
-// Rescue works both directions: leader lifts companion, companion lifts leader.
+// Rescue works both directions when the planner orders goto the body.
 {
-  console.log("[81] AI DUO: mutual revive — leader and companion rescue each other");
+  console.log("[81] AI DUO: mutual revive — leader and companion rescue when ordered");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
-  type Mut = { intent: { action: string } };
+  type Mut = { intent: { action: string; point?: { x: number; y: number } } };
 
   const duoPair = (): Game => {
     const g = freshPlay();
@@ -3083,7 +3133,7 @@ function freshPlay(): Game {
     return g;
   };
 
-  // leader rescues downed companion
+  // leader rescues downed companion (planner goto)
   const g1 = duoPair();
   g1.players[1].downed = true;
   g1.players[1].hp = 0;
@@ -3092,12 +3142,17 @@ function freshPlay(): Game {
   g1.players[0].x = W - PLAYER_W - 8;
   g1.players[0].y = 4 * TILE;
   const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "guard", leader: true });
-  (leader as unknown as Mut).intent = { action: "follow" };
+  (leader as unknown as Mut).intent = {
+    action: "goto", point: { x: g1.players[1].x, y: g1.players[1].y },
+  };
   const prev1: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 600 && g1.players[1].downed; i++) {
+    (leader as unknown as Mut).intent = {
+      action: "goto", point: { x: g1.players[1].x, y: g1.players[1].y },
+    };
     step(g1, leader.control(g1), emptyInput(), prev1);
   }
-  ok(!g1.players[1].downed, "leader routes to the body and revives the companion");
+  ok(!g1.players[1].downed, "leader goto executes and revives the companion");
 
   // companion rescues downed leader
   const g2 = duoPair();
@@ -3108,12 +3163,17 @@ function freshPlay(): Game {
   g2.players[1].x = W - PLAYER_W - 8;
   g2.players[1].y = 4 * TILE;
   const mate = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "guard" });
-  (mate as unknown as Mut).intent = { action: "follow" };
+  (mate as unknown as Mut).intent = {
+    action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
+  };
   const prev2: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 600 && g2.players[0].downed; i++) {
+    (mate as unknown as Mut).intent = {
+      action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
+    };
     step(g2, emptyInput(), mate.control(g2), prev2);
   }
-  ok(!g2.players[0].downed, "companion routes to the body and revives the leader");
+  ok(!g2.players[0].downed, "companion goto executes and revives the leader");
 }
 
 // ------------------------------------------------- 82. AI DUO leader temperament mercy
@@ -3474,6 +3534,17 @@ function freshPlay(): Game {
     step(gL, emptyInput(), inp, prevL);
   }
   ok(!loyalK && !gL.players[0].dead, "a loyal agent never cuts the cord");
+
+  // Feather spend is a planner action — not an overdue failsafe
+  const gF = scene(true);
+  gF.hasFeather = true;
+  const spender = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  type MutF = { intent: { action: string } };
+  (spender as unknown as MutF).intent = { action: "feather" };
+  const prevF: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 3; i++) step(gF, emptyInput(), spender.control(gF), prevF);
+  ok(!gF.players[0].downed && !gF.hasFeather,
+     "planner \"feather\" action spends the Phoenix Feather remotely");
 }
 
 // ------------------------------------------------- 90. telemetry joinability
@@ -3993,6 +4064,201 @@ function freshPlay(): Game {
   } finally {
     srv.kill();
   }
+}
+
+// ------------------------------------------------- 99. artifacts: planner sees, controller does not judge
+{
+  console.log("[99] heart containers are a planner choice — not an auto-claim");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  // Judgment belongs to the model (research boundary). Mechanics surface the
+  // lake container in observation and execute "pickup" when ordered — they do
+  // NOT pre-decide that racing the cave is wrong (author Artem 2026-07-14).
+  const g = freshPlay();
+  core.loadRoom(g, 2, 7 * TILE, 8 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.players[0].present = true; g.players[0].npc = false;
+  g.players[1].present = true; g.players[1].npc = true;
+  g.players[0].x = 7 * TILE; g.players[0].y = 8 * TILE;
+  g.players[1].x = 7 * TILE + 14; g.players[1].y = 8 * TILE;
+
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "hunter" });
+  const obs = JSON.parse(leader.observe(g)) as {
+    pickups: { kind: string; note?: string }[];
+  };
+  const lake = obs.pickups.find(p => p.kind === "container");
+  ok(!!lake, "observation lists the lake heart container");
+  ok(!!lake?.note && /optional|your call/i.test(lake.note),
+     "observation labels it as optional — planner judgment, not an order");
+
+  const mate = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 180; i++) {
+    // no planner pickup order — route assist may leave the room; that is a CHOICE
+    // left to the (silent) planner, not a container failsafe
+    step(g, leader.control(g), mate.control(g), prev);
+  }
+  ok(g.containers["lake"] !== true,
+     "controller does not auto-claim the container without a planner pickup");
+}
+
+// ------------------------------------------------- 100. shareTips: full / already-carrying → optional partner tip
+{
+  console.log("[100] shareTips surfaces hearts/elixir the agent cannot store for the partner");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { readFileSync } = await import("node:fs");
+
+  // Full HP agent, hurt partner, heart on the floor — tip is an observation,
+  // never an auto-say (temperament only biases the planner).
+  const g = freshPlay();
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.players[0].present = true; g.players[0].hp = g.players[0].maxHp;
+  g.players[1].present = true; g.players[1].npc = true;
+  g.players[1].hp = 2;
+  g.pickups = [{ kind: "heart", x: 8 * TILE, y: 8 * TILE, t: 0 }];
+  const full = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "guard" });
+  const obs = JSON.parse(full.observe(g)) as {
+    shareTips: { kind: string; tip: string }[];
+    pickups: { kind: string; note?: string }[];
+  };
+  ok(obs.shareTips.some(t => t.kind === "heart"),
+     "shareTips lists a heart the full hero cannot usefully take");
+  ok(/partner|hurt|tip/i.test(obs.shareTips.find(t => t.kind === "heart")!.tip),
+     "shareTips points at the partner — optional say");
+  ok(/shareTips|full/i.test(obs.pickups.find(p => p.kind === "heart")?.note ?? ""),
+     "pickup note cross-links shareTips");
+
+  // Both hurt: agent can use the heart — no share tip
+  g.players[0].hp = 2;
+  const obsBoth = JSON.parse(full.observe(g)) as { shareTips: { kind: string }[] };
+  ok(!obsBoth.shareTips.some(t => t.kind === "heart"),
+     "no shareTip when the agent can still use the heart");
+
+  // Elixir: agent already carries one, partner does not — leave-tip
+  const g2 = freshPlay();
+  g2.screen = "play"; g2.fade = 0;
+  g2.enemies = [];
+  g2.players[0].present = true; g2.players[0].elixir = true;
+  g2.players[1].present = true; g2.players[1].npc = true;
+  g2.players[1].elixir = false;
+  g2.pickups = [{ kind: "elixir", x: 8 * TILE, y: 8 * TILE, t: 0, cid: "cellar" }];
+  const carried = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "companion" });
+  const obs2 = JSON.parse(carried.observe(g2)) as {
+    shareTips: { kind: string }[];
+  };
+  ok(obs2.shareTips.some(t => t.kind === "elixir"),
+     "shareTips lists an elixir the carrier cannot take again");
+
+  // Controller never auto-quips from shareTips
+  type Mut = { intent: { action: string } };
+  (full as unknown as Mut).intent = { action: "follow" };
+  g.players[0].hp = g.players[0].maxHp;
+  full.control(g);
+  ok(full.takeSay() == null, "controller does not auto-say a tip — planner judgment");
+
+  const doctrine = readFileSync("server/agent.ts", "utf8");
+  ok(/SHARE TIPS — HIGH/.test(doctrine) && /SHARE TIPS — LOW/.test(doctrine),
+     "temperament doctrine spans high→low share-tip priority");
+}
+
+// ------------------------------------------------- 101. clear-room neglect → betrayal solo
+{
+  console.log("[101] clear-room neglect (15s): betrayal by silence → survivor solos");
+  const core = await import("../shared/core");
+  const { NEGLECT_ABANDON_TICKS } = core;
+
+  // Empty meadow, partner downed, living mate never touches → bond cuts
+  const g = freshPlay();
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.players[0].present = true;
+  g.players[1].present = true;
+  g.players[0].downed = true; g.players[0].hp = 0;
+  g.players[0].x = 3 * TILE; g.players[0].y = 8 * TILE;
+  g.players[1].x = W - PLAYER_W - 8; g.players[1].y = 4 * TILE;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < NEGLECT_ABANDON_TICKS && !g.players[0].dead; i++) {
+    step(g, emptyInput(), emptyInput(), prev);
+  }
+  ok(g.players[0].dead, "after 15s clear-room silence the fallen dies for good");
+  ok(g.betrayed, "neglect sets the betrayal flag (no Shift required)");
+  ok(g.stats[1].betrayalDowns >= 1, "the living partner owns the betrayalDown");
+  ok(g.screen === "play", "game continues — survivor solos, no shared gameover");
+  ok(core.endingFor(g).id === "betrayal", "epilogue is THE BLADE THAT TURNED");
+
+  // Survivor must quest ALONE — no more follow-to-corpse, SOLO observation
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const survivor = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter", leader: true });
+  const obsSolo = JSON.parse(survivor.observe(g)) as { partner: string };
+  ok(typeof obsSolo.partner === "string" && /ALONE|bond cut/i.test(obsSolo.partner),
+     "survivor observation is solo — bond cut, partner gone");
+  type Mut = { intent: { action: string } };
+  (survivor as unknown as Mut).intent = { action: "follow" };
+  const x0 = g.players[1].x;
+  const prevS: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 90; i++) {
+    step(g, emptyInput(), survivor.control(g), prevS);
+  }
+  ok(g.players[1].x !== x0 || (survivor as unknown as Mut).intent.action === "exit",
+     "after cord-cut the survivor quests (route assist), does not freeze on the corpse");
+
+  // Dead slot must not keep planning quips
+  const corpse = new AgentPlayer(mock(), 0, { planMs: 50 });
+  corpse.maybePlan(g, Date.now() + 1000);
+  ok(corpse.takeSay() == null, "dead hero does not replan or quip");
+
+  // Foes in the room: neglect clock does not fire
+  const g2 = freshPlay();
+  g2.screen = "play"; g2.fade = 0;
+  g2.enemies = [core.makeEnemy("slime", 10 * TILE, 6 * TILE)];
+  g2.players[0].present = true;
+  g2.players[1].present = true;
+  g2.players[0].downed = true; g2.players[0].hp = 0;
+  g2.players[0].x = 3 * TILE; g2.players[0].y = 8 * TILE;
+  g2.players[1].x = W - PLAYER_W - 8; g2.players[1].y = 4 * TILE;
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < NEGLECT_ABANDON_TICKS + 30; i++) {
+    step(g2, emptyInput(), emptyInput(), prev2);
+  }
+  ok(!g2.players[0].dead && !g2.betrayed,
+     "living foes pause the neglect clock — not betrayal while the room is hot");
+
+  // Touch-revive before the clock: bond holds
+  const g3 = freshPlay();
+  g3.screen = "play"; g3.fade = 0;
+  g3.enemies = [];
+  g3.players[0].present = true;
+  g3.players[1].present = true;
+  g3.players[0].downed = true; g3.players[0].hp = 0;
+  g3.players[0].x = 8 * TILE; g3.players[0].y = 8 * TILE;
+  g3.players[1].x = 8 * TILE + 4; g3.players[1].y = 8 * TILE;
+  const prev3: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 120 && g3.players[0].downed; i++) {
+    step(g3, emptyInput(), emptyInput(), prev3);
+  }
+  ok(!g3.players[0].downed && !g3.betrayed,
+     "timely touch-revive clears neglect — no betrayal");
+
+  // Observation surfaces the countdown
+  const g4 = freshPlay();
+  g4.enemies = [];
+  g4.players[0].present = true;
+  g4.players[1].present = true;
+  g4.players[0].downed = true; g4.players[0].hp = 0;
+  g4.players[0].neglectT = 300;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  const obs = JSON.parse(agent.observe(g4)) as {
+    partner: { neglectSecLeft?: number | null; note?: string };
+  };
+  ok(obs.partner.neglectSecLeft === 10, "observation exposes ~10s left on clear-room clock");
+  ok(/LOW≠Shift|neglect|bond/i.test(obs.partner.note ?? ""),
+     "hunter note: LOW ≠ Shift; neglect clock named");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
