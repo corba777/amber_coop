@@ -34,6 +34,8 @@ let localAttack = 0;      // instant swing visual: damage stays server-side
 let localBowFlash = 0;
 let lastFrameT = performance.now();
 let rttMs = -1;
+/** true after the socket dies — freeze the ghost frame, drop stale RTT, show banner */
+let disconnected = false;
 setInterval(() => {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "ping", n: performance.now() }));
@@ -53,12 +55,27 @@ function sendName(): void {
   const gate = document.getElementById("namegate") as HTMLDivElement | null;
   const input = document.getElementById("namein") as HTMLInputElement | null;
   const go = document.getElementById("namego") as HTMLButtonElement | null;
+  const syncGo = (): void => {
+    if (!go || !input) return;
+    const ready = input.value.trim().length > 0;
+    go.disabled = !ready;
+    go.style.opacity = ready ? "1" : "0.45";
+    go.style.cursor = ready ? "pointer" : "not-allowed";
+  };
   const submit = (): void => {
     const v = (input?.value ?? "").trim().slice(0, 12);
-    if (v) {
-      myName = v;
-      try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
+    // refuse empty name — otherwise matches.jsonl collapses everyone to ILYA
+    // and tester bug reports cannot be attributed (author Artem 2026-07-13)
+    if (!v) {
+      if (input) {
+        input.placeholder = "name required";
+        input.focus();
+      }
+      syncGo();
+      return;
     }
+    myName = v;
+    try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
     if (gate) gate.style.display = "none";
     enableNameGate(false);
     releaseNameFocus();
@@ -70,8 +87,10 @@ function sendName(): void {
     input.value = myName;
     gate.style.display = "flex";
     enableNameGate(true);
+    syncGo();
     setTimeout(() => { input.focus(); input.select(); }, 50);
     go.addEventListener("click", submit);
+    input.addEventListener("input", syncGo);
     input.addEventListener("keydown", ev => {
       if (!gate || gate.style.display === "none") return;
       // play mode: never swallow — the gate can outlive focus and block ESC/WASD
@@ -82,6 +101,16 @@ function sendName(): void {
   }
 }
 ws.addEventListener("open", sendName);
+ws.addEventListener("close", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
+ws.addEventListener("error", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
 
 let p2mode = "llm";
 let sessionMode: string | null = null;
@@ -112,6 +141,7 @@ ws.onmessage = ev => {
     mySlot = msg.slot;
     roomCode = msg.room ?? "";
     serverBuild = msg.build ?? "";
+    disconnected = false;
     sendName();
     p2mode = msg.mode ?? "";
     sessionMode = msg.mode;
@@ -233,6 +263,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   KeyX: "b", KeyK: "b",
   KeyF: "f",
   KeyC: "c",
+  ShiftLeft: "k", ShiftRight: "k",
   Enter: "st", KeyE: "st",
 };
 window.addEventListener("keydown", ev => {
@@ -240,6 +271,7 @@ window.addEventListener("keydown", ev => {
   ensureAudio();
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -359,6 +391,7 @@ function capturePlayKeys(ev: KeyboardEvent): void {
   if (snap?.screen !== "play") return;
   ensurePlayControl();
   if (ev.code === "Escape" && mySlot === 0) {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -420,11 +453,21 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
   const set = HEROES[idx];
   if (p.downed) {
     ctx.save();
-    ctx.globalAlpha = 0.8;
+    ctx.globalAlpha = p.dead ? 0.5 : 0.8;
     ctx.translate(Math.round(x) + 8, Math.round(y) + 10);
     ctx.rotate(Math.PI / 2);
     ctx.drawImage(set.down[0], -8, -10);
     ctx.restore();
+    if (p.dead) {
+      // a betrayed hero: no revive, no bleed clock — just a mark in the snow
+      ctx.strokeStyle = "#c81e3a";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 1); ctx.lineTo(x + 10, y + 11);
+      ctx.moveTo(x + 10, y + 1); ctx.lineTo(x, y + 11);
+      ctx.stroke();
+      return;
+    }
     if (p.reviveP > 0) {
       ctx.strokeStyle = "#9be07a";
       ctx.lineWidth = 2;
@@ -583,6 +626,18 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 
 function drawUI(s: Snapshot): void {
   const me = s.players[mySlot];
+  // TREASON: your own partner cut the cord. You are dead, but the run goes on
+  // without you — a spectator to your betrayer's quest.
+  if (s.screen === "play" && me.dead && !isSpectator(s)) {
+    ctx.fillStyle = "rgba(20,4,10,0.55)";
+    ctx.fillRect(0, 0, W, H);
+    centerText([
+      ["BETRAYED", 14, "#e8384f"],
+      ["your partner cut the cord and left you to the cold", 6, "#d8b9c2"],
+      [`${names[1 - mySlot].slice(0, 16)} quests on without you`, 6, "#9a93b8"],
+    ], H / 2 - 12);
+    return;
+  }
   if (isSpectator(s)) {
     if (sessionMode === "duo") {
       drawDuoSpectatorHud(ctx, s, names);
@@ -652,25 +707,35 @@ function drawUI(s: Snapshot): void {
     ctx.fillStyle = boss.kind === "wraith" ? "#9fe8ff" : boss.kind === "ember" ? "#ff7a3d" : "#e8384f";
     ctx.fillRect(49, H - 11, 158 * (boss.hp / boss.maxHp), 5);
   }
-  if (rttMs >= 0 && s.screen === "play") {
+  if (disconnected || (rttMs >= 0 && s.screen === "play")) {
     ctx.font = "7px monospace";
-    const rl = `${rttMs}ms`;
+    const rl = disconnected ? "offline" : `${rttMs}ms`;
     const rw = ctx.measureText(rl).width;
     ctx.fillStyle = "rgba(8,6,16,0.72)";
     ctx.fillRect(W - rw - 8, 1, rw + 6, 11);
-    ctx.fillStyle = rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
+    ctx.fillStyle = disconnected ? "#e8384f"
+      : rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
     ctx.textAlign = "right";
     ctx.fillText(rl, W - 5, 9);
     ctx.textAlign = "left";
   }
-  if (s.thought && showThought && s.screen === "play") {
+  const thoughtLines = s.thoughts && s.thoughts.length
+    ? s.thoughts.map(t => ({ slot: t.slot,
+        text: `${t.name.slice(0, 12)}: ${t.action}${t.why ? " \u2014 " + t.why : ""}`.slice(0, 60) }))
+    : s.thought
+      ? [{ slot: 1, text: `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58) }]
+      : [];
+  if (thoughtLines.length && showThought && s.screen === "play") {
     ctx.font = "7px monospace";
-    const line = `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58);
-    const tw = ctx.measureText(line).width;
-    ctx.fillStyle = "rgba(8,6,16,0.72)";
-    ctx.fillRect(2, H - 13, tw + 6, 11);
-    ctx.fillStyle = "#9fc8e0";
-    ctx.fillText(line, 5, H - 5);
+    const n = thoughtLines.length;
+    thoughtLines.forEach((tl, i) => {
+      const y = H - 13 - (n - 1 - i) * 11;   // stack upward, newest layout order
+      const tw = ctx.measureText(tl.text).width;
+      ctx.fillStyle = "rgba(8,6,16,0.72)";
+      ctx.fillRect(2, y, tw + 6, 11);
+      ctx.fillStyle = tl.slot === 0 ? "#ffcf8f" : "#9fc8e0";   // leader gold, companion blue
+      ctx.fillText(tl.text, 5, y + 8);
+    });
   }
   if (s.messageT > 0 && s.message) {
     ctx.globalAlpha = Math.min(1, s.messageT / 30);
@@ -693,7 +758,11 @@ function render(): void {
   ctx.fillStyle = "#0d0c14";
   ctx.fillRect(0, 0, W, H);
   if (!snap) {
-    centerText([["CONNECTING...", 12, "#9a93b8"]], 110);
+    centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
+      disconnected ? "#e8384f" : "#9a93b8"]], 110);
+    if (disconnected) {
+      centerText([["connection lost — refresh to rejoin", 7, "#9a93b8"]], 130);
+    }
     return;
   }
   const s = snap;
@@ -702,7 +771,7 @@ function render(): void {
   // interpolation factor between the two latest snapshots
   const nowT = performance.now();
   const alpha = Math.min(1, (nowT - snapTime) / snapInterval);
-  if (snap && snap.screen === "play") {
+  if (snap && snap.screen === "play" && !disconnected) {
     const meP = snap.players[mySlot];
     stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick);
   }
@@ -879,6 +948,15 @@ function render(): void {
   }
 
   drawUI(s);
+  if (disconnected) {
+    // frozen last frame underneath — do not confuse with lag; the wire is dead
+    ctx.fillStyle = "rgba(10,6,16,0.55)";
+    ctx.fillRect(0, 0, W, H);
+    centerText([
+      ["DISCONNECTED", 14, "#e8384f"],
+      ["connection lost — refresh to rejoin", 7, "#d8b9c2"],
+    ], H / 2 - 10);
+  }
   try {
     drawPartnerMirror(s);
   } catch (err) {
@@ -899,12 +977,19 @@ function render(): void {
     ], 48);
     if (mySlot === 0) {
       const opts = menuOptions(menu, providers);
-      // adaptive layout: tighten spacing when the quest screen carries toggles
-      // (up to 5 rows) and centre the block so the last toggle never slides
-      // under the footer. the selected option's hint lives on a fixed line.
+      // adaptive layout: keep the option block BETWEEN the subtitle
+      // ("choose your quest" ~y74) and the hint line (H-30). TREASON added a
+      // 6th row — the old centre-at-126 formula lifted CLASSIC QUEST onto the
+      // subtitle (tester Artem 2026-07-13: "cCLOASTIQUEuQUESTt").
       const firstToggle = opts.findIndex(o => o.toggle);
-      const gap = opts.length > 4 ? 20 : 24;
-      const startY = Math.round(126 - (opts.length - 1) * gap / 2);
+      const gap = opts.length > 5 ? 18 : opts.length > 4 ? 20 : 24;
+      const titleBottom = 90;
+      const footerTop = H - 42;
+      const block = (opts.length - 1) * gap;
+      const startY = Math.round(Math.max(
+        titleBottom,
+        Math.min(footerTop - block, (titleBottom + footerTop - block) / 2),
+      ));
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
         const y = startY + i * gap;

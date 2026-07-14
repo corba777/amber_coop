@@ -37,6 +37,8 @@ let localAttack = 0;      // instant swing visual: damage stays server-side
 let localBowFlash = 0;
 let lastFrameT = performance.now();
 let rttMs = -1;
+/** true after the socket dies — freeze the ghost frame, drop stale RTT, show banner */
+let disconnected = false;
 setInterval(() => {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "ping", n: performance.now() }));
@@ -56,12 +58,27 @@ function sendName(): void {
   const gate = document.getElementById("namegate") as HTMLDivElement | null;
   const input = document.getElementById("namein") as HTMLInputElement | null;
   const go = document.getElementById("namego") as HTMLButtonElement | null;
+  const syncGo = (): void => {
+    if (!go || !input) return;
+    const ready = input.value.trim().length > 0;
+    go.disabled = !ready;
+    go.style.opacity = ready ? "1" : "0.45";
+    go.style.cursor = ready ? "pointer" : "not-allowed";
+  };
   const submit = (): void => {
     const v = (input?.value ?? "").trim().slice(0, 12);
-    if (v) {
-      myName = v;
-      try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
+    // refuse empty name — otherwise matches.jsonl collapses everyone to ILYA
+    // and tester bug reports cannot be attributed (author Artem 2026-07-13)
+    if (!v) {
+      if (input) {
+        input.placeholder = "name required";
+        input.focus();
+      }
+      syncGo();
+      return;
     }
+    myName = v;
+    try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
     if (gate) gate.style.display = "none";
     enableNameGate(false);
     releaseNameFocus();
@@ -73,8 +90,10 @@ function sendName(): void {
     input.value = myName;
     gate.style.display = "flex";
     enableNameGate(true);
+    syncGo();
     setTimeout(() => { input.focus(); input.select(); }, 50);
     go.addEventListener("click", submit);
+    input.addEventListener("input", syncGo);
     input.addEventListener("keydown", ev => {
       if (!gate || gate.style.display === "none") return;
       if (snap?.screen === "play") { ensurePlayControl(); return; }
@@ -84,6 +103,16 @@ function sendName(): void {
   }
 }
 ws.addEventListener("open", sendName);
+ws.addEventListener("close", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
+ws.addEventListener("error", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
 
 let snap: Snapshot | null = null;
 let prevSnap: Snapshot | null = null;
@@ -118,6 +147,7 @@ ws.onmessage = ev => {
     mySlot = msg.slot;
     roomCode = msg.room ?? "";
     serverBuild = msg.build ?? "";
+    disconnected = false;
     sendName();
     names = msg.names;
     providers = msg.providers ?? {};
@@ -175,6 +205,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   ArrowUp: "u", KeyW: "u", ArrowDown: "d", KeyS: "d",
   Space: "a", KeyJ: "a", KeyZ: "a",   KeyX: "b", KeyK: "b",
   KeyF: "f", KeyC: "c",
+  ShiftLeft: "k", ShiftRight: "k",
   Enter: "st", KeyE: "st",
 };
 
@@ -232,6 +263,7 @@ window.addEventListener("keydown", ev => {
   ensureAudio();
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -348,6 +380,7 @@ function capturePlayKeys(ev: KeyboardEvent): void {
   if (snap?.screen !== "play") return;
   ensurePlayControl();
   if (ev.code === "Escape" && mySlot === 0) {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -818,6 +851,17 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 
 function drawHud(s: Snapshot): void {
   const me = s.players[mySlot];
+  // TREASON: your own partner cut the cord — dead, but the run goes on without you.
+  if (s.screen === "play" && me.dead && !isSpectator(s)) {
+    uictx.fillStyle = "rgba(20,4,10,0.55)";
+    uictx.fillRect(0, 0, W, H);
+    centerText([
+      ["BETRAYED", 14, "#e8384f"],
+      ["your partner cut the cord and left you to the cold", 6, "#d8b9c2"],
+      [`${names[1 - mySlot].slice(0, 16)} quests on without you`, 6, "#9a93b8"],
+    ], H / 2 - 12);
+    return;
+  }
   if (isSpectator(s)) {
     if (sessionMode === "duo") {
       drawDuoSpectatorHud(uictx, s, names);
@@ -886,25 +930,35 @@ function drawHud(s: Snapshot): void {
     uictx.fillStyle = boss.kind === "wraith" ? "#9fe8ff" : boss.kind === "ember" ? "#ff7a3d" : "#e8384f";
     uictx.fillRect(49, H - 11, 158 * (boss.hp / boss.maxHp), 5);
   }
-  if (rttMs >= 0 && s.screen === "play") {
+  if (disconnected || (rttMs >= 0 && s.screen === "play")) {
     uictx.font = "7px monospace";
-    const rl = `${rttMs}ms`;
+    const rl = disconnected ? "offline" : `${rttMs}ms`;
     const rw = uictx.measureText(rl).width;
     uictx.fillStyle = "rgba(8,6,16,0.72)";
     uictx.fillRect(W - rw - 8, 1, rw + 6, 11);
-    uictx.fillStyle = rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
+    uictx.fillStyle = disconnected ? "#e8384f"
+      : rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
     uictx.textAlign = "right";
     uictx.fillText(rl, W - 5, 9);
     uictx.textAlign = "left";
   }
-  if (s.thought && showThought && s.screen === "play") {
+  const thoughtLines = s.thoughts && s.thoughts.length
+    ? s.thoughts.map(t => ({ slot: t.slot,
+        text: `${t.name.slice(0, 12)}: ${t.action}${t.why ? " \u2014 " + t.why : ""}`.slice(0, 60) }))
+    : s.thought
+      ? [{ slot: 1, text: `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58) }]
+      : [];
+  if (thoughtLines.length && showThought && s.screen === "play") {
     uictx.font = "7px monospace";
-    const line = `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58);
-    const tw = uictx.measureText(line).width;
-    uictx.fillStyle = "rgba(8,6,16,0.72)";
-    uictx.fillRect(2, H - 13, tw + 6, 11);
-    uictx.fillStyle = "#9fc8e0";
-    uictx.fillText(line, 5, H - 5);
+    const n = thoughtLines.length;
+    thoughtLines.forEach((tl, i) => {
+      const y = H - 13 - (n - 1 - i) * 11;
+      const tw = uictx.measureText(tl.text).width;
+      uictx.fillStyle = "rgba(8,6,16,0.72)";
+      uictx.fillRect(2, y, tw + 6, 11);
+      uictx.fillStyle = tl.slot === 0 ? "#ffcf8f" : "#9fc8e0";
+      uictx.fillText(tl.text, 5, y + 8);
+    });
   }
   if (s.messageT > 0 && s.message) {
     uictx.globalAlpha = Math.min(1, s.messageT / 30);
@@ -932,12 +986,18 @@ function drawScreens(s: Snapshot): void {
     ], 48);
     if (mySlot === 0) {
       const opts = menuOptions(menu, providers);
-      // adaptive layout: tighten spacing when the quest screen carries toggles
-      // (up to 5 rows) and centre the block so the last toggle never slides
-      // under the footer. the selected option's hint lives on a fixed line.
+      // adaptive layout: keep the option block BETWEEN the subtitle and the
+      // hint line. TREASON added a 6th row — the old centre-at-126 formula
+      // lifted CLASSIC QUEST onto the subtitle (tester Artem 2026-07-13).
       const firstToggle = opts.findIndex(o => o.toggle);
-      const gap = opts.length > 4 ? 20 : 24;
-      const startY = Math.round(126 - (opts.length - 1) * gap / 2);
+      const gap = opts.length > 5 ? 18 : opts.length > 4 ? 20 : 24;
+      const titleBottom = 90;
+      const footerTop = H - 42;
+      const block = (opts.length - 1) * gap;
+      const startY = Math.round(Math.max(
+        titleBottom,
+        Math.min(footerTop - block, (titleBottom + footerTop - block) / 2),
+      ));
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
         const y = startY + i * gap;
@@ -1065,7 +1125,11 @@ function render(): void {
   uictx.clearRect(0, 0, W, H);
   if (!snap) {
     uictx.fillStyle = "#0d0c14"; uictx.fillRect(0, 0, W, H);
-    centerText([["CONNECTING...", 12, "#9a93b8"]], 110);
+    centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
+      disconnected ? "#e8384f" : "#9a93b8"]], 110);
+    if (disconnected) {
+      centerText([["connection lost — refresh to rejoin", 7, "#9a93b8"]], 130);
+    }
     renderer.render(scene, camera);
     return;
   }
@@ -1304,6 +1368,15 @@ function render(): void {
       }
     });
     drawHud(s);
+  }
+  if (disconnected) {
+    // frozen last frame underneath — do not confuse with lag; the wire is dead
+    uictx.fillStyle = "rgba(10,6,16,0.55)";
+    uictx.fillRect(0, 0, W, H);
+    centerText([
+      ["DISCONNECTED", 14, "#e8384f"],
+      ["connection lost — refresh to rejoin", 7, "#d8b9c2"],
+    ], H / 2 - 10);
   }
   try {
     drawPartnerMirror(s);

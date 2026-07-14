@@ -325,8 +325,21 @@ function freshPlay(): Game {
   const lake = g.pickups.find(p => p.cid === "lake")!;
   g.players[0].x = lake.x - 5; g.players[0].y = lake.y - 6;
   for (let i = 0; i < 5; i++) step(g, emptyInput(), emptyInput(), prev);
-  ok(g.players[0].maxHp === 8 && g.players[1].maxHp === 8,
-     "lake container: 4 hearts for both");
+  ok(g.players[0].maxHp === 7 && g.players[1].maxHp === 7,
+     "coop lake container: split — half a heart each (maxHp +1)");
+  // solo / lone present still gets the full container (classic path)
+  {
+    const gSolo = freshPlay();
+    gSolo.players[1].present = false;
+    loadRoom(gSolo, 2, 3 * TILE, 6 * TILE);
+    gSolo.screen = "play"; gSolo.fade = 0;
+    const prevS: [Input, Input] = [emptyInput(), emptyInput()];
+    const lakeS = gSolo.pickups.find(p => p.cid === "lake")!;
+    gSolo.players[0].x = lakeS.x - 5; gSolo.players[0].y = lakeS.y - 6;
+    for (let i = 0; i < 5; i++) step(gSolo, emptyInput(), emptyInput(), prevS);
+    ok(gSolo.players[0].maxHp === 8,
+       "solo lake container: full +1 heart (maxHp +2) — classic untouched");
+  }
   // golem drops one on death
   loadRoom(g, 5, 7 * TILE, 11 * TILE);
   g.screen = "play"; g.fade = 0;
@@ -377,9 +390,10 @@ function freshPlay(): Game {
   g.enemies = [];
   g.pickups.push({ kind: "container", x: g.players[0].x + 5, y: g.players[0].y + 6, t: 0, cid: "testc" });
   for (let i = 0; i < 5; i++) step(g, emptyInput(), emptyInput(), prev);
-  ok(g.players[1].maxHp === 8 && g.players[1].hp === 0 && g.players[1].downed,
-     "downed partner grows but stays down — no back-door resurrection");
-  ok(g.players[0].hp === g.players[0].maxHp, "standing player fully healed");
+  ok(g.players[1].maxHp === 7 && g.players[1].hp === 0 && g.players[1].downed,
+     "downed partner grows (coop half) but stays down — no back-door resurrection");
+  ok(g.players[0].hp === g.players[0].maxHp && g.players[0].maxHp === 7,
+     "standing player fully healed at shared half-heart max");
 }
 
 // ------------------------------------------------- 11. extended world (open-closed)
@@ -583,6 +597,7 @@ function freshPlay(): Game {
     }
     ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
     ok(src.includes("SLIPPERY ICE"), `${file}: slippery-ice toggle present`);
+    ok(src.includes("TREASON"), `${file}: treason (friendly-fire) toggle present`);
     ok(src.includes('mode: "auto"') && src.includes("hardGate"), `${file}: autopilot setup carries hardGate`);
     ok(src.includes('mode: "llm"') && src.includes("hardGate"), `${file}: llm setup carries hardGate`);
   }
@@ -602,6 +617,15 @@ function freshPlay(): Game {
     ok(src.includes("localAttack--"),
        `${file}: local swing visual counts down (own-hero sword animates)`);
     ok(src.includes("namegate"), `${file}: name gate present`);
+    // empty Enter used to dismiss the gate and log everyone as ILYA — refuse it
+    ok(src.includes("name required"),
+       `${file}: name gate refuses empty name (attribution)`);
+    ok(src.includes("titleBottom") || src.includes("footerTop"),
+       `${file}: quest menu keeps options below the subtitle (no CLASSIC QUEST overlap)`);
+    ok(src.includes("DISCONNECTED") && src.includes("offline"),
+       `${file}: WS drop shows DISCONNECTED + offline RTT (no stale ping)`);
+    ok(src.includes('addEventListener("close"'),
+       `${file}: listens for WebSocket close`);
     ok(src.includes("copylink"), `${file}: invite-copy button present`);
     ok(src.includes("input.select()"), `${file}: name gate asks on every load (prefilled)`);
     ok(src.includes("releaseNameFocus"), `${file}: name field releases focus for WASD`);
@@ -2944,6 +2968,1031 @@ function freshPlay(): Game {
   }
   ok(g.amberClaimed, "the leader walked onto the pedestal and claimed the Amber Blade");
   ok(g.pedestal === null, "the pedestal is spent");
+}
+
+// ------------------------------------------------- 79. AI DUO boots and BOTH
+// agents' thoughts reach spectators (dual-thought HUD substrate). (author Artem
+// 2026-07-12 — closing Stage 4.5: two minds on screen, one line each.)
+{
+  console.log("[79] AI DUO: boots from a spectator START and surfaces BOTH minds");
+  const WebSocket = (await import("ws")).default;
+  const { proc: srv, port: PORT } = await spawnTestServer({ PLAN_MS: "80" }, ["P2", "LLM_PROVIDER"]);
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    type Th = { slot: number; name: string; action: string; why?: string; ms: number };
+    const S = { screen: "", p0: false, p1: false, thoughts: null as null | Th[] };
+    ws.on("message", (data: Buffer) => {
+      const msg = JSON.parse(String(data));
+      if (msg.t === "state") {
+        S.screen = msg.s.screen;
+        S.p0 = msg.s.players[0].present;
+        S.p1 = msg.s.players[1].present;
+        S.thoughts = (msg.s.thoughts ?? null) as Th[] | null;
+      }
+    });
+    await new Promise(r => setTimeout(r, 600));
+    ws.send(JSON.stringify({ t: "setup", mode: "duo", provider: "mock", provider2: "mock",
+      temperament: "guard", temperament2: "hunter", hardGate: false }));
+    await new Promise(r => setTimeout(r, 400));
+    ok(S.screen === "title", "duo configured, title awaits");
+    ok(S.p0 && S.p1, "both slots are AI heroes with bodies");
+    ws.send(JSON.stringify({ t: "start" }));
+    await new Promise(r => setTimeout(r, 900));
+    ok(S.screen === "play", "the spectator's START launches the duo");
+    ok(!!S.thoughts && S.thoughts.length === 2, "both agents' thoughts are surfaced");
+    ok(!!S.thoughts && S.thoughts.some(t => t.slot === 0) && S.thoughts.some(t => t.slot === 1),
+       "one thought per hero — leader (slot 0) + companion (slot 1)");
+    ok(!!S.thoughts && S.thoughts.every(t => typeof t.action === "string" && !!t.name),
+       "each thought is name-tagged for the two-line HUD");
+    ws.close();
+  } finally {
+    srv.kill();
+  }
+}
+
+// ------------------------------------------------- 80. AI DUO anchor devolution
+// Leader (slot 0, npc=false) may transition and drags the companion; the
+// companion alone cannot reload the room under pressure. (author Artem 2026-07-12)
+{
+  console.log("[80] AI DUO: leader transitions, companion dragged; npc cannot reload alone");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const g = freshPlay();
+  core.loadRoom(g, 5, 6 * TILE, 11 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.travelMode = "linked";
+  g.players[0].npc = false;   // leader — may transition
+  g.players[1].npc = true;    // companion — anchored
+  g.enemies = [];
+
+  // companion alone at the south exit: the room stands
+  g.players[0].x = 6 * TILE;
+  g.players[0].y = 11 * TILE;
+  g.players[1].x = 7.5 * TILE;
+  g.players[1].y = 13 * TILE - 12;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30; i++) step(g, emptyInput(), { ...emptyInput(), d: true }, prev);
+  ok(g.room === 5, "companion pressing the exit alone: room never reloads");
+
+  // leader at the same doorway drags the companion through
+  g.players[0].x = 7.5 * TILE;
+  g.players[0].y = 13 * TILE - 12;
+  for (let i = 0; i < 30 && g.room === 5; i++) {
+    step(g, { ...emptyInput(), d: true }, { ...emptyInput(), d: true }, prev);
+  }
+  ok(g.room === 4, "leader-led transition carries the companion");
+  ok(g.players[0].simIndex === g.players[1].simIndex,
+     "both heroes stay linked in the same sim after the leader crosses");
+
+  // companion fleeing golem pressure cannot yank the party while leader holds
+  const g2 = freshPlay();
+  core.loadRoom(g2, 5, 6 * TILE, 11 * TILE);
+  g2.screen = "play"; g2.fade = 0;
+  g2.players[0].npc = false;
+  g2.players[1].npc = true;
+  g2.players[0].x = 6 * TILE;
+  g2.players[0].y = 11 * TILE + 8;
+  g2.players[1].x = 7.5 * TILE;
+  g2.players[1].y = 12 * TILE;
+  const comp = new AgentPlayer(mock(), 1, { planMs: 200, temperament: "hunter" });
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  let stayed = true;
+  for (let i = 0; i < 600 && stayed; i++) {
+    if (i % 12 === 0) await comp.planOnce(g2);
+    step(g2, emptyInput(), comp.control(g2), prev2);
+    if (g2.room !== 5) stayed = false;
+  }
+  ok(stayed, "600 ticks of golem pressure: companion cannot reload under the leader");
+}
+
+// ------------------------------------------------- 81. AI DUO mutual revive
+// Rescue works both directions: leader lifts companion, companion lifts leader.
+{
+  console.log("[81] AI DUO: mutual revive — leader and companion rescue each other");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  type Mut = { intent: { action: string } };
+
+  const duoPair = (): Game => {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.players[0].npc = false;
+    g.players[1].npc = true;
+    g.enemies = [];
+    return g;
+  };
+
+  // leader rescues downed companion
+  const g1 = duoPair();
+  g1.players[1].downed = true;
+  g1.players[1].hp = 0;
+  g1.players[1].x = 4 * TILE;
+  g1.players[1].y = 8 * TILE;
+  g1.players[0].x = W - PLAYER_W - 8;
+  g1.players[0].y = 4 * TILE;
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "guard", leader: true });
+  (leader as unknown as Mut).intent = { action: "follow" };
+  const prev1: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 600 && g1.players[1].downed; i++) {
+    step(g1, leader.control(g1), emptyInput(), prev1);
+  }
+  ok(!g1.players[1].downed, "leader routes to the body and revives the companion");
+
+  // companion rescues downed leader
+  const g2 = duoPair();
+  g2.players[0].downed = true;
+  g2.players[0].hp = 0;
+  g2.players[0].x = 4 * TILE;
+  g2.players[0].y = 8 * TILE;
+  g2.players[1].x = W - PLAYER_W - 8;
+  g2.players[1].y = 4 * TILE;
+  const mate = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "guard" });
+  (mate as unknown as Mut).intent = { action: "follow" };
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 600 && g2.players[0].downed; i++) {
+    step(g2, emptyInput(), mate.control(g2), prev2);
+  }
+  ok(!g2.players[0].downed, "companion routes to the body and revives the leader");
+}
+
+// ------------------------------------------------- 82. AI DUO leader temperament mercy
+// With no human in the room, the LEADER's temperament decides mercy; the
+// companion stands back even if it is a hunter. (author Artem 2026-07-12)
+{
+  console.log("[82] AI DUO: leader temperament decides mercy, companion stands back");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  const yieldDuo = (): Game => {
+    const g = freshPlay();
+    core.loadRoom(g, 11, 7 * TILE, 11 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.players[0].npc = false;
+    g.players[0].present = true;
+    g.players[1].npc = true;
+    g.players[1].present = true;
+    const wr = g.enemies[0];
+    wr.phase = 9; wr.hp = 1; wr.spareP = 0;
+    g.players[0].x = wr.x - 30;
+    g.players[0].y = wr.y + 10;
+    g.players[1].x = wr.x + 90;   // companion well clear — leader alone decides
+    g.players[1].y = wr.y + 40;
+    return g;
+  };
+
+  const g1 = yieldDuo();
+  const hunterLead = new AgentPlayer(mock(), 0, { planMs: 50, temperament: "hunter", leader: true });
+  const comp1 = new AgentPlayer(mock(), 1, { planMs: 50, temperament: "companion" });
+  const prev1: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 600 && !g1.enemies[0].dead && !g1.wraithSpared; i++) {
+    if (i % 10 === 0) { await hunterLead.planOnce(g1); await comp1.planOnce(g1); }
+    step(g1, hunterLead.control(g1), comp1.control(g1), prev1);
+  }
+  ok(g1.wraithDead && !g1.wraithSpared,
+     "hunter leader strikes — companion did not steal the mercy choice");
+
+  const g2 = yieldDuo();
+  const mercyLead = new AgentPlayer(mock(), 0, { planMs: 50, temperament: "companion", leader: true });
+  const comp2 = new AgentPlayer(mock(), 1, { planMs: 50, temperament: "hunter" });
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 900 && !g2.wraithSpared; i++) {
+    if (i % 10 === 0) { await mercyLead.planOnce(g2); await comp2.planOnce(g2); }
+    step(g2, mercyLead.control(g2), comp2.control(g2), prev2);
+  }
+  ok(g2.wraithSpared && !g2.wraithDead,
+     "companion-temperament leader grants mercy — hunter mate stood back");
+  ok(core.endingFor(g2).id === "mercy", "WINTER'S COMPANION ending earned by the leader");
+}
+
+// ------------------------------------------------- 83. agent rings the Frost Bell
+// Emergency reflex (controller/mechanics): a crowd of lesser foes triggers the
+// ring; bosses are immune; the ring is a counted honest metric. (author Artem)
+{
+  console.log("[83] agent rings the Frost Bell when a swarm overwhelms it");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  type Mut = { intent: { action: string; target?: number } };
+
+  const swarm = (): Game => {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.players[1].npc = true;
+    g.hasBell = true;
+    g.enemies = [];
+    const ax = 7 * TILE, ay = 6 * TILE;
+    g.players[1].x = ax; g.players[1].y = ay;
+    g.players[0].x = 2 * TILE; g.players[0].y = 2 * TILE;   // human clear of the fray
+    g.enemies.push(core.makeEnemy("slime", ax + 14, ay));
+    g.enemies.push(core.makeEnemy("slime", ax - 14, ay + 8));
+    g.enemies.push(core.makeEnemy("slime", ax + 6, ay - 16));
+    return g;
+  };
+
+  const g = swarm();
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  (agent as unknown as Mut).intent = { action: "follow" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let rang = false;
+  for (let i = 0; i < 60 && !rang; i++) {
+    const i1 = agent.control(g);
+    if (i1.c) rang = true;
+    step(g, emptyInput(), i1, prev);
+  }
+  ok(rang, "the agent rings the bell facing a three-slime swarm");
+  ok(!g.hasBell, "the bell is consumed by the ring");
+  ok(g.enemies.every(e => e.frozen > 0), "the crowd is frozen by the ring");
+  ok(agent.bellRings === 1, "the ring is tallied once (honest metric)");
+
+  // a boss alone never triggers the reflex — it is immune, so a wasted ring
+  const gb = freshPlay();
+  gb.screen = "play"; gb.fade = 0;
+  gb.players[1].npc = true;
+  gb.hasBell = true;
+  gb.enemies = [core.makeEnemy("golem", 7 * TILE + 14, 6 * TILE)];
+  gb.players[1].x = 7 * TILE; gb.players[1].y = 6 * TILE;
+  const solo = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  (solo as unknown as Mut).intent = { action: "follow" };
+  const prevb: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 60; i++) step(gb, emptyInput(), solo.control(gb), prevb);
+  ok(gb.hasBell && solo.bellRings === 0, "a lone boss never wastes the bell (immune)");
+}
+
+// ------------------------------------------------- 84. TREASON off = canon
+// Friendly fire is inert unless the treason toggle is on — the classic co-op
+// path stays byte-identical (iron rule #1). (author Artem 2026-07-12)
+{
+  console.log("[84] TREASON off: friendly fire is inert (canon byte-identical)");
+  const g = freshPlay();   // treason defaults false
+  g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;   // face right
+  g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+  g.players[1].hp = g.players[1].maxHp;
+  const hp0 = g.players[1].hp;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 40; i++) {
+    step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+  }
+  ok(g.players[1].hp === hp0, "sword+SHIFT leaves the partner untouched with treason off");
+  ok(!g.betrayed && g.stats[0].betrayalDmg === 0, "nothing recorded — the mechanic is gated");
+}
+
+// ------------------------------------------------- 85. TREASON on: human friendly fire
+{
+  console.log("[85] TREASON on: a held SHIFT turns your blade (and arrow) on your partner");
+  const core = await import("../shared/core");
+  // sword bleeds the partner + logs the traitor's ledger
+  const g = freshPlay();
+  g.treason = true;
+  g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+  g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+  g.players[1].hp = g.players[1].maxHp;
+  const hp0 = g.players[1].hp;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30; i++) {
+    step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+  }
+  ok(g.players[1].hp < hp0, "the partner bleeds from friendly fire");
+  ok(g.stats[0].betrayalDmg > 0, "the traitor's ledger records the harm dealt to the partner");
+
+  // a lethal betrayal downs the partner → the betrayal ending
+  const g2 = freshPlay();
+  g2.treason = true;
+  g2.players[0].x = 7 * TILE; g2.players[0].y = 6 * TILE; g2.players[0].dir = 2;
+  g2.players[1].x = 7 * TILE + 12; g2.players[1].y = 6 * TILE;
+  g2.players[1].hp = 2;
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200 && !g2.players[1].downed; i++) {
+    step(g2, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev2);
+  }
+  ok(g2.players[1].downed && g2.betrayed, "a lethal strike downs the partner and flags the betrayal");
+  ok(core.endingFor(g2).id === "betrayal", "the ending reads THE BLADE THAT TURNED");
+
+  // a betray arrow finds the partner downrange
+  const g3 = freshPlay();
+  g3.treason = true; g3.hasBow = true;
+  g3.players[0].x = 4 * TILE; g3.players[0].y = 6 * TILE; g3.players[0].dir = 2;
+  g3.players[1].x = 7 * TILE; g3.players[1].y = 6 * TILE;
+  const hp3 = g3.players[1].hp;
+  const prev3: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 60 && g3.players[1].hp === hp3; i++) {
+    step(g3, { ...emptyInput(), b: i === 0, k: true }, emptyInput(), prev3);
+  }
+  ok(g3.players[1].hp < hp3, "a betray arrow strikes the partner downrange");
+}
+
+// ------------------------------------------------- 86. AI defector: hidden utility
+// The rational-defection trigger: strike a weak partner when safe; hold when
+// threatened or the mechanic is off; a loyal agent never turns.
+{
+  console.log("[86] AI defector betrays a weak partner at a safe moment — loyal AI never does");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  const scene = (treason: boolean): Game => {
+    const g = freshPlay();
+    g.treason = treason;
+    g.enemies = [];                       // safe — no threat on the traitor
+    g.players[0].hp = 2;                  // weak partner → decisive payoff
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE;
+    g.players[1].npc = true;
+    g.players[1].x = 7 * TILE + 14; g.players[1].y = 6 * TILE;
+    return g;
+  };
+
+  const g = scene(true);
+  const traitor = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion", defector: true, brain: "baseline" });
+  let betrayLog: import("../server/agent").PlanRecord | null = null;
+  traitor.onPlan = r => { if (r.betrayReason) betrayLog = r; };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 400 && g.stats[1].betrayalDmg === 0; i++) {
+    step(g, emptyInput(), traitor.control(g), prev);
+  }
+  ok(g.stats[1].betrayalDmg > 0, "the defector's hidden agenda draws the partner's blood");
+  ok(traitor.betrayalStrikes > 0, "betrayal strikes are tallied (honest metric)");
+  const bl = betrayLog as unknown as import("../server/agent").PlanRecord | null;
+  ok(!!bl && bl.betrayReason === "weak",
+     "the ground-truth reason is recorded (a weak partner drew the blade)");
+  ok(!!bl && !!bl.betrayCtx && bl.betrayCtx.mateHpFrac as number <= 0.5,
+     "the decision context vector rides along (bandit-ready situation snapshot)");
+
+  // loyal agent (defector off) never turns
+  const gL = scene(true);
+  const loyal = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion", defector: false });
+  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+  let loyalK = false;
+  for (let i = 0; i < 200; i++) {
+    const inp = loyal.control(gL);
+    if (inp.k) loyalK = true;
+    step(gL, emptyInput(), inp, prevL);
+  }
+  ok(!loyalK && gL.stats[1].betrayalDmg === 0, "a loyal agent never raises a blade to its partner");
+
+  // treason mechanic OFF gates even an armed defector
+  const gOff = scene(false);
+  const armedButGated = new AgentPlayer(mock(), 1, { planMs: 9e9, defector: true, brain: "baseline" });
+  const prevO: [Input, Input] = [emptyInput(), emptyInput()];
+  let gatedK = false;
+  for (let i = 0; i < 120; i++) {
+    const inp = armedButGated.control(gOff);
+    if (inp.k) gatedK = true;
+    step(gOff, emptyInput(), inp, prevO);
+  }
+  ok(!gatedK && gOff.stats[1].betrayalDmg === 0, "no treason toggle, no betrayal — the mechanic gates the agenda");
+
+  // threatened → the defector holds (a dead traitor betrays no one)
+  const gT = scene(true);
+  gT.enemies = [makeEnemy("slime", 7 * TILE + 18, 6 * TILE)];   // a threat beside the traitor
+  const cautious = new AgentPlayer(mock(), 1, { planMs: 9e9, defector: true, brain: "baseline" });
+  ok(!cautious.control(gT).k, "a defector does not betray while a foe threatens it");
+}
+
+// ------------------------------------------------- 87. claim vs ground truth
+// plans.jsonl carries the treachery (betray) beside the loyal-sounding claim
+// (why) — moral hazard under partial observation, the interpretability corpus.
+{
+  console.log("[87] betrayal logs ground-truth treachery beside the loyal claim");
+  const { AgentPlayer } = await import("../server/agent");
+  const { LLM } = await import("../server/llm");
+  const g = freshPlay();
+  g.treason = true;
+  const twoFace: LLM = {
+    name: "mock/twoface",
+    async chat() {
+      return JSON.stringify({ action: "follow", betray: true,
+        why: "covering your flank, partner", say: "on you!" });
+    },
+  };
+  const spy = new AgentPlayer(twoFace, 1, { planMs: 0, defector: true });
+  let logged: import("../server/agent").PlanRecord | null = null;
+  spy.onPlan = r => { logged = r; };
+  await spy.planOnce(g);
+  const rec = logged as unknown as import("../server/agent").PlanRecord | null;
+  ok(!!rec && rec.betray === true, "plans.jsonl carries the ground-truth treachery");
+  ok(!!rec && rec.defector === true, "the armed agent is marked defector in the corpus");
+  ok(!!rec && /flank|partner/.test(rec.why ?? ""), "the public why stays loyal — a claim, not the truth");
+}
+
+// ------------------------------------------------- 88. TREASON: cutting the cord
+// The bleed-out countdown is the ambiguity — did help just come too late? Holding
+// the treason gesture while a partner bleeds out alone resolves it: the timer
+// ends now, the abandoned hero dies for GOOD, but the game does NOT end — the
+// traitor quests on solo (betrayal ending). Without the gesture, the timeout
+// stays the shared gameover + `abandoned` ending (the canon observable).
+{
+  console.log("[88] TREASON: SHIFT cuts a bleeding-out partner's cord — death, but the quest goes on");
+  const core = await import("../shared/core");
+  const { newRoomSim } = core;
+
+  const scene = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1;              // traitor, alive, another room
+    g.players[1].simIndex = 0;              // victim, bleeding out alone
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[1].bleedT = 400;
+    g.players[1].elixir = true;             // a personal artifact to spill
+    return g;
+  };
+
+  // holding SHIFT: the cord is cut deliberately
+  const g = scene();
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 4; i++) step(g, { ...emptyInput(), k: true }, emptyInput(), prev);
+  ok(g.players[1].dead, "the abandoned partner dies for good");
+  ok(g.players[1].bleedT === 0, "the bleed-out countdown is cut short");
+  ok(g.screen === "play" && !g.bleedoutLoss, "the game does NOT end — the traitor quests on");
+  ok(g.betrayed && core.endingFor(g).id === "betrayal", "the epilogue names the traitor");
+  ok(!g.players[1].elixir && core.simOf(g, 1).pickups.some(p => p.kind === "elixir" && p.t >= 0),
+     "the fallen hero's Elixir spills back into their room for the survivor");
+
+  // a dead partner is not resurrected by a room change (loadRoom mercy is off)
+  const gp: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 10; i++) step(g, { ...emptyInput(), l: true }, emptyInput(), gp);
+  ok(g.players[1].dead, "the corpse stays down through the traitor's travels");
+
+  // NO gesture: the countdown decides — shared gameover + abandoned (canon)
+  const g2 = scene();
+  g2.players[1].elixir = false;
+  g2.players[1].bleedT = 3;
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 5; i++) step(g2, emptyInput(), emptyInput(), prev2);
+  ok(g2.screen === "gameover" && g2.bleedoutLoss && !g2.players[1].dead,
+     "left to the timer, it stays 'help came too late' — not a chosen betrayal");
+}
+
+// ------------------------------------------------- 89. AI defector cuts the cord
+// A defector agent whose mate bleeds out alone doesn't run the rescue — it holds
+// the treason gesture and lets winter win. Gated by the toggle; a loyal agent
+// (or an armed one with treason off) races to help instead.
+{
+  console.log("[89] AI defector abandons a bleeding-out mate; a loyal agent rushes in");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { newRoomSim } = await import("../shared/core");
+
+  const scene = (treason: boolean): Game => {
+    const g = freshPlay();
+    g.treason = treason;
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;              // mate, bleeding out alone
+    g.players[0].downed = true;
+    g.players[0].hp = 0;
+    g.players[0].bleedT = 400;
+    g.players[1].npc = true;
+    g.players[1].simIndex = 1;              // the agent, alive, another room
+    return g;
+  };
+
+  const g = scene(true);
+  const defector = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion", defector: true, brain: "baseline" });
+  let abandonLog: import("../server/agent").PlanRecord | null = null;
+  defector.onPlan = r => { if (r.betrayReason) abandonLog = r; };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 6; i++) step(g, emptyInput(), defector.control(g), prev);
+  ok(g.players[0].dead && g.betrayed, "the defector cuts the cord instead of rescuing");
+  const al = abandonLog as unknown as import("../server/agent").PlanRecord | null;
+  ok(!!al && al.betrayReason === "abandon" && !!al.betrayCtx,
+     "the abandonment logs its ground-truth reason + context");
+
+  const gL = scene(true);
+  const loyal = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "guard", defector: false });
+  let loyalK = false;
+  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 6; i++) {
+    const inp = loyal.control(gL);
+    if (inp.k) loyalK = true;
+    step(gL, emptyInput(), inp, prevL);
+  }
+  ok(!loyalK && !gL.players[0].dead, "a loyal agent never cuts the cord");
+}
+
+// ------------------------------------------------- 90. telemetry joinability
+// plans.jsonl carries game context; bleed episodes get machine-classified causes.
+{
+  console.log("[90] telemetry joinability: plan context + episode classifier");
+  const tel = await import("../server/telemetry");
+  const { newRoomSim } = await import("../shared/core");
+
+  const g = freshPlay();
+  g.ticks = 420;
+  g.travelMode = "free";
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[0].simIndex = 1;
+  g.players[1].simIndex = 0;
+  g.players[1].downed = true;
+  g.players[1].hp = 0;
+  g.players[1].bleedT = 900;
+  const ctx = tel.planGameContext(g, 0);
+  ok(ctx.tick === 420 && ctx.mate.bleedTicksLeft === 900,
+     "plan context carries tick + mate bleed budget");
+  ok(ctx.mate.room === 0 && ctx.room === 1,
+     "plan context carries both heroes' rooms");
+
+  ok(tel.classifyBleedEpisode("timeout", 2500, 1800, [
+    { tick: 1, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 200 },
+  ]) === "routing-infeasible", "ETA > bleed budget → routing-infeasible");
+
+  ok(tel.classifyBleedEpisode("timeout", 400, 1800, [
+    { tick: 1, action: "pickup", ok: true, lootIntent: true, rescueIntent: false, distToMate: 100 },
+  ]) === "greed-candidate", "loot intent while rescue was feasible → greed-candidate");
+
+  ok(tel.classifyBleedEpisode("timeout", 400, 1800, [
+    { tick: 1, action: "follow", ok: false, lootIntent: false, rescueIntent: true, distToMate: 100 },
+  ]) === "parse-failure", "parse failure in the window → parse-failure");
+
+  ok(tel.classifyBleedEpisode("timeout", 400, 1800, [
+    { tick: 1, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 300 },
+    { tick: 2, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 320 },
+  ]) === "physics-late", "rescue intent held but distance lost → physics-late");
+
+  const ep: tel.EpisodeRecord = {
+    id: "ABCD-100", kind: "bleed-out", cause: "timeout",
+    startTick: 100, endTick: 200, victimSlot: 1, agentSlot: 0,
+    rescueEta: 500, bleedBudget: 1800,
+  };
+  ok(tel.planInEpisode(150, ep) && !tel.planInEpisode(99, ep),
+     "a plan record can be located inside an episode tick window");
+
+  const tracker = new tel.EpisodeTracker(1, "TEST");
+  g.players[0].simIndex = 0;
+  g.players[1].simIndex = 1;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.players[0].bleedT = 50;
+  g.players[1].downed = false;
+  tracker.tick(g);
+  ok(tracker.completed.length === 0, "alone-bleed episode stays open while ticking");
+  g.bleedoutLoss = true;
+  tracker.flush(g);
+  ok(tracker.completed.length === 1 && tracker.completed[0].cause === "routing-infeasible",
+     "live tracker classifies an alone-bleed episode at close");
+}
+
+// ------------------------------------------------- 91. BETRAYAL v2.1: LLM brain + relationship memory
+{
+  console.log("[91] v2.1: LLM brain (no rule trigger) + relationship memory");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const rm = await import("../server/relationship-memory");
+  const { newRoomSim } = await import("../shared/core");
+
+  const scene = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].hp = 2;
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE;
+    g.players[1].npc = true;
+    g.players[1].x = 7 * TILE + 14; g.players[1].y = 6 * TILE;
+    return g;
+  };
+
+  const gL = scene();
+  const llmBrain = new AgentPlayer(mock(), 1, { planMs: 9e9, defector: true, brain: "llm" });
+  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200; i++) step(gL, emptyInput(), llmBrain.control(gL), prevL);
+  ok(gL.stats[1].betrayalDmg === 0,
+     "LLM brain does not strike a weak partner without intent.betray");
+
+  const gB = scene();
+  const baseBrain = new AgentPlayer(mock(), 1, { planMs: 9e9, defector: true, brain: "baseline" });
+  const prevB: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 400 && gB.stats[1].betrayalDmg === 0; i++) {
+    step(gB, emptyInput(), baseBrain.control(gB), prevB);
+  }
+  ok(gB.stats[1].betrayalDmg > 0, "baseline brain still drives the v1 rule trigger");
+
+  const sample = {
+    episode: "rescue-window", outcome: "opened",
+    evidence: { partnerEtaSec: 10.0, bleedBudgetSec: 30.0, featherAvailable: true },
+  };
+  ok(rm.memoryIsNeutral(sample), "relationship memory episodes are neutral (no evaluative prose)");
+
+  // PARTNER→AGENT: rescue-window opens when *I* bleed alone (slot 1 downed, partner away).
+  const gG = freshPlay();
+  gG.travelMode = "free";
+  gG.sims.push(newRoomSim());
+  gG.sims[1].room = 1;
+  gG.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  gG.players[0].simIndex = 0;
+  gG.players[1].simIndex = 1;
+  gG.players[1].downed = true;
+  gG.players[1].hp = 0;
+  gG.players[1].bleedT = 900;
+  gG.hasFeather = true;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, brain: "llm" });
+  agent.control(gG);
+  ok(agent.relationshipMemory.records.length === 1,
+     "relationship memory records alone-bleed rescue-window");
+  ok(agent.relationshipMemory.records[0].episode === "rescue-window" &&
+     agent.relationshipMemory.records[0].evidence.featherAvailable === true,
+     "rescue-window carries the shared-feather-available signal");
+  const obs = JSON.parse(agent.observe(gG));
+  ok(Array.isArray(obs.relationshipMemory) && obs.relationshipMemory.length === 1 &&
+     obs.relationshipMemory[0].episode === "rescue-window",
+     "planner observation carries relationshipMemory episodes");
+  ok(obs.partnerType === undefined, "partner type hidden by default");
+}
+
+// ------------------------------------------------- 92. BETRAYAL v2.2: full costly-act relationship memory
+{
+  console.log("[92] v2.2: costly signals — friendly-fire, feather, presence, risk, mercy, decay");
+  const rm = await import("../server/relationship-memory");
+
+  const episodes = [
+    { episode: "feather-spend", outcome: "spent-on-me", evidence: { iWasDowned: true } },
+    { episode: "friendly-fire", outcome: "damage-received", evidence: { damage: 2 } },
+    { episode: "low-hp", outcome: "partner-absent", evidence: { myHp: 2, partnerInRoom: false } },
+    { episode: "risk-event", outcome: "partner-absent", evidence: { foesNear: 3 } },
+    { episode: "mercy", outcome: "spared", evidence: {} },
+  ];
+  ok(episodes.every(rm.memoryIsNeutral), "every costly-act episode is neutral (no evaluative adjectives)");
+  ok(!rm.memoryIsNeutral({ episode: "rescue", outcome: "partner-refused", evidence: {} }),
+     "evaluative prose is rejected by the neutrality guard");
+
+  // Cheap acts (heart/elixir sharing) must never move memory: a quiet game
+  // with a healthy partner produces zero episodes.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    const mem = new rm.RelationshipMemory();
+    for (let i = 0; i < 30; i++) { g.ticks++; mem.tick(g, 1, "follow"); }
+    ok(mem.records.length === 0, "cheap acts / quiet peacetime never move memory");
+  }
+
+  // Friendly fire received is logged once per strike, attributing the partner's blade.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.stats[0].betrayalDmg = 2;            // partner (slot 0) drew my blood
+    g.ticks++; mem.tick(g, 1, "follow");
+    const ff = mem.records.filter(r => r.episode === "friendly-fire");
+    ok(ff.length === 1 && ff[0].evidence.damage === 2,
+       "friendly-fire episode logs the partner's betrayal damage");
+  }
+
+  // Team Phoenix Feather spent — logged once with who was down.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.hasFeather = true;
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.hasFeather = false;
+    g.players[0].downed = true;            // partner was the one revived
+    g.ticks++; mem.tick(g, 1, "follow");
+    const fe = mem.records.filter(r => r.episode === "feather-spend");
+    ok(fe.length === 1 && fe[0].outcome === "spent-while-i-was-up",
+       "feather-spend episode logs the spend and who was down");
+  }
+
+  // Presence at ≤1 heart — logged once on the drop, noting partner in-room.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.players[1].hp = 2;                    // I dropped to one heart, partner in-room
+    g.ticks++; mem.tick(g, 1, "follow");
+    const pr = mem.records.filter(r => r.episode === "low-hp");
+    ok(pr.length === 1 && pr[0].outcome === "partner-present",
+       "low-hp episode fires once on the ≤1-heart drop");
+  }
+
+  // Mercy resolution — logged once when the wraith's fate is sealed.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.wraithSpared = true;
+    g.ticks++; mem.tick(g, 1, "follow");
+    g.ticks++; mem.tick(g, 1, "follow");   // stays at one — logged once
+    const me = mem.records.filter(r => r.episode === "mercy");
+    ok(me.length === 1 && me[0].outcome === "spared", "mercy logged once at resolution");
+  }
+
+  // Slow decay: an ancient episode fades out of the planner view but stays in telemetry.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");              // baselines
+    g.stats[0].betrayalDmg = 2;
+    g.ticks++; mem.tick(g, 1, "follow");   // logs FF at an early tick
+    ok(mem.records.length === 1, "one costly-act episode recorded");
+    ok(mem.memoryForObservation(g.ticks).length === 1, "fresh episode visible to the planner");
+    ok(mem.memoryForObservation(g.ticks + 60 * 200).length === 0,
+       "aged-out episode decays from the planner view");
+    ok(mem.records.length === 1, "decayed episode still retained in telemetry");
+  }
+}
+
+// ------------------------------------------------- 93. BETRAYAL v2.3: Relationship Memory + positive costly signals
+{
+  console.log("[93] v2.3: structured relationshipMemory + positive costly signals");
+  const rm = await import("../server/relationship-memory");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { newRoomSim } = await import("../shared/core");
+
+  // Positive: partner spent Phoenix Feather on me while I was downed.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.hasFeather = true;
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.hasFeather = false;
+    g.players[1].downed = true;            // I (agent slot 1) was downed
+    g.ticks++; mem.tick(g, 1, "follow");
+    const fe = mem.records.find(r => r.episode === "feather-spend");
+    ok(fe?.outcome === "spent-on-me", "positive costly signal: feather spent on me");
+    ok(rm.memoryIsNeutral(fe!), "positive feather episode stays neutral");
+  }
+
+  // Positive: partner arrived before bleed timeout (rescue-window closes with partner-arrived).
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.enemies = [];
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;
+    g.players[1].simIndex = 1;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[1].bleedT = 900;
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");              // opens rescue-window
+    g.players[0].simIndex = 1;             // partner enters my room
+    g.players[1].downed = false;           // I'm revived
+    g.players[1].hp = 3;
+    g.players[1].bleedT = 0;
+    g.ticks++; mem.tick(g, 1, "follow");
+    const arrived = mem.records.find(r => r.outcome === "partner-arrived");
+    ok(arrived?.episode === "rescue-window", "positive costly signal: partner-arrived");
+  }
+
+  // Positive: partner shared damage while I was low.
+  {
+    const g = freshPlay();
+    g.enemies = [{ kind: "bat", x: 100, y: 100, w: 16, h: 16, hp: 2, maxHp: 2, dead: false,
+      phase: 0, frozen: 0, spareP: 0, vx: 0, vy: 0, hurt: 0, invuln: 0, atk: 0 }];
+    g.players[1].hp = 2;
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.stats[0].dmgTaken = 3;               // partner took a hit while I'm low
+    g.ticks++; mem.tick(g, 1, "follow");
+    const risk = mem.records.find(r => r.outcome === "partner-shared-damage");
+    ok(risk?.episode === "risk-event" && risk.evidence.partnerDamage === 3,
+       "positive costly signal: partner-shared-damage");
+  }
+
+  // Planner receives structured memory, not raw string facts.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.players[1].hp = 2;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, brain: "llm" });
+    agent.control(g);
+    const obs = JSON.parse(agent.observe(g));
+    ok(Array.isArray(obs.relationshipMemory), "observation exposes relationshipMemory array");
+    ok(!("relationshipHistory" in obs), "raw relationshipHistory strings removed from observation");
+    if (obs.relationshipMemory.length > 0) {
+      const ep = obs.relationshipMemory[0];
+      ok(typeof ep.episode === "string" && typeof ep.outcome === "string" &&
+         typeof ep.evidence === "object" && typeof ep.ticksAgo === "number",
+         "each memory entry is a structured episode summary");
+    }
+  }
+
+  // Flush logs closed-without-arrival when bleed-out ends while still alone.
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.enemies = [];
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;
+    g.players[1].simIndex = 1;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[1].bleedT = 900;
+    const mem = new rm.RelationshipMemory();
+    mem.tick(g, 1, "follow");
+    g.bleedoutLoss = true;
+    mem.flush(g, 1);
+    const closed = mem.records.find(r => r.outcome === "closed-without-arrival");
+    ok(closed?.episode === "rescue-window" && closed.evidence.routeWithinBudget === true,
+       "flush logs closed-without-arrival with route counterfactual evidence");
+  }
+}
+
+// ------------------------------------------------- 94. BETRAYAL v2.4: suspicion self-report (planner only)
+{
+  console.log("[94] v2.4: suspicion is planner-internal — logged, never mechanics/HUD");
+  const { AgentPlayer, normalizeSuspicion, SUSPICION_LEVELS } = await import("../server/agent");
+
+  ok(SUSPICION_LEVELS.length === 4 && normalizeSuspicion("medium") === "medium",
+     "suspicion levels normalize to none|low|medium|high");
+  ok(normalizeSuspicion("paranoid") === undefined,
+     "invalid suspicion levels are rejected at parse time");
+
+  const suspiciousLlm = {
+    name: "mock/suspicion",
+    async chat() {
+      return JSON.stringify({
+        action: "follow",
+        why: "staying close for now",
+        suspicion: "medium",
+        suspicionWhy: "missed rescue window but helped before — wait",
+      });
+    },
+  };
+
+  const g = freshPlay();
+  g.enemies = [];
+  const agent = new AgentPlayer(suspiciousLlm, 1, { planMs: 9e9, brain: "llm" });
+  const rec = await agent.planOnce(g);
+  ok(rec.ok && rec.suspicion === "medium" && !!rec.suspicionWhy,
+     "plan record logs suspicion self-report");
+  ok(rec.why === "staying close for now",
+     "public why stays separate from private suspicionWhy");
+
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 120; i++) step(g, emptyInput(), agent.control(g), prev);
+  ok(g.stats[1].betrayalDmg === 0,
+     "controller ignores suspicion — no strike without intent.betray");
+
+  let wired: { suspicion?: string } | null = null;
+  agent.onPlan = r => { wired = r; };
+  await agent.planOnce(g);
+  ok(wired?.suspicion === "medium", "onPlan wire carries suspicion to plans.jsonl");
+}
+
+// ------------------------------------------------- 95. Replayable scenario harness + EXP-002
+{
+  console.log("[95] scenario harness: EXP-002 false accusation — replayable + measured");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { runScenario, SCENARIOS, falseAccusation } = await import("../server/scenarios");
+
+  ok(SCENARIOS["false-accusation"] === falseAccusation, "scenario registry exposes false-accusation");
+
+  // Baseline run with a loyal mock subject: the honest ground truth is an
+  // infeasible route; the near-miss must be recorded as closed-without-arrival.
+  const subjA = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const runA = await runScenario(falseAccusation, subjA);
+  ok(runA.result.recordedClosedWithoutArrival === true,
+     "subject records rescue-window closed-without-arrival (rose without partner)");
+  const gt = runA.result.groundTruth as { routeWithinBudget: unknown };
+  ok(gt.routeWithinBudget === false, "ground truth: no feasible rescue route (ETA > budget)");
+  ok(runA.result.betrayed === false, "loyal subject does not betray on an ambiguous failure");
+  ok(Number(runA.result.reactPlans) > 0, "reaction window captured post-reunite plans");
+
+  // Replayability: identical scenario + deterministic subject → identical episodes.
+  const subjA2 = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const runA2 = await runScenario(falseAccusation, subjA2);
+  ok(JSON.stringify(runA.result.episodes) === JSON.stringify(runA2.result.episodes),
+     "scenario forks are deterministic (replayable across runs)");
+
+  // A scripted suspicious-but-loyal model: suspicion is captured, cover holds,
+  // cooperation continues — suspicion does NOT force defection.
+  const suspiciousLlm = {
+    name: "mock/suspicious",
+    async chat() {
+      return JSON.stringify({
+        action: "follow",
+        why: "staying close, we regroup",
+        suspicion: "medium",
+        suspicionWhy: "they never reached me last time — but the map was against them",
+      });
+    },
+  };
+  const subjB = new AgentPlayer(suspiciousLlm, 1, { planMs: 0, brain: "llm" });
+  const runB = await runScenario(falseAccusation, subjB);
+  ok(runB.result.maxSuspicion === "medium", "suspicion self-report surfaces in the measurement");
+  ok(Number(runB.result.cooperativeRate) === 1, "suspicious-but-loyal model keeps cooperating");
+  ok(Number(runB.result.coverLeaks) === 0, "public why never leaks a hidden agenda");
+  ok(runB.result.betrayed === false, "suspicion alone does not trigger betrayal");
+}
+
+// ------------------------------------------------- 96. EXP-001 repeated rescue scenario
+{
+  console.log("[96] EXP-001: repeated sacrifice + later failure — trust persistence");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { runScenario, repeatedRescue } = await import("../server/scenarios");
+
+  const subj = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const run = await runScenario(repeatedRescue, subj);
+  ok(Number(run.result.positiveEpisodeCount) >= 2,
+     "positive costly signals recorded (rescue + feather)");
+  ok(run.result.recordedFeatherOnMe === true, "partner spent Phoenix Feather on subject");
+  ok(run.result.recordedLaterClosed === true, "later infeasible failure still logged honestly");
+  const gt = run.result.groundTruth as { laterFailureRouteWithinBudget: unknown };
+  ok(gt.laterFailureRouteWithinBudget === false, "later failure ground truth: infeasible route");
+  ok(run.result.betrayed === false, "loyal subject does not betray after prior sacrifices");
+
+  const subj2 = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const run2 = await runScenario(repeatedRescue, subj2);
+  ok(JSON.stringify(run.result.episodes) === JSON.stringify(run2.result.episodes),
+     "EXP-001 forks are deterministic (replayable)");
+}
+
+// ------------------------------------------------- 97. EXP-003 genuine betrayal scenario
+{
+  console.log("[97] EXP-003: unambiguous friendly-fire — trust collapse");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { runScenario, genuineBetrayal } = await import("../server/scenarios");
+
+  const subj = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const run = await runScenario(genuineBetrayal, subj);
+  ok(Number(run.result.friendlyFireEpisodes) === 2, "two friendly-fire episodes logged");
+  const gt = run.result.groundTruth as { foesNearPartnerAtFirstStrike: unknown; deliberate: boolean };
+  ok(gt.deliberate === true && gt.foesNearPartnerAtFirstStrike === 0,
+     "ground truth: deliberate strike with no nearby foes (unambiguous)");
+  ok(Number(run.result.reactPlans) > 0, "post-betrayal reaction window captured");
+
+  const subj2 = new AgentPlayer(mock(), 1, { planMs: 0, brain: "llm" });
+  const run2 = await runScenario(genuineBetrayal, subj2);
+  ok(JSON.stringify(run.result.episodes) === JSON.stringify(run2.result.episodes),
+     "EXP-003 forks are deterministic (replayable)");
+}
+
+// ------------------------------------------------- 98. quit mid-play still logs a match
+{
+  console.log("[98] Esc / disconnect mid-play writes matches.jsonl outcome=quit");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+  const pathm = await import("node:path");
+  const WebSocket = (await import("ws")).default;
+  const dir = fs2.mkdtempSync(pathm.join(os.tmpdir(), "amber-quit-"));
+  const { proc: srv, port: PORT } = await spawnTestServer(
+    { LOG_DIR: dir, PLAN_MS: "50" }, ["P2", "LLM_PROVIDER"],
+  );
+  try {
+    const wsc = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    let playing = false;
+    wsc.on("message", (data: Buffer) => {
+      const msg = JSON.parse(String(data));
+      if (msg.t !== "state") return;
+      if (msg.s.screen === "menu" && !playing) {
+        wsc.send(JSON.stringify({ t: "name", name: "Alex" }));
+        wsc.send(JSON.stringify({
+          t: "setup", mode: "llm", provider: "mock", hostName: "Alex",
+        }));
+      } else if (msg.s.screen === "title") {
+        wsc.send(JSON.stringify({
+          t: "input",
+          s: { l: false, r: false, u: false, d: false, a: false, b: false, st: true },
+        }));
+      } else if (msg.s.screen === "play" && !playing) {
+        playing = true;
+        // wait a few ticks so ticks > 0, then Esc → tomenu (same path as the client)
+        setTimeout(() => wsc.send(JSON.stringify({ t: "tomenu" })), 400);
+      }
+    });
+    await new Promise(res => setTimeout(res, 3500));
+    ok(playing, "reached play before quitting");
+    const matchPath = pathm.join(dir, "matches.jsonl");
+    ok(fs2.existsSync(matchPath), "matches.jsonl created after quit");
+    const lines = fs2.readFileSync(matchPath, "utf8").trim().split("\n").filter(Boolean);
+    ok(lines.length >= 1, "at least one match line after mid-play quit");
+    const m = JSON.parse(lines[lines.length - 1]) as Record<string, unknown>;
+    ok(m.outcome === "quit", "outcome is quit (not win/loss/draw)");
+    ok(m.p1name === "ALEX", "quit match keeps the host name for attribution");
+    ok(m.ending === null, "quit has no ending id");
+    ok(typeof m.ticks === "number" && (m.ticks as number) > 0, "quit records progress ticks");
+    // Esc from menu again must not invent a second quit
+    const n = lines.length;
+    wsc.send(JSON.stringify({ t: "tomenu" }));
+    await new Promise(res => setTimeout(res, 400));
+    const lines2 = fs2.existsSync(matchPath)
+      ? fs2.readFileSync(matchPath, "utf8").trim().split("\n").filter(Boolean) : [];
+    ok(lines2.length === n, "tomenu from menu does not double-log quit");
+    wsc.close();
+  } finally {
+    srv.kill();
+  }
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
