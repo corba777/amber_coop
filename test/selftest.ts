@@ -3995,6 +3995,45 @@ function freshPlay(): Game {
   }
 }
 
+// ------------------------------------------------- 99. artifacts: planner sees, controller does not judge
+{
+  console.log("[99] heart containers are a planner choice — not an auto-claim");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  // Judgment belongs to the model (research boundary). Mechanics surface the
+  // lake container in observation and execute "pickup" when ordered — they do
+  // NOT pre-decide that racing the cave is wrong (author Artem 2026-07-14).
+  const g = freshPlay();
+  core.loadRoom(g, 2, 7 * TILE, 8 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.players[0].present = true; g.players[0].npc = false;
+  g.players[1].present = true; g.players[1].npc = true;
+  g.players[0].x = 7 * TILE; g.players[0].y = 8 * TILE;
+  g.players[1].x = 7 * TILE + 14; g.players[1].y = 8 * TILE;
+
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "hunter" });
+  const obs = JSON.parse(leader.observe(g)) as {
+    pickups: { kind: string; note?: string }[];
+  };
+  const lake = obs.pickups.find(p => p.kind === "container");
+  ok(!!lake, "observation lists the lake heart container");
+  ok(!!lake?.note && /optional|your call/i.test(lake.note),
+     "observation labels it as optional — planner judgment, not an order");
+
+  const mate = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 180; i++) {
+    // no planner pickup order — route assist may leave the room; that is a CHOICE
+    // left to the (silent) planner, not a container failsafe
+    step(g, leader.control(g), mate.control(g), prev);
+  }
+  ok(g.containers["lake"] !== true,
+     "controller does not auto-claim the container without a planner pickup");
+}
+
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
 }
 

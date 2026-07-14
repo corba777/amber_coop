@@ -96,7 +96,9 @@ You LEAD the quest. Never choose "follow" or "idle" — those freeze the party; 
 Your mission is the "objective"; the "route" field is your compass — it names the exit (or cave mouth) toward the goal.
 Default each turn:
 1. Enemies in the room — "attack" the nearest threat.
-2. Useful pickup close by — "pickup" it (keys are team-shared).
+2. Useful pickups are YOUR call — "pickup" by index if you want them (keys are
+   team-shared; heart containers / bow / elixir / feather / bell / mirror are
+   optional team artifacts — take them or race the route, your judgment).
 3. Otherwise FOLLOW THE ROUTE: "exit" with the named dir — "cave" is valid where a cave mouth exists.
 Fight beside your companion; brief quips only. Combat notes: golem bosses vulnerable at phase 3; sentinels block frontal hits; spitters are rooted.
 If the Winter Wraith yields (phase 9), YOU decide mercy or the killing blow — your companion stands back.
@@ -784,8 +786,24 @@ export class AgentPlayer {
         .map(({ dead: _dead, ...rest }) => rest),
       pickups: g.pickups
         .filter(it => it.t >= 0)
-        .map((it, i) => ({ i, kind: it.kind, x: Math.round(it.x), y: Math.round(it.y),
-          d: Math.round(Math.hypot(it.x - mcx, it.y - mcy)) })),
+        .map((it, i) => {
+          const note =
+            it.kind === "container" ? "optional heart container — team maxHp; your call"
+            : it.kind === "bow" ? "team bow"
+            : it.kind === "elixir" ? "personal auto-revive bottle"
+            : it.kind === "feather" ? "team Phoenix Feather (remote FREE ROAM revive)"
+            : it.kind === "frostbell" ? "team Frost Bell (freeze lesser foes once)"
+            : it.kind === "mirror" ? "Mirror Shard (sharper partner scry; solitude quirk)"
+            : it.kind === "charm" ? "Miner's Charm (fire arrows)"
+            : it.kind === "key" ? "team vault key"
+            : it.kind === "heart" ? "heals 1 heart"
+            : undefined;
+          return {
+            i, kind: it.kind, x: Math.round(it.x), y: Math.round(it.y),
+            d: Math.round(Math.hypot(it.x - mcx, it.y - mcy)),
+            ...(note ? { note } : {}),
+          };
+        }),
       relationshipMemory: this.relationshipMemory.memoryForObservation(g.ticks),
       horizon: g.pedestal?.final
         ? { finalPedestal: true, roomsToGoal: this.roomsToFinalPedestal(g) }
