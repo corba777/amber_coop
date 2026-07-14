@@ -1864,9 +1864,21 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         sfx(g, "secret");
       } else if (it.kind === "container") {
         g.containers[it.cid ?? "?"] = true;
-        // growth for both — but no back-door resurrection: the downed keep 0 hp
-        for (const pl of g.players) { pl.maxHp += 2; if (!pl.downed) pl.hp = pl.maxHp; }
-        g.message = "Heart Container! Both hearts grow";
+        // Solo / lone present: full container (+2 maxHp = +1 heart). Both
+        // heroes present: split the container — +1 maxHp each (half a heart),
+        // so multiplayer mid-game does not balloon twice as fast as solo.
+        // Growth for both present partners, but no back-door resurrection:
+        // the downed keep 0 hp.
+        const both = g.players[0].present && g.players[1].present;
+        const gain = both ? 1 : 2;
+        for (const pl of g.players) {
+          if (!pl.present) continue;
+          pl.maxHp += gain;
+          if (!pl.downed) pl.hp = pl.maxHp;
+        }
+        g.message = both
+          ? "Heart Container shared — half a heart each"
+          : "Heart Container! Your hearts grow";
         g.messageT = 200;
         sfx(g, "secret");
       } else if (it.kind === "charm") {

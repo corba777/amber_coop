@@ -34,6 +34,8 @@ let localAttack = 0;      // instant swing visual: damage stays server-side
 let localBowFlash = 0;
 let lastFrameT = performance.now();
 let rttMs = -1;
+/** true after the socket dies — freeze the ghost frame, drop stale RTT, show banner */
+let disconnected = false;
 setInterval(() => {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "ping", n: performance.now() }));
@@ -53,12 +55,27 @@ function sendName(): void {
   const gate = document.getElementById("namegate") as HTMLDivElement | null;
   const input = document.getElementById("namein") as HTMLInputElement | null;
   const go = document.getElementById("namego") as HTMLButtonElement | null;
+  const syncGo = (): void => {
+    if (!go || !input) return;
+    const ready = input.value.trim().length > 0;
+    go.disabled = !ready;
+    go.style.opacity = ready ? "1" : "0.45";
+    go.style.cursor = ready ? "pointer" : "not-allowed";
+  };
   const submit = (): void => {
     const v = (input?.value ?? "").trim().slice(0, 12);
-    if (v) {
-      myName = v;
-      try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
+    // refuse empty name — otherwise matches.jsonl collapses everyone to ILYA
+    // and tester bug reports cannot be attributed (author Artem 2026-07-13)
+    if (!v) {
+      if (input) {
+        input.placeholder = "name required";
+        input.focus();
+      }
+      syncGo();
+      return;
     }
+    myName = v;
+    try { localStorage.setItem("amber-name", v); } catch { /* fine */ }
     if (gate) gate.style.display = "none";
     enableNameGate(false);
     releaseNameFocus();
@@ -70,8 +87,10 @@ function sendName(): void {
     input.value = myName;
     gate.style.display = "flex";
     enableNameGate(true);
+    syncGo();
     setTimeout(() => { input.focus(); input.select(); }, 50);
     go.addEventListener("click", submit);
+    input.addEventListener("input", syncGo);
     input.addEventListener("keydown", ev => {
       if (!gate || gate.style.display === "none") return;
       // play mode: never swallow — the gate can outlive focus and block ESC/WASD
@@ -82,6 +101,16 @@ function sendName(): void {
   }
 }
 ws.addEventListener("open", sendName);
+ws.addEventListener("close", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
+ws.addEventListener("error", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
 
 let p2mode = "llm";
 let sessionMode: string | null = null;
@@ -112,6 +141,7 @@ ws.onmessage = ev => {
     mySlot = msg.slot;
     roomCode = msg.room ?? "";
     serverBuild = msg.build ?? "";
+    disconnected = false;
     sendName();
     p2mode = msg.mode ?? "";
     sessionMode = msg.mode;
@@ -241,6 +271,7 @@ window.addEventListener("keydown", ev => {
   ensureAudio();
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -360,6 +391,7 @@ function capturePlayKeys(ev: KeyboardEvent): void {
   if (snap?.screen !== "play") return;
   ensurePlayControl();
   if (ev.code === "Escape" && mySlot === 0) {
+    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
     resetMenu(menu);
     setUrlRoom(false);
     ws.send(JSON.stringify({ t: "tomenu" }));
@@ -675,13 +707,14 @@ function drawUI(s: Snapshot): void {
     ctx.fillStyle = boss.kind === "wraith" ? "#9fe8ff" : boss.kind === "ember" ? "#ff7a3d" : "#e8384f";
     ctx.fillRect(49, H - 11, 158 * (boss.hp / boss.maxHp), 5);
   }
-  if (rttMs >= 0 && s.screen === "play") {
+  if (disconnected || (rttMs >= 0 && s.screen === "play")) {
     ctx.font = "7px monospace";
-    const rl = `${rttMs}ms`;
+    const rl = disconnected ? "offline" : `${rttMs}ms`;
     const rw = ctx.measureText(rl).width;
     ctx.fillStyle = "rgba(8,6,16,0.72)";
     ctx.fillRect(W - rw - 8, 1, rw + 6, 11);
-    ctx.fillStyle = rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
+    ctx.fillStyle = disconnected ? "#e8384f"
+      : rttMs < 60 ? "#78c88c" : rttMs < 120 ? "#ffb545" : "#e8384f";
     ctx.textAlign = "right";
     ctx.fillText(rl, W - 5, 9);
     ctx.textAlign = "left";
@@ -725,7 +758,11 @@ function render(): void {
   ctx.fillStyle = "#0d0c14";
   ctx.fillRect(0, 0, W, H);
   if (!snap) {
-    centerText([["CONNECTING...", 12, "#9a93b8"]], 110);
+    centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
+      disconnected ? "#e8384f" : "#9a93b8"]], 110);
+    if (disconnected) {
+      centerText([["connection lost — refresh to rejoin", 7, "#9a93b8"]], 130);
+    }
     return;
   }
   const s = snap;
@@ -734,7 +771,7 @@ function render(): void {
   // interpolation factor between the two latest snapshots
   const nowT = performance.now();
   const alpha = Math.min(1, (nowT - snapTime) / snapInterval);
-  if (snap && snap.screen === "play") {
+  if (snap && snap.screen === "play" && !disconnected) {
     const meP = snap.players[mySlot];
     stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick);
   }
@@ -911,6 +948,15 @@ function render(): void {
   }
 
   drawUI(s);
+  if (disconnected) {
+    // frozen last frame underneath — do not confuse with lag; the wire is dead
+    ctx.fillStyle = "rgba(10,6,16,0.55)";
+    ctx.fillRect(0, 0, W, H);
+    centerText([
+      ["DISCONNECTED", 14, "#e8384f"],
+      ["connection lost — refresh to rejoin", 7, "#d8b9c2"],
+    ], H / 2 - 10);
+  }
   try {
     drawPartnerMirror(s);
   } catch (err) {

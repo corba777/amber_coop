@@ -1,6 +1,6 @@
 /** Telemetry joinability — plan records carry game context; bleed episodes get
  *  machine-classified causes. Pure, DOM-free, testable (the episode classifier
- *  is the same counterfactual the v2 grievance ledger will reuse). */
+ *  is the same counterfactual Relationship Memory reuses). */
 import { BLEED_TICKS, Game, PLAYER_W, ROOMS, simOf, TILE } from "../shared/core";
 
 export interface PlanGameContext {

@@ -19,7 +19,7 @@ import {
   TravelMode,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog,
@@ -33,11 +33,15 @@ validateRooms();
 
 const PORT = Number(process.env.PORT || 8080);
 const PLAN_MS = Number(process.env.PLAN_MS || 1500);
+const BRAIN: AgentBrain = process.env.BRAIN === "baseline" ? "baseline" : "llm";
 const HARD_GATE_DEFAULT = process.env.HARD_GATE === "1";
 const LOG_DIR = process.env.LOG_DIR || "./logs";
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
+/** sync — Esc/refresh must not race the process out from under a buffered write */
 function appendLog(file: string, obj: unknown): void {
-  fs.appendFile(path.join(LOG_DIR, file), JSON.stringify(obj) + "\n", () => { /* */ });
+  try {
+    fs.appendFileSync(path.join(LOG_DIR, file), JSON.stringify(obj) + "\n");
+  } catch { /* disk full / missing dir — never take down the tick */ }
 }
 
 const llmCfg = configFromEnv();
@@ -47,6 +51,13 @@ type Mode = "single" | "human" | "llm" | "auto" | "duo";
 
 function cleanName(raw: string, fallback: string): string {
   return raw.replace(/[^\p{L}\p{N} _\-.]/gu, "").trim().slice(0, 12).toUpperCase() || fallback;
+}
+
+function partnerTypeTrue(session: Session, agentSlot: number): PartnerTypeTrue {
+  const mateSlot = 1 - agentSlot;
+  const mate = session.game.players[mateSlot];
+  if (session.sockets[mateSlot] && mate.present && !mate.npc) return "human";
+  return "ai";
 }
 
 // ---------------------------------------------------------------- sessions
@@ -82,8 +93,11 @@ class Session {
   agentProviders: [ProviderName | null, ProviderName | null] = [null, null];
   agentTemps: [Temperament | null, Temperament | null] = [null, null];
   episodeTrackers: [EpisodeTracker | null, EpisodeTracker | null] = [null, null];
+  disclosePartner: PartnerDisclosure = "hidden";
   emptySince = 0;   // ms timestamp when the last human left (0 = occupied)
   pendingStart = false;   // a "start" message: synthesized START edge
+  /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
+  matchLogged = false;
 
   constructor(id: string) {
     this.id = id;
@@ -114,6 +128,7 @@ class Session {
       architect?: boolean;
       slick?: boolean;
       treason?: boolean;
+      disclosePartner?: PartnerDisclosure;
       hostName?: string;
     },
   ): boolean {
@@ -122,6 +137,7 @@ class Session {
     this.game.slick = !!extra?.slick;
     this.game.treason = !!extra?.treason;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
+    this.disclosePartner = extra?.disclosePartner ?? "hidden";
     this.leaderAgent = null;
     if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "ILYA");
 
@@ -133,6 +149,19 @@ class Session {
     this.agentProviders = [null, null];
     this.agentTemps = [null, null];
     this.episodeTrackers = [null, null];
+
+    const disclosePartner = this.disclosePartner;
+
+    const agentOpts = (
+      slot: number,
+      base: { temperament?: Temperament; leader?: boolean; defector?: boolean },
+    ) => ({
+      planMs: PLAN_MS,
+      brain: BRAIN,
+      disclosePartner,
+      partnerTypeTrue: partnerTypeTrue(this, slot),
+      ...base,
+    });
 
     const wireAgent = (agent: AgentPlayer, slot: number): void => {
       const tracker = new EpisodeTracker(slot, this.id);
@@ -158,8 +187,10 @@ class Session {
       const t1 = pickTemp(extra?.temperament2);
       this.temperament = t1;
       const armed = this.game.treason;   // TREASON on ⇒ both AI heroes carry a hidden agenda
-      this.leaderAgent = new AgentPlayer(llm0, 0, { planMs: PLAN_MS, temperament: t0, leader: true, defector: armed });
-      this.agent = new AgentPlayer(llm1, 1, { planMs: PLAN_MS, temperament: t1, defector: armed });
+      this.leaderAgent = new AgentPlayer(llm0, 0,
+        agentOpts(0, { temperament: t0, leader: true, defector: armed }));
+      this.agent = new AgentPlayer(llm1, 1,
+        agentOpts(1, { temperament: t1, defector: armed }));
       this.agentProviders = [p0, p1];
       this.agentTemps = [t0, t1];
       wireAgent(this.leaderAgent, 0);
@@ -180,7 +211,7 @@ class Session {
       // HUMAN+AI with treason on: the AI partner may turn — the moral-hazard
       // experiment (autopilot has no partner to betray, so never armed).
       this.agent = new AgentPlayer(llm, 1,
-        { planMs: PLAN_MS, temperament: this.temperament, defector: m === "llm" && this.game.treason });
+        agentOpts(1, { temperament: this.temperament, defector: m === "llm" && this.game.treason }));
       this.agentProviders = [null, provider];
       this.agentTemps = [null, this.temperament];
       wireAgent(this.agent, 1);
@@ -211,6 +242,9 @@ class Session {
   }
 
   resetToMenu(): void {
+    // Esc / refresh / host-disconnect mid-play: still write a match line so
+    // tester sessions (Plans exist, no win/loss) stay attributable.
+    this.logMatchIfEnded("quit");
     const keep0 = !!this.sockets[0];
     Object.assign(this.game, newGame());
     this.game.screen = "menu";
@@ -227,6 +261,67 @@ class Session {
     this.agentTemps = [null, null];
     this.episodeTrackers = [null, null];
     this.rawInputs = [emptyInput(), emptyInput()];
+    this.matchLogged = false;
+  }
+
+  /** Write matches.jsonl once per play. `quit` = left without win/loss (Esc/refresh). */
+  logMatchIfEnded(outcome: "win" | "loss" | "quit"): void {
+    if (this.matchLogged) return;
+    // quit only while mid-play (Esc from win/gameover/menu must not invent a match)
+    if (outcome === "quit" && this.game.screen !== "play") return;
+    this.matchLogged = true;
+
+    for (const tr of this.episodeTrackers) tr?.flush(this.game);
+    this.leaderAgent?.relationshipMemory.flush(this.game, 0);
+    this.agent?.relationshipMemory.flush(this.game, 1);
+    const episodes = [
+      ...(this.episodeTrackers[0]?.completed ?? []),
+      ...(this.episodeTrackers[1]?.completed ?? []),
+    ];
+    appendLog("matches.jsonl", {
+      t: new Date().toISOString(),
+      sid: this.id,
+      mode: this.mode,
+      p1name: this.names[0] || "ILYA",
+      partner: this.names[1] || "(solo)",
+      temperament: this.mode === "llm" ? this.temperament : null,
+      // AI DUO: both heroes are agents — log each slot's provider + temperament
+      // (null where the slot is a human or empty). Powers the /stats PAIR key.
+      provider1: this.agentProviders[0],
+      provider2: this.agentProviders[1],
+      temperament1: this.agentTemps[0],
+      temperament2: this.agentTemps[1],
+      outcome,
+      ending: outcome === "quit" ? null : (this.game.ending?.id ?? null),
+      hardGate: this.game.hardGate,
+      ticks: this.game.ticks,
+      p1: this.game.stats[0], p2: this.game.stats[1],
+      plans: (this.agent?.planCount ?? 0) + (this.leaderAgent?.planCount ?? 0),
+      parseFailures: (this.agent?.parseFailures ?? 0) + (this.leaderAgent?.parseFailures ?? 0),
+      routeAssists: (this.agent?.routeAssists ?? 0) + (this.leaderAgent?.routeAssists ?? 0),
+      bellRings: (this.agent?.bellRings ?? 0) + (this.leaderAgent?.bellRings ?? 0),
+      // TREASON telemetry: was friendly fire enabled, did a betrayal down a
+      // hero, and how much harm each hero dealt to their partner
+      treason: this.game.treason,
+      betrayed: this.game.betrayed,
+      betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
+      betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
+      betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
+      icePlans: this.agent ? this.agent.icePlanStats : null,
+      errands: this.agent ? this.agent.errandLog : [],
+      bleedout: this.game.bleedoutLoss,
+      episodes,
+      relationshipMemory: [
+        ...(this.leaderAgent?.relationshipMemory.records.map(r => ({ slot: 0, ...r })) ?? []),
+        ...(this.agent?.relationshipMemory.records.map(r => ({ slot: 1, ...r })) ?? []),
+      ],
+      partnerTypeTrue0: this.leaderAgent ? partnerTypeTrue(this, 0) : null,
+      partnerTypeTrue1: this.agent ? partnerTypeTrue(this, 1) : null,
+      partnerTypeDisclosed: this.disclosePartner,
+      brain: BRAIN,
+      avgLatencyMs: this.agent && this.agent.planCount
+        ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
+    });
   }
 
   kickSlot1(reason: string): void {
@@ -277,47 +372,7 @@ class Session {
         for (const tr of this.episodeTrackers) tr?.tick(this.game);
       }
       if (before === "play" && (this.game.screen === "gameover" || this.game.screen === "win")) {
-        for (const tr of this.episodeTrackers) tr?.flush(this.game);
-        const episodes = [
-          ...(this.episodeTrackers[0]?.completed ?? []),
-          ...(this.episodeTrackers[1]?.completed ?? []),
-        ];
-        appendLog("matches.jsonl", {
-          t: new Date().toISOString(),
-          sid: this.id,
-          mode: this.mode,
-          p1name: this.names[0] || "ILYA",
-          partner: this.names[1] || "(solo)",
-          temperament: this.mode === "llm" ? this.temperament : null,
-          // AI DUO: both heroes are agents — log each slot's provider + temperament
-          // (null where the slot is a human or empty). Powers the /stats PAIR key.
-          provider1: this.agentProviders[0],
-          provider2: this.agentProviders[1],
-          temperament1: this.agentTemps[0],
-          temperament2: this.agentTemps[1],
-          outcome: this.game.screen === "win" ? "win" : "loss",
-          ending: this.game.ending?.id ?? null,
-          hardGate: this.game.hardGate,
-          ticks: this.game.ticks,
-          p1: this.game.stats[0], p2: this.game.stats[1],
-          plans: this.agent ? this.agent.planCount : 0,
-          parseFailures: this.agent ? this.agent.parseFailures : 0,
-          routeAssists: this.agent ? this.agent.routeAssists : 0,
-          bellRings: (this.agent?.bellRings ?? 0) + (this.leaderAgent?.bellRings ?? 0),
-          // TREASON telemetry: was friendly fire enabled, did a betrayal down a
-          // hero, and how much harm each hero dealt to their partner
-          treason: this.game.treason,
-          betrayed: this.game.betrayed,
-          betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
-          betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
-          betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
-          icePlans: this.agent ? this.agent.icePlanStats : null,
-          errands: this.agent ? this.agent.errandLog : [],
-          bleedout: this.game.bleedoutLoss,
-          episodes,
-          avgLatencyMs: this.agent && this.agent.planCount
-            ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
-        });
+        this.logMatchIfEnded(this.game.screen === "win" ? "win" : "loss");
       }
 
       if (tickCount % 2 === 0) {
@@ -416,6 +471,9 @@ const server = http.createServer((req, res) => {
       for (const line of lines) {
         try {
           const m = JSON.parse(line) as Record<string, unknown>;
+          // Esc/refresh mid-play is research telemetry, not a rated game —
+          // keep it out of winrate tables so quitters don't dilute heroes.
+          if (m.outcome === "quit") continue;
           // partner table: who stood in slot 2 (LLMs and human guests alike)
           const tKey = m.temperament && m.temperament !== "companion"
             ? ` [${String(m.temperament)}]` : "";

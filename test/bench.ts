@@ -8,13 +8,18 @@
  *  MODE=duo: AI DUO coordination dyad — BOTH heroes are agents (leader slot 0 +
  *  companion slot 1) fighting the golem together. Team outcome + per-slot
  *  metrics. PROVIDERS/TEMPERAMENTS take a colon pair (slot0:slot1).
+ *  MODE=scenario: replayable social-reasoning fork — scripted partner, seeded
+ *  situation; each provider (and BRAIN=baseline) faces IDENTICAL forks, so the
+ *  measurement is "as deviation from baseline". SCENARIO selects the fork.
  *
  *  Usage:
  *    PROVIDERS=mock,anthropic N=10 node dist/bench.js
  *    MODE=rink PROVIDERS=mock,anthropic N=10 PLAN_TICKS=90 node dist/bench.js
  *    MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter node dist/bench.js
+ *    MODE=scenario SCENARIO=false-accusation PROVIDERS=mock,anthropic N=10 node dist/bench.js
  *
- *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, TEMPERAMENTS, MODE (arena|rink|duo)
+ *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, TEMPERAMENTS,
+ *       MODE (arena|rink|duo|scenario), SCENARIO, BRAIN (llm|baseline), DEFECTOR
  * ========================================================================= */
 
 import fs from "node:fs";
@@ -22,8 +27,9 @@ import {
   Game, Input, emptyInput, latch, newGame, loadRoom, TILE, PlayerStats,
 } from "../shared/core";
 import { update } from "../shared/core";
-import { AgentPlayer, IcePlanStats, Temperament } from "../server/agent";
+import { AgentPlayer, AgentBrain, IcePlanStats, Temperament } from "../server/agent";
 import { ProviderName, configFromEnv, loadDotEnv, makeLLM, mock } from "../server/llm";
+import { runScenario, SCENARIOS } from "../server/scenarios";
 
 loadDotEnv();
 const PROVIDERS = (process.env.PROVIDERS || "mock").split(",").map(s => s.trim()) as ProviderName[];
@@ -33,6 +39,9 @@ const MAX_TICKS = Number(process.env.MAX_TICKS || 7200);
 const RINK_MAX_TICKS = Number(process.env.RINK_MAX_TICKS || 1200);
 const TEMPERAMENT = (process.env.TEMPERAMENT || "companion") as import("../server/agent").Temperament;
 const MODE = (process.env.MODE || "arena").toLowerCase();
+const SCENARIO = (process.env.SCENARIO || "false-accusation").toLowerCase();
+const BRAIN = (process.env.BRAIN || "llm") as AgentBrain;
+const DEFECTOR = process.env.DEFECTOR === "1" || process.env.DEFECTOR === "true";
 
 interface EpisodeBase {
   ticks: number;
@@ -357,12 +366,67 @@ async function runDuo(): Promise<void> {
   console.table([row]);
 }
 
+async function runScenarioBench(): Promise<void> {
+  const sc = SCENARIOS[SCENARIO];
+  if (!sc) {
+    console.error(`Unknown SCENARIO=${SCENARIO} — have: ${Object.keys(SCENARIOS).join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`AMBER BENCH · scenario "${sc.id}" · brain=${BRAIN} defector=${DEFECTOR} · ${N} episodes/provider`);
+  console.log(`Q: ${sc.question}\n`);
+  const cfg = configFromEnv();
+  const out: Record<string, unknown>[] = [];
+
+  for (const provider of PROVIDERS) {
+    process.stdout.write(`${provider.padEnd(10)} `);
+    const results: Record<string, unknown>[] = [];
+    for (let i = 0; i < N; i++) {
+      const subject = new AgentPlayer(
+        provider === "mock" ? mock() : makeLLM(provider, cfg),
+        sc.subjectSlot, { planMs: 0, temperament: TEMPERAMENT, brain: BRAIN, defector: DEFECTOR });
+      const { plans, result } = await runScenario(sc, subject);
+      results.push(result);
+      fs.appendFileSync("bench-results.jsonl", JSON.stringify({
+        t: new Date().toISOString(), mode: "scenario", provider, brain: BRAIN,
+        defector: DEFECTOR, episode: i, ...result, plans,
+      }) + "\n");
+      const susp = String(result.maxSuspicion ?? "none")[0].toUpperCase();
+      process.stdout.write(result.betrayed ? "B" : susp);
+    }
+    const num = (k: string): number =>
+      +(results.reduce((a, r) => a + (Number(r[k]) || 0), 0) / N).toFixed(3);
+    const row = {
+      mode: "scenario",
+      scenario: sc.id,
+      provider,
+      brain: BRAIN,
+      episodes: N,
+      groundTruthRoute: results[0]?.groundTruth
+        ? (results[0].groundTruth as { routeWithinBudget: unknown }).routeWithinBudget
+        : null,
+      recordedClosedRate: +(results.filter(r => r.recordedClosedWithoutArrival).length / N).toFixed(2),
+      betrayRate: +(results.filter(r => r.betrayed).length / N).toFixed(2),
+      avgFleeRate: num("fleeRate"),
+      avgCooperativeRate: num("cooperativeRate"),
+      avgBetrayIntentPlans: num("betrayIntentPlans"),
+      totalCoverLeaks: results.reduce((a, r) => a + (Number(r.coverLeaks) || 0), 0),
+      avgParseFails: num("parseFails"),
+    };
+    out.push(row);
+    console.log("");
+  }
+
+  console.log("");
+  console.table(out);
+}
+
 async function main(): Promise<void> {
   if (MODE === "rink") await runRink();
   else if (MODE === "arena") await runArena();
   else if (MODE === "duo") await runDuo();
+  else if (MODE === "scenario") await runScenarioBench();
   else {
-    console.error(`Unknown MODE=${MODE} — use arena, rink or duo`);
+    console.error(`Unknown MODE=${MODE} — use arena, rink, duo or scenario`);
     process.exit(1);
   }
   console.log("details → bench-results.jsonl");
