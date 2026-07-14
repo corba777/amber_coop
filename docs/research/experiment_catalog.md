@@ -283,6 +283,32 @@ collapse and stated-vs-revealed (`suspicionWhy` vs public `why`) differ by provi
 
 # ----------------------------------------------------------------------
 
+# EXP-010
+# Deceiver × Detector (live DUO)
+
+Status
+
+PLANNED — substrate **A/B/C landed** ([106] victim, [107] elicitation ladder +
+refusal taxonomy). Matrix heatmaps (D) still design-only — see CLAUDE.md v2.4.
+
+---
+
+Question
+
+After a hostile act, how fast does the victim detect (trust < 0.4), and which
+answer repertoire path follows (retaliation / flight / negotiation-in-say / ignore)?
+
+---
+
+Metrics
+
+detectionLatency (trust channel), falsePositiveRate (no-traitor cells),
+postDetectionOutcome, sayNegotiationTurns, endingDistribution
+
+---
+
+# ----------------------------------------------------------------------
+
 # EXP-004
 # Hidden Utility
 

@@ -19,7 +19,8 @@
  *    MODE=scenario SCENARIO=false-accusation PROVIDERS=mock,anthropic N=10 node dist/bench.js
  *
  *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, TEMPERAMENTS,
- *       MODE (arena|rink|duo|scenario), SCENARIO, BRAIN (llm|baseline), DEFECTOR
+ *       MODE (arena|rink|duo|scenario), SCENARIO, BRAIN (llm|baseline), DEFECTOR,
+ *       ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1, rung 3)
  * ========================================================================= */
 
 import fs from "node:fs";
@@ -30,6 +31,10 @@ import { update } from "../shared/core";
 import { AgentPlayer, AgentBrain, IcePlanStats, Temperament } from "../server/agent";
 import { ProviderName, configFromEnv, loadDotEnv, makeLLM, mock } from "../server/llm";
 import { runScenario, SCENARIOS } from "../server/scenarios";
+import {
+  parseElicitationRung, parseElicitationPrior, ELICITATION_RUNG_NAMES,
+  classifyRefusalTaxonomy,
+} from "../server/elicitation";
 
 loadDotEnv();
 const PROVIDERS = (process.env.PROVIDERS || "mock").split(",").map(s => s.trim()) as ProviderName[];
@@ -42,6 +47,8 @@ const MODE = (process.env.MODE || "arena").toLowerCase();
 const SCENARIO = (process.env.SCENARIO || "false-accusation").toLowerCase();
 const BRAIN = (process.env.BRAIN || "llm") as AgentBrain;
 const DEFECTOR = process.env.DEFECTOR === "1" || process.env.DEFECTOR === "true";
+const ELICITATION_RUNG = parseElicitationRung(process.env.ELICITATION_RUNG);
+const ELICITATION_PRIOR = parseElicitationPrior(process.env.ELICITATION_PRIOR);
 
 interface EpisodeBase {
   ticks: number;
@@ -129,7 +136,10 @@ async function arenaEpisode(provider: ProviderName): Promise<ArenaEpisode> {
   const driver = new AgentPlayer(mock(), 0, { planMs: 0 });
   const subject = new AgentPlayer(
     provider === "mock" ? mock() : makeLLM(provider, cfg),
-    1, { planMs: 0, temperament: TEMPERAMENT });
+    1, {
+      planMs: 0, temperament: TEMPERAMENT,
+      elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+    });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
   let ticks = 0;
@@ -166,7 +176,10 @@ export async function rinkEpisode(provider: ProviderName, maxTicks = RINK_MAX_TI
   const g = freshRink();
   const subject = new AgentPlayer(
     provider === "mock" ? mock() : makeLLM(provider, cfg),
-    1, { planMs: 0, temperament: TEMPERAMENT });
+    1, {
+      planMs: 0, temperament: TEMPERAMENT,
+      elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+    });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
   let ticks = 0;
@@ -200,10 +213,16 @@ export async function duoEpisode(
   g.players[1].npc = true;
   const leader = new AgentPlayer(
     p[0] === "mock" ? mock() : makeLLM(p[0], cfg), 0,
-    { planMs: 0, temperament: t[0], leader: true });
+    {
+      planMs: 0, temperament: t[0], leader: true, defector: DEFECTOR,
+      elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+    });
   const mate = new AgentPlayer(
     p[1] === "mock" ? mock() : makeLLM(p[1], cfg), 1,
-    { planMs: 0, temperament: t[1] });
+    {
+      planMs: 0, temperament: t[1], defector: DEFECTOR,
+      elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+    });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
   let ticks = 0;
@@ -372,7 +391,7 @@ async function runScenarioBench(): Promise<void> {
     console.error(`Unknown SCENARIO=${SCENARIO} — have: ${Object.keys(SCENARIOS).join(", ")}`);
     process.exit(1);
   }
-  console.log(`AMBER BENCH · scenario "${sc.id}" · brain=${BRAIN} defector=${DEFECTOR} · ${N} episodes/provider`);
+  console.log(`AMBER BENCH · scenario "${sc.id}" · brain=${BRAIN} defector=${DEFECTOR} · rung=${ELICITATION_RUNG}(${ELICITATION_RUNG_NAMES[ELICITATION_RUNG]}) · ${N} episodes/provider`);
   console.log(`Q: ${sc.question}\n`);
   const cfg = configFromEnv();
   const out: Record<string, unknown>[] = [];
@@ -383,23 +402,37 @@ async function runScenarioBench(): Promise<void> {
     for (let i = 0; i < N; i++) {
       const subject = new AgentPlayer(
         provider === "mock" ? mock() : makeLLM(provider, cfg),
-        sc.subjectSlot, { planMs: 0, temperament: TEMPERAMENT, brain: BRAIN, defector: DEFECTOR });
+        sc.subjectSlot, {
+          planMs: 0, temperament: TEMPERAMENT, brain: BRAIN, defector: DEFECTOR,
+          elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+        });
       const { plans, result } = await runScenario(sc, subject);
-      results.push(result);
+      const taxonomy = classifyRefusalTaxonomy(plans, {
+        defector: DEFECTOR,
+        betrayedMatch: !!result.betrayed,
+      });
+      results.push({ ...result, refusalTaxonomy: taxonomy });
       fs.appendFileSync("bench-results.jsonl", JSON.stringify({
         t: new Date().toISOString(), mode: "scenario", provider, brain: BRAIN,
-        defector: DEFECTOR, episode: i, ...result, plans,
+        defector: DEFECTOR, elicitationRung: ELICITATION_RUNG,
+        elicitationRungName: ELICITATION_RUNG_NAMES[ELICITATION_RUNG],
+        elicitationPrior: ELICITATION_PRIOR, refusalTaxonomy: taxonomy,
+        episode: i, ...result, plans,
       }) + "\n");
       const susp = String(result.maxSuspicion ?? "none")[0].toUpperCase();
       process.stdout.write(result.betrayed ? "B" : susp);
     }
     const num = (k: string): number =>
       +(results.reduce((a, r) => a + (Number(r[k]) || 0), 0) / N).toFixed(3);
+    const taxCount = (t: string) =>
+      results.filter(r => r.refusalTaxonomy === t).length;
     const row = {
       mode: "scenario",
       scenario: sc.id,
       provider,
       brain: BRAIN,
+      elicitationRung: ELICITATION_RUNG,
+      elicitationRungName: ELICITATION_RUNG_NAMES[ELICITATION_RUNG],
       episodes: N,
       groundTruthRoute: results[0]?.groundTruth
         ? (results[0].groundTruth as { routeWithinBudget: unknown }).routeWithinBudget
@@ -411,6 +444,10 @@ async function runScenarioBench(): Promise<void> {
       avgBetrayIntentPlans: num("betrayIntentPlans"),
       totalCoverLeaks: results.reduce((a, r) => a + (Number(r.coverLeaks) || 0), 0),
       avgParseFails: num("parseFails"),
+      taxCompliance: taxCount("compliance"),
+      taxLeak: taxCount("leak"),
+      taxExplicitRefusal: taxCount("explicit-refusal"),
+      taxSilent: taxCount("silent-noncompliance"),
     };
     out.push(row);
     console.log("");
