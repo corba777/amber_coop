@@ -7,7 +7,7 @@
 import {
   TILE, COLS, ROWS, W, H, PLAYER_W, PLAYER_H,
   Snapshot, Input, emptyInput, GameEvent,
-  BLEED_TICKS,
+  BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
 import { drawDuoSpectatorHud, drawHearts } from "./hud";
@@ -124,6 +124,8 @@ const particles: Particle[] = [];
 
 interface ProviderInfo { ok: boolean; label: string; hint: string; }
 let providers: Record<string, ProviderInfo> = {};
+let menuFlash = "";
+let menuFlashT = 0;
 
 ws.onmessage = ev => {
   const msg = JSON.parse(String(ev.data)) as
@@ -132,7 +134,8 @@ ws.onmessage = ev => {
     | { t: "state"; s: Snapshot }
     | { t: "kicked"; reason: string }
     | { t: "pong"; n: number }
-    | { t: "full"; reason?: string };
+    | { t: "full"; reason?: string }
+    | { t: "setup-fail"; reason?: string };
   if (msg.t === "pong") {
     rttMs = Math.round(performance.now() - (msg.n as number));
     return;
@@ -147,6 +150,9 @@ ws.onmessage = ev => {
     sessionMode = msg.mode;
     names = msg.names;
     providers = msg.providers ?? {};
+  } else if (msg.t === "setup-fail") {
+    menuFlash = msg.reason || "setup failed";
+    menuFlashT = 240;
   } else if (msg.t === "kicked") {
     alert("Disconnected: " + msg.reason);
   } else if (msg.t === "state") {
@@ -182,6 +188,11 @@ function setUrlRoom(on: boolean): void {
 }
 
 function menuSend(payload: Record<string, unknown>): void {
+  if (disconnected || ws.readyState !== WebSocket.OPEN) {
+    menuFlash = "not connected — hard-refresh the page";
+    menuFlashT = 240;
+    return;
+  }
   ws.send(JSON.stringify(payload));
 }
 
@@ -439,10 +450,11 @@ function drawSword(p: SnapPlayer, amber: boolean, x: number, y: number): void {
   const ang = base + (t - 0.5) * 1.9 * (p.dir === 3 || p.dir === 1 ? -1 : 1);
   const bx = cx + Math.cos(ang) * 6, by = cy + Math.sin(ang) * 6;
   const tx = cx + Math.cos(ang) * 19, ty = cy + Math.sin(ang) * 19;
-  ctx.strokeStyle = amber ? "#ffb545" : "#dfe3ee";
+  const dark = p.darkSide;
+  ctx.strokeStyle = dark ? "#c89bff" : amber ? "#ffb545" : "#dfe3ee";
   ctx.lineWidth = 2.5;
   ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
-  ctx.strokeStyle = amber ? "#ffe9c2" : "#ffffff";
+  ctx.strokeStyle = dark ? "#e8d4ff" : amber ? "#ffe9c2" : "#ffffff";
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
   ctx.fillStyle = "#8a6238";
@@ -474,6 +486,13 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
       ctx.beginPath();
       ctx.arc(x + 5, y + 6, 12, -Math.PI / 2, -Math.PI / 2 + (p.reviveP / 90) * Math.PI * 2);
       ctx.stroke();
+    } else if (p.darkFallen && p.redemptionT > 0) {
+      ctx.strokeStyle = "#ff7a3d";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x + 5, y + 6, 12, -Math.PI / 2,
+        -Math.PI / 2 + (p.redemptionT / REDEMPTION_TICKS) * Math.PI * 2);
+      ctx.stroke();
     } else if (p.bleedT > 0) {
       ctx.strokeStyle = "#e8384f";
       ctx.lineWidth = 2;
@@ -484,6 +503,11 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
     return;
   }
   if (p.invuln > 0 && (Math.floor(p.invuln / 4) % 2 === 0)) return;
+  if (p.darkSide) {
+    ctx.strokeStyle = "rgba(200,155,255,0.55)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, PLAYER_W - 1, PLAYER_H - 1);
+  }
   const frame = p.moving ? Math.floor(p.walk) % 2 : 0;
   const dx = Math.round(x) - 3, dy = Math.round(y) - 4;
   if (p.dir === 0) ctx.drawImage(set.down[frame], dx, dy);
@@ -553,6 +577,14 @@ function drawEnemy(e: SnapEnemy, ticks: number, x: number, y: number): void {
     ctx.translate(Math.round(x) + 6, Math.round(y) + 10);
     ctx.scale(1 / sq, sq);
     ctx.drawImage(SPR.spitter[0], -8, -10);
+    ctx.restore();
+  } else if (e.kind === "whisperer") {
+    const bob = Math.sin(ticks * 0.05) * 2;
+    ctx.save();
+    ctx.shadowColor = "#c89bff";
+    ctx.shadowBlur = 10;
+    ctx.globalAlpha *= 0.85;
+    ctx.drawImage(SPR.wraith, Math.round(x) - 2, Math.round(y) - 3 + bob);
     ctx.restore();
   } else {
     const bob = Math.sin(ticks * 0.06) * 2;
@@ -691,6 +723,8 @@ function drawUI(s: Snapshot): void {
   const artifacts: [boolean, HTMLCanvasElement][] = [
     [s.hasBow, SPR.bow],
     [s.players[mySlot].elixir, SPR.elixir],
+    [!!s.hasFeather, SPR.elixir],
+    [!!s.hasEmberMercy, SPR.charm],
     [!!s.hasBell, SPR.bell],
     [!!s.hasMirror, SPR.mirror],
   ];
@@ -700,11 +734,14 @@ function drawUI(s: Snapshot): void {
     artX -= 14;
     ctx.drawImage(spr, artX, 1, 14, 14);
   }
-  const boss = s.enemies.find(e => (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember") && !e.dead);
+  const boss = s.enemies.find(e =>
+    (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember" || e.kind === "whisperer") && !e.dead);
   if (boss) {
     ctx.fillStyle = "rgba(0,0,0,0.5)";
     ctx.fillRect(48, H - 12, 160, 7);
-    ctx.fillStyle = boss.kind === "wraith" ? "#9fe8ff" : boss.kind === "ember" ? "#ff7a3d" : "#e8384f";
+    ctx.fillStyle = boss.kind === "wraith" ? "#9fe8ff"
+      : boss.kind === "ember" ? "#ff7a3d"
+      : boss.kind === "whisperer" ? "#c89bff" : "#e8384f";
     ctx.fillRect(49, H - 11, 158 * (boss.hp / boss.maxHp), 5);
   }
   if (disconnected || (rttMs >= 0 && s.screen === "play")) {
@@ -822,6 +859,15 @@ function render(): void {
       ctx.shadowColor = "#bcd7ff"; ctx.shadowBlur = 8;
       ctx.drawImage(SPR.mirror, px, py);
       ctx.restore();
+    }
+    else if (it.kind === "embermercy") {
+      ctx.save();
+      ctx.shadowColor = "#ff7a3d"; ctx.shadowBlur = 8;
+      ctx.drawImage(SPR.charm, px, py);
+      ctx.restore();
+    }
+    else if (it.kind === "feather") {
+      ctx.drawImage(SPR.elixir, px, py);
     }
     else {
       ctx.drawImage(SPR.heart, px - 2, py - 2, 20, 20);
@@ -1025,6 +1071,11 @@ function render(): void {
       if (serverBuild && serverBuild !== BUILD) {
         ctx.fillStyle = "#e8384f";
         ctx.fillText("client/server build mismatch — hard-refresh (Ctrl+Shift+R)", W / 2, 30);
+      }
+      if (menuFlashT > 0) {
+        menuFlashT--;
+        ctx.fillStyle = "#e8384f";
+        ctx.fillText(menuFlash.slice(0, 52), W / 2, 42);
       }
       ctx.textAlign = "left";
     } else {

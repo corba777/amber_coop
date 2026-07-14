@@ -201,6 +201,7 @@ class Session {
       this.game.players[0].npc = false;
       this.game.players[1].present = true;
       this.game.players[1].npc = true;
+      this.game.duoTemptGate = true;   // AI DUO: Temptation Court before Wraith
       this.kickSlot1("host chose AI duo");
       this.game.screen = "title";
     } else if (m === "llm" || m === "auto") {
@@ -219,6 +220,7 @@ class Session {
       this.game.players[1].present = true;
       this.game.players[1].npc = m === "llm";
       this.game.players[0].present = m === "llm" && !!this.sockets[0];
+      this.game.duoTemptGate = false;   // canon / human paths: throne unsealed
       if (m === "auto") this.names[0] = "SPECTATOR";
       this.kickSlot1("host chose an AI partner");
       this.game.screen = "title";
@@ -227,12 +229,14 @@ class Session {
       this.game.players[1].npc = false;
       this.names[1] = "PLAYER 2";
       this.game.players[1].present = !!this.sockets[1];
+      this.game.duoTemptGate = false;
       this.game.screen = this.sockets[1] ? "title" : "lobby";
     } else {
       this.agent = null;
       this.names[1] = "";
       this.game.players[1].npc = false;
       this.game.players[1].present = false;
+      this.game.duoTemptGate = false;
       this.kickSlot1("host chose single player");
       this.game.screen = "title";
     }
@@ -304,6 +308,13 @@ class Session {
       // hero, and how much harm each hero dealt to their partner
       treason: this.game.treason,
       betrayed: this.game.betrayed,
+      betrayalCause: this.game.betrayalCause,
+      duoTemptGate: this.game.duoTemptGate,
+      temptationVisited: this.game.temptationVisited,
+      temptationResolved: this.game.temptationResolved,
+      temptationDeal: this.game.temptationDeal,
+      temptationPayoff: this.game.temptationPayoff,
+      emberMercyUsed: this.game.emberMercyUsed,
       betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
@@ -643,7 +654,7 @@ wss.on("connection", (ws, req) => {
         }
         }
       } else if (msg.t === "setup" && slot === 0 && session.game.screen === "menu" && msg.mode) {
-        session.applySetup(
+        const ok = session.applySetup(
           msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode,
           {
             provider2: msg.provider2, temperament2: msg.temperament2,
@@ -651,6 +662,14 @@ wss.on("connection", (ws, req) => {
             hostName: msg.hostName,
           },
         );
+        if (!ok) {
+          try {
+            ws.send(JSON.stringify({
+              t: "setup-fail",
+              reason: "setup rejected — check providers in .env (or pick another AI)",
+            }));
+          } catch { /* */ }
+        }
       } else if (msg.t === "name" && typeof msg.name === "string") {
         const clean = cleanName(msg.name, slot === 0 ? "ILYA" : "PLAYER 2");
         if (slot === 0) session.names[0] = clean;

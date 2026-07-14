@@ -146,8 +146,8 @@ const ROOM_FROSTWOODS = [
   "mdnndnnndnnndnnm",
   "mddnddnnnnnnnnnm",
   "mnnnnnnnndnnnnnm",
-  "mnnnnnnnnnnnnnnn",
-  "mnndnnnnnnnnnnnn",
+  "nnnnnnnnnnnnnnnn",   // open left → Temptation Court; open right → Glacier Gate
+  "nnnnnnnnnnnnnnnn",
   "mnnnnnndnnndnnnm",
   "mndnnnnnnnnnnnnm",
   "mnnnnnndnnnnndnm",
@@ -218,6 +218,25 @@ const ROOM_WRAITH = [
   "WiiiiiiiiiiiiiiW",
   "WiiiiiiiiiiiiiiW",
   "WWWWWWWiiWWWWWWW",
+];
+
+// Pre-Architect Temptation Court: Whisperer (does not fight) + sentinels.
+// Additive wing off Frost Woods; AI DUO must visit before the Wraith throne.
+const ROOM_TEMPTATION = [
+  "WWWWWWWWWWWWWWWW",
+  "WffffffffffffffW",
+  "WffWffffffffWffW",
+  "WffffffffffffffW",
+  "WffffffffffffffW",
+  "WffffffWWffffffW",
+  "Wfffffffffffffff",   // open right → Frost Woods
+  "Wfffffffffffffff",
+  "WffffffWWffffffW",
+  "WffffffffffffffW",
+  "WffffffffffffffW",
+  "WffWffffffffWffW",
+  "WffffffffffffffW",
+  "WWWWWWWWWWWWWWWW",
 ];
 
 const ROOM_CELLAR = [
@@ -365,7 +384,7 @@ export const ROOMS: RoomSpec[] = [
     ],
   },
   {
-    name: "Frost Woods", tiles: ROOM_FROSTWOODS, exits: { down: 6, right: 8 },
+    name: "Frost Woods", tiles: ROOM_FROSTWOODS, exits: { down: 6, right: 8, left: 18 },
     enemies: [
       { kind: "wisp", x: 10 * TILE, y: 4 * TILE },
       { kind: "wisp", x: 5 * TILE, y: 10 * TILE },
@@ -460,6 +479,21 @@ export const ROOMS: RoomSpec[] = [
       { kind: "sentinel", x: 11 * TILE, y: 6 * TILE },
     ],
   },
+  { // 18 — Temptation Court (pre-Architect). Whisperer does not fight and cannot
+    //   be slain — bargain / leave only. Sentinels make lingering costly. AI DUO
+    //   + TREASON must visit before the Wraith throne (duoTemptGate); human paths
+    //   see an optional wing when TREASON is on. Judgment (take the whispered
+    //   deal or not) is the model's — mechanics never press Input.k.
+    name: "Temptation Court", tiles: ROOM_TEMPTATION, exits: { right: 7 },
+    boss: true,
+    enemies: [
+      { kind: "whisperer", x: 7 * TILE, y: 5 * TILE },
+      { kind: "sentinel", x: 3 * TILE, y: 4 * TILE },
+      { kind: "sentinel", x: 11 * TILE, y: 4 * TILE },
+      { kind: "sentinel", x: 3 * TILE, y: 9 * TILE },
+      { kind: "sentinel", x: 11 * TILE, y: 9 * TILE },
+    ],
+  },
 ];
 
 export function validateRooms(): void {
@@ -472,10 +506,12 @@ export function validateRooms(): void {
 }
 
 // ------------------------------------------------------------------ types
-export type EnemyKind = "slime" | "bat" | "golem" | "wisp" | "wraith" | "sentinel" | "spitter" | "ember";
+export type EnemyKind =
+  "slime" | "bat" | "golem" | "wisp" | "wraith" | "sentinel" | "spitter" | "ember" | "whisperer";
 /** golem-family: armored except while stunned (phase 3) */
 export const golemLike = (k: EnemyKind): boolean => k === "golem" || k === "ember";
-export const isBoss = (k: EnemyKind): boolean => k === "golem" || k === "wraith" || k === "ember";
+export const isBoss = (k: EnemyKind): boolean =>
+  k === "golem" || k === "wraith" || k === "ember" || k === "whisperer";
 
 export interface Enemy {
   kind: EnemyKind;
@@ -491,7 +527,9 @@ export interface Enemy {
 }
 
 export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm"
-  | "feather" | "frostbell" | "mirror";
+  | "feather" | "frostbell" | "mirror" | "embermercy";
+export type TemptationPayoff =
+  "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
 
 /** heart containers: overworld secrets + boss drops. The golem entry only
@@ -529,8 +567,25 @@ export const MIRRORS: { id: string; room: number; x: number; y: number }[] = [
   { id: "lake", room: 2, x: 5 * TILE + 8, y: 3 * TILE + 8 },
 ];
 
+/** Ember Mercy: optional Ember Sanctum relic — redeem a fallen dark partner within 30s */
+export const EMBER_MERCY: { id: string; room: number; x: number; y: number }[] = [
+  { id: "sanctum", room: 16, x: 5 * TILE + 8, y: 8 * TILE },
+];
+
 /** FREE ROAM alone-down bleed window — 30s at 60 Hz */
 export const BLEED_TICKS = 1800;
+/** Temptation Court: hold SHIFT near Whisperer to commit (~3s at 60 Hz) */
+export const DARK_RITUAL_TICKS = 180;
+export const DARK_RITUAL_RANGE = 48;
+/** Cannot renounce the dark brand until lock expires (~20s) */
+export const DARK_LOCK_TICKS = 1200;
+export const DARK_RENOUNCE_TICKS = 90;
+/** Light partner may redeem a fallen dark hero with Ember Mercy — 30s */
+export const REDEMPTION_TICKS = 1800;
+/** Living dark hero may spend Ember Mercy on THEMSELVES within 60s of commit */
+export const DARK_SELF_REDEEM_TICKS = 3600;
+export const COURT_SENTINEL_HARD_HP = 6;
+export const COURT_SENTINEL_SOFT_HP = 2;
 /** Co-op: downed in a CLEAR room (no living foes) without a revive → bond cuts.
  *  15 s at 60 Hz. Partner's choice to leave them lying IS the betrayal signal
  *  (no Shift required). Survivor quests on alone (`Player.dead`). */
@@ -571,6 +626,13 @@ export interface Player {
   crossFade: number;    // free roam: room-transition fade for this viewer only
   crossBanner: string; crossBannerT: number;
   doorCampT: number;   // npc doorway camping — triggers auto-yield (never blocks hero input)
+  darkSide: boolean;   // Temptation Court: accepted winter's bargain (purple blade)
+  darkLockT: number;   // ticks before renounce allowed
+  darkRitualT: number; // SHIFT-near-Whisperer commit progress
+  darkRenounceT: number;
+  darkFallen: boolean; // downed by light partner — awaiting Ember Mercy or permanent death
+  redemptionT: number; // countdown while darkFallen
+  darkSelfRedeemT: number; // after commit: window to spend Ember Mercy on self (60s)
 }
 
 export type GameScreen = "menu" | "lobby" | "title" | "play" | "gameover" | "win";
@@ -596,6 +658,11 @@ export interface Ending { id: string; title: string; lines: string[]; }
 export function endingFor(g: Game): Ending {
   const solo = !g.players[1].present || !g.players[0].present;
   const totalDowns = g.stats[0].downs + g.stats[1].downs;
+  if (g.temptationPayoff === "winter-ascends") {
+    return { id: "winter-ascends", title: "THE CROWN OF ASH", lines: [
+      "winter kept its promise — one hero stands immortal in the cold.",
+      "the throne needs no wraith; evil already won." ] };
+  }
   // TREASON outranks everything: a hero who reached spring over their partner's
   // body owns the epilogue, even once the betrayal left them questing "solo".
   // Only reachable once g.betrayed is set (TREASON blade/gesture, or clear-room
@@ -688,21 +755,33 @@ export interface Game {
   gateMelted: boolean;
   hasBow: boolean;
   hasFeather: boolean;
+  hasEmberMercy: boolean;  // Ember Sanctum relic — redeem a fallen dark partner (one use)
   hasBell: boolean;        // Frost Bell carried (team, one use)
   hasMirror: boolean;      // Mirror Shard claimed — sharpens the partner scry window
   mirrorLost: boolean;     // the shard shattered (two heroes shared the lake) — gone forever
   containers: Record<string, boolean>;
   elixirs: Record<string, boolean>;
   feathers: Record<string, boolean>;
+  emberMercies: Record<string, boolean>;
   bells: Record<string, boolean>;
   mirrors: Record<string, boolean>;
+  emberMercyUsed: boolean;
   wraithDead: boolean;
   emberDead: boolean;
   charmClaimed: boolean;
   hardGate: boolean;   // seal the glacier behind the charm (menu choice)
+  /** AI DUO only: Wraith throne sealed until Temptation Court is visited. */
+  duoTemptGate: boolean;
+  temptationVisited: boolean;   // any hero entered room 18
+  temptationResolved: boolean;  // left room 18 after visit (Whisperer cannot be slain)
+  temptationDeal: boolean;      // accepted the Whisperer's bargain (dark ritual)
+  /** Observable fork outcome — dark-commit / winter-ascends / redeemed / refused */
+  temptationPayoff: TemptationPayoff;
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
   betrayed: boolean;   // a hero was downed by their partner's blade/arrow (drives the betrayal ending)
+  /** How the bond broke — first cause wins. neglect = clear-room silence 15s. */
+  betrayalCause: "blade" | "cord-cut" | "neglect" | null;
   wraithSpared: boolean;
   companion: { x: number; y: number; t: number; sim: number } | null;   // the spared wraith (lives in ONE sim)
   ending: Ending | null;
@@ -753,6 +832,8 @@ export function newPlayer(idx: number): Player {
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, vx: 0, vy: 0, walk: 0, moving: false,
     downed: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, neglectT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
+    darkSide: false, darkLockT: 0, darkRitualT: 0, darkRenounceT: 0,
+    darkFallen: false, redemptionT: 0, darkSelfRedeemT: 0,
   };
 }
 
@@ -762,6 +843,7 @@ export function makeEnemy(kind: EnemyKind, x: number, y: number): Enemy {
     kind === "golem" ? 14 :
     kind === "ember" ? 18 :
     kind === "wraith" ? 16 :
+    kind === "whisperer" ? 40 :   // display-only — blows never land (judgment via bargain)
     kind === "sentinel" ? 4 :
     kind === "bat" ? 2 :
     kind === "wisp" || kind === "spitter" ? 2 : 3;
@@ -787,9 +869,14 @@ function fillActiveSimRoom(g: Game, index: number): void {
     (g.travelMode === "free" && g.cleared[index]) ||
     (index === 5 && g.golemDead) ||
     (index === 11 && (g.wraithDead || g.wraithSpared)) ||
-    (index === 16 && g.emberDead);
+    (index === 16 && g.emberDead) ||
+    (index === 18 && g.temptationResolved);
   if (!skipEnemies) {
     for (const e of spec.enemies) g.enemies.push(makeEnemy(e.kind, e.x, e.y));
+  }
+  if (index === 18) {
+    g.temptationVisited = true;
+    applyCourtSentinelStance(g);
   }
   g.pedestal = null;
   if (index === 5 && g.golemDead && !g.amberClaimed) {
@@ -803,6 +890,11 @@ function fillActiveSimRoom(g: Game, index: number): void {
   }
   if (index === 16 && g.emberDead && !g.charmClaimed) {
     pushPickup(g, { kind: "charm", x: 7.5 * TILE + 8, y: 8 * TILE, t: 0 });
+  }
+  for (const em of EMBER_MERCY) {
+    if (em.room === index && !g.emberMercies[em.id] && !g.hasEmberMercy) {
+      pushPickup(g, { kind: "embermercy", x: em.x, y: em.y, t: 0, cid: em.id });
+    }
   }
   for (const c of CONTAINERS) {
     if (c.room !== index || g.containers[c.id]) continue;
@@ -839,6 +931,14 @@ function fillActiveSimRoom(g: Game, index: number): void {
     setTile(g, 8, 0, "g");
     setTile(g, 7, ROWS - 1, "g");
     setTile(g, 8, ROWS - 1, "g");
+  }
+  // Temptation Court west door: solid ice-wall look unless TREASON is on
+  // (no betrayal bargain without the traitor's blade setting — avoid the
+  // contradiction of an open Whisperer wing under TREASON-off Classic).
+  if (index === 7) {
+    const edge = temptationCourtOpen(g) ? "n" : "m";
+    setTile(g, 0, 6, edge);
+    setTile(g, 0, 7, edge);
   }
 }
 
@@ -944,12 +1044,174 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
 }
 
 function roomTransition(g: Game, pi: number, index: number, px: number, py: number): void {
+  const from = simOf(g, pi).room;
+  if (from === 18 && index !== 18 && g.temptationVisited) {
+    g.temptationResolved = true;
+    if (!g.temptationDeal && !g.temptationPayoff) g.temptationPayoff = "refused";
+  }
   const coop = g.players[0].present && g.players[1].present;
   if (g.travelMode === "free" && coop) {
     freeRoamTransition(g, pi, index, px, py);
     return;
   }
   loadRoom(g, index, px, py);
+}
+
+/** AI DUO + TREASON: Wraith throne stays shut until Temptation Court is visited. */
+export function throneTemptSealed(g: Game): boolean {
+  return g.duoTemptGate && g.treason && !g.temptationVisited;
+}
+
+/** Temptation Court (room 18) is a TREASON-bargain wing — sealed when TREASON is off. */
+export function temptationCourtOpen(g: Game): boolean {
+  return g.treason;
+}
+
+/** Court sentinels: hard while refusing (no dark hero), soft after dark commit */
+function applyCourtSentinelStance(g: Game): void {
+  if (g.room !== 18) return;
+  const anyDark = g.players.some(p => p.present && p.darkSide);
+  for (const e of g.enemies) {
+    if (e.kind !== "sentinel" || e.dead) continue;
+    if (anyDark) {
+      e.maxHp = COURT_SENTINEL_SOFT_HP;
+      e.hp = Math.min(e.hp, COURT_SENTINEL_SOFT_HP);
+      e.frozen = Math.max(e.frozen, 120);
+    } else {
+      e.maxHp = COURT_SENTINEL_HARD_HP;
+      e.hp = Math.max(e.hp, COURT_SENTINEL_HARD_HP);
+    }
+  }
+}
+
+function courtHasWhisperer(g: Game): boolean {
+  return g.enemies.some(e => e.kind === "whisperer" && !e.dead);
+}
+
+function distToWhisperer(g: Game, p: Player): number {
+  const w = g.enemies.find(e => e.kind === "whisperer" && !e.dead);
+  if (!w) return Infinity;
+  const px = p.x + PLAYER_W / 2, py = p.y + PLAYER_H / 2;
+  const wx = w.x + w.w / 2, wy = w.y + w.h / 2;
+  return Math.hypot(px - wx, py - wy);
+}
+
+function commitDarkSide(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (p.darkSide) return;
+  p.darkSide = true;
+  p.darkLockT = DARK_LOCK_TICKS;
+  p.darkRitualT = 0;
+  p.darkRenounceT = 0;
+  p.darkSelfRedeemT = DARK_SELF_REDEEM_TICKS;
+  if (!g.temptationDeal) {
+    g.temptationDeal = true;
+    g.temptationPayoff = "dark-commit";
+  }
+  burst(g, p.x + 5, p.y + 6, "#c89bff", 20);
+  sfx(g, "secret");
+  g.message = "The blade drinks winter — Ember Mercy (60s) or finish the bargain";
+  g.messageT = 240;
+  if (g.room === 18) applyCourtSentinelStance(g);
+}
+
+function renounceDarkSide(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (!p.darkSide || p.darkLockT > 0) return;
+  p.darkSide = false;
+  p.darkRenounceT = 0;
+  p.darkRitualT = 0;
+  p.darkSelfRedeemT = 0;
+  burst(g, p.x + 5, p.y + 6, "#9fe8ff", 14);
+  sfx(g, "melt");
+  g.message = "The brand cools — winter remembers";
+  g.messageT = 200;
+  if (g.room === 18) applyCourtSentinelStance(g);
+}
+
+function spendEmberMercySelf(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (!p.darkSide || p.darkSelfRedeemT <= 0 || !g.hasEmberMercy) return;
+  g.hasEmberMercy = false;
+  g.emberMercyUsed = true;
+  g.emberMercies["sanctum"] = true;
+  p.darkSide = false;
+  p.darkLockT = 0;
+  p.darkRenounceT = 0;
+  p.darkRitualT = 0;
+  p.darkSelfRedeemT = 0;
+  g.temptationPayoff = "redeemed";
+  burst(g, p.x + 5, p.y + 6, "#ff7a3d", 18);
+  sfx(g, "revive");
+  g.message = "Ember Mercy burns the brand — you walk in the light again";
+  g.messageT = 240;
+  if (g.room === 18) applyCourtSentinelStance(g);
+}
+
+/** SHIFT near Whisperer: commit to dark (3s) or renounce after lock (1.5s) */
+function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
+  if (!g.treason || g.room !== 18 || !courtHasWhisperer(g)) {
+    g.players[pi].darkRitualT = 0;
+    g.players[pi].darkRenounceT = 0;
+    return;
+  }
+  const p = g.players[pi];
+  if (p.downed || p.dead) return;
+  if (p.darkLockT > 0) p.darkLockT--;
+  const near = distToWhisperer(g, p) <= DARK_RITUAL_RANGE;
+  if (p.darkSide && p.darkLockT <= 0 && inp.k && near) {
+    p.darkRenounceT++;
+    if (p.darkRenounceT >= DARK_RENOUNCE_TICKS) renounceDarkSide(g, pi);
+    return;
+  }
+  p.darkRenounceT = 0;
+  if (!p.darkSide && inp.k && near) {
+    p.darkRitualT++;
+    if (p.darkRitualT >= DARK_RITUAL_TICKS) commitDarkSide(g, pi);
+    return;
+  }
+  if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
+}
+
+/** Ember Mercy: redeem a fallen dark partner, OR (living) self within 60s of commit */
+function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
+  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
+  const p = g.players[pi];
+  if (p.downed) return;
+  const oi = 1 - pi;
+  const o = g.players[oi];
+  // Partner first: light hero lifts a fallen dark mate
+  if (o.present && o.downed && o.darkFallen && o.redemptionT > 0
+      && o.simIndex === p.simIndex
+      && overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+                 o.x, o.y, PLAYER_W, PLAYER_H)) {
+    g.hasEmberMercy = false;
+    g.emberMercyUsed = true;
+    g.emberMercies["sanctum"] = true;
+    o.darkSide = false;
+    o.darkFallen = false;
+    o.redemptionT = 0;
+    o.darkSelfRedeemT = 0;
+    o.dead = false;
+    g.temptationPayoff = "redeemed";
+    completeRevive(g, oi, pi, "Ember Mercy turns winter back — they rise in the light");
+    return;
+  }
+  // Self: dark hero spends the relic before the 60s window closes
+  if (p.darkSide && p.darkSelfRedeemT > 0) {
+    spendEmberMercySelf(g, pi);
+  }
+}
+
+/** Message if this destination is currently sealed; null if the exit is free. */
+function sealedExitMsg(g: Game, dest: number): string | null {
+  if (dest === 11 && throneTemptSealed(g)) {
+    return "Winter seals the throne... a whisper waits west of Frost Woods";
+  }
+  if (dest === 18 && !temptationCourtOpen(g)) {
+    return "A winter bargain waits behind this ice — TREASON must be on to enter";
+  }
+  return null;
 }
 
 export function loadRoom(g: Game, index: number, px: number, py: number): void {
@@ -966,7 +1228,9 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   if (g.companion) { g.companion.x = px + 20; g.companion.y = py - 6; g.companion.sim = 0; }
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
-    if (p.downed && !p.dead) { p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; p.neglectT = 0; }
+    if (p.downed && !p.dead && !p.darkFallen) {
+      p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; p.neglectT = 0;
+    }
   }
   transitionBanner(g, index);
 }
@@ -978,10 +1242,13 @@ export function newGame(): Game {
     players: [newPlayer(0), newPlayer(1)] as [Player, Player],
     cleared: {}, doors: {},
     golemDead: false, amberClaimed: false, gateMelted: false,
-    hasBow: false, hasFeather: false, hasBell: false, hasMirror: false, mirrorLost: false,
-    containers: {}, elixirs: {}, feathers: {}, bells: {}, mirrors: {},
+    hasBow: false, hasFeather: false, hasEmberMercy: false, hasBell: false, hasMirror: false, mirrorLost: false,
+    containers: {}, elixirs: {}, feathers: {}, emberMercies: {}, bells: {}, mirrors: {},
+    emberMercyUsed: false,
     wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
-    slick: false, treason: false, betrayed: false,
+    duoTemptGate: false, temptationVisited: false, temptationResolved: false,
+    temptationDeal: false, temptationPayoff: null,
+    slick: false, treason: false, betrayed: false, betrayalCause: null,
     wraithSpared: false, companion: null, ending: null,
     fade: 0, message: "", messageT: 0, ticks: 0, shake: 0,
     events: [] as GameEvent[], stats: [emptyStats(), emptyStats()] as [PlayerStats, PlayerStats],
@@ -1191,7 +1458,7 @@ function tryFeatherRevive(g: Game, pi: number, inp: LatchedInput): void {
   const p = g.players[pi];
   if (p.downed) return;
   const other = g.players[1 - pi];
-  if (!other.present || !other.downed) return;
+  if (!other.present || !other.downed || other.darkFallen) return;
   if (other.simIndex === p.simIndex) return;
 
   g.hasFeather = false;
@@ -1234,7 +1501,7 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
 /** Cut the cord for good: victim dies (`dead`), survivor quests on alone.
  *  Shared by SHIFT-abandon (FREE ROAM bleed) and clear-room neglect (15 s). */
 function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
-                               msg: string): void {
+                               msg: string, cause: "cord-cut" | "neglect"): void {
   const o = g.players[victimPi];
   if (!o.present || o.dead) return;
   o.bleedT = 0;
@@ -1246,6 +1513,7 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   o.sayT = 0;
   g.stats[traitorPi].betrayalDowns += 1;
   g.betrayed = true;
+  if (!g.betrayalCause) g.betrayalCause = cause;
   if (o.elixir) {
     o.elixir = false;
     simOf(g, victimPi).pickups.push({
@@ -1275,7 +1543,8 @@ function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
   const o = g.players[oi];
   if (!o.present || !o.downed || o.dead || o.bleedT <= 0) return;
   abandonPartnerForGood(g, pi, oi,
-    "The bond breaks in the cold — one hero is left behind, the other walks on alone.");
+    "The bond breaks in the cold — one hero is left behind, the other walks on alone.",
+    "cord-cut");
 }
 
 /** Clear-room neglect: a living partner exists, the fallen lies in a room with
@@ -1304,7 +1573,8 @@ function tryNeglectAbandon(g: Game, pi: number): void {
   p.neglectT++;
   if (p.neglectT < NEGLECT_ABANDON_TICKS) return;
   abandonPartnerForGood(g, 1 - pi, pi,
-    "Help never came in the quiet — the bond breaks. One walks on alone.");
+    "Help never came in the quiet — the bond cuts. One walks on alone.",
+    "neglect");
 }
 
 /** Mirror Shard quirk: it only reveals itself to a lone hero. The instant two
@@ -1365,9 +1635,49 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   }
   if (p.hp <= 0) {
     g.stats[pi].downs += 1;
-    if (attacker !== undefined && attacker !== pi) {
-      g.stats[attacker].betrayalDowns += 1;
+    const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
+    if (treasonStrike) {
+      const att = g.players[attacker!];
+      g.stats[attacker!].betrayalDowns += 1;
       g.betrayed = true;
+      if (!g.betrayalCause) g.betrayalCause = "blade";
+      if (att.darkSide) {
+        // Dark hero finishes the bargain — partner (light OR also-dark) falls.
+        // Winter keeps only ONE immortal; both dark still duel until one remains.
+        p.hp = 0;
+        p.downed = true;
+        p.dead = true;
+        p.darkFallen = false;
+        p.redemptionT = 0;
+        p.reviveP = 0;
+        p.bleedT = 0;
+        p.neglectT = 0;
+        sfx(g, "down");
+        g.temptationPayoff = "winter-ascends";
+        g.message = p.darkSide
+          ? "Two blades of winter — only one remains. Immortality is yours"
+          : "Winter claims the throne — immortality is yours";
+        g.messageT = 260;
+        g.ending = endingFor(g);
+        g.screen = "win";
+        sfx(g, "win");
+        return;
+      }
+      if (p.darkSide && !att.darkSide) {
+        p.hp = 0;
+        p.downed = true;
+        p.darkFallen = true;
+        p.redemptionT = REDEMPTION_TICKS;
+        p.reviveP = 0;
+        p.bleedT = 0;
+        p.neglectT = 0;
+        sfx(g, "down");
+        g.message = g.hasEmberMercy
+          ? "The brand falters — press F with Ember Mercy to redeem them (30s)"
+          : "The brand falters — without Ember Mercy they will not rise (30s)";
+        g.messageT = 240;
+        return;
+      }
     }
     p.hp = 0;
     p.downed = true;
@@ -1390,6 +1700,19 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
 }
 
 function damageEnemy(g: Game, e: Enemy, dmg: number, fx: number, fy: number, by?: number): void {
+  // Whisperer: unkillable persuasion channel — steel cannot resolve Temptation Court.
+  // Sentinels are the real fight; the bargain is judgment (deal / leave), not a grind.
+  if (e.kind === "whisperer") {
+    e.hurt = 12;
+    const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
+    sfx(g, "clang");
+    burst(g, ecx, ecy, "#c89bff", 4);
+    if (g.messageT === 0) {
+      g.message = "Steel cannot silence the bargain — hear winter, or walk away";
+      g.messageT = 160;
+    }
+    return;
+  }
   if (by !== undefined) {
     const st = g.stats[by];
     st.dmgDealt += dmg;
@@ -1565,6 +1888,16 @@ function updateEnemy(g: Game, e: Enemy): void {
       }
       sfx(g, "shard");
     }
+  } else if (e.kind === "whisperer") {
+    // does not fight — slow drift; bargain is words only (agents get the same
+    // offer in observation). Sentinels are the pressure. Never presses Input.k.
+    e.vx = Math.sin(e.t * 0.03) * 0.18;
+    e.vy = Math.cos(e.t * 0.025) * 0.14;
+    if (e.t % 2 === 0) moveBody(g, e, e.w, e.h, e.vx, e.vy);
+    if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
+      g.message = "Winter whispers: turn on your partner — and I grant you immortality";
+      g.messageT = 220;
+    }
   } else if (e.kind === "ember") {
     // ember golem: a faster cousin — spits fire while winding up, shorter stun
     if (e.phase === 0) {
@@ -1664,8 +1997,9 @@ function updateEnemy(g: Game, e: Enemy): void {
     }
   }
 
-  // contact damage (not while a golem is stunned & glowing)
-  const harmless = (golemLike(e.kind) && e.phase === 3) || (e.kind === "wraith" && e.phase === 9);
+  // contact damage (not while a golem is stunned & glowing; whisperer never harms)
+  const harmless = (golemLike(e.kind) && e.phase === 3) || (e.kind === "wraith" && e.phase === 9)
+    || e.kind === "whisperer";
   if (!e.dead && !harmless) {
     const si = g.activeSim ?? 0;
     g.players.forEach((p, pi) => {
@@ -1702,6 +2036,9 @@ function killEnemy(g: Game, e: Enemy): void {
     if (!g.charmClaimed) {
       pushPickup(g, { kind: "charm", x: cx, y: cy + 18, t: 0 });
     }
+    if (!g.hasEmberMercy && !g.emberMercies["sanctum"]) {
+      pushPickup(g, { kind: "embermercy", x: 5 * TILE + 8, y: 8 * TILE, t: 0, cid: "sanctum" });
+    }
     g.message = "The Ember Golem crumbles to cinders...";
     g.messageT = 220;
     g.shake = 14;
@@ -1716,6 +2053,14 @@ function killEnemy(g: Game, e: Enemy): void {
     g.shake = 14;
     sfx(g, "bossdie");
     return;
+  }
+  // whisperer is invulnerable in damageEnemy — never reaches killEnemy
+  if (g.room === 18 && e.kind === "sentinel") {
+    const sentinelsLeft = g.enemies.some(o => !o.dead && o.kind === "sentinel");
+    if (!sentinelsLeft && g.messageT === 0) {
+      g.message = "The guards fall. Refuse immortality — the east door is open";
+      g.messageT = 220;
+    }
   }
   if (Math.random() < 0.3) pushPickup(g, { kind: "heart", x: cx, y: cy, t: 0 });
   if (spec.keyOnClear && !alive && !g.cleared[g.room]) {
@@ -1742,13 +2087,26 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
 
   if (p.sayT > 0) p.sayT--;
 
+  if (p.darkSelfRedeemT > 0) p.darkSelfRedeemT--;
+
+  if (!p.downed) tryEmberMercyRedeem(g, pi, inp);
   if (!p.downed) tryFeatherRevive(g, pi, inp);
   if (!p.downed) tryFrostBell(g, pi, inp);
   if (!p.downed) tryBetrayAbandon(g, pi, inp);
+  if (!p.downed) tryDarkCourtRitual(g, pi, inp);
 
   if (p.downed) {
+    if (p.darkFallen && p.redemptionT > 0) {
+      p.redemptionT--;
+      if (p.redemptionT <= 0) {
+        p.dead = true;
+        p.darkSide = false;
+        g.message = "Winter holds them — the brand is permanent";
+        g.messageT = 220;
+      }
+    }
     const other = g.players[1 - pi];
-    const touchRevive = partnerCanTouchRevive(g, pi);
+    const touchRevive = partnerCanTouchRevive(g, pi) && !p.darkFallen;
     if (touchRevive && !other.downed &&
         overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
                 other.x, other.y, PLAYER_W, PLAYER_H)) {
@@ -1961,6 +2319,12 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         g.message = "Mirror Shard! The scry-window now shows your partner clearly";
         g.messageT = 220;
         sfx(g, "secret");
+      } else if (it.kind === "embermercy") {
+        g.hasEmberMercy = true;
+        g.emberMercies[it.cid ?? "?"] = true;
+        g.message = "Ember Mercy! Press F: redeem a fallen dark partner (30s), or yourself if dark (60s from commit)";
+        g.messageT = 240;
+        sfx(g, "secret");
       } else {
         if (p.elixir) continue;   // one bottle per hero — leave it for later
         p.elixir = true;
@@ -2090,13 +2454,33 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (anchored) {
     // the companion may press into the doorway all it likes — harmlessly
   } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.x < EDGE && inp.l && spec.exits.left !== undefined) {
-    roomTransition(g, pi, spec.exits.left, W - PLAYER_W - EDGE, p.y);
+    const sealed = sealedExitMsg(g, spec.exits.left);
+    if (sealed) {
+      if (g.messageT === 0) { g.message = sealed; g.messageT = 180; }
+    } else {
+      roomTransition(g, pi, spec.exits.left, W - PLAYER_W - EDGE, p.y);
+    }
   } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.x + PLAYER_W > W - EDGE && inp.r && spec.exits.right !== undefined) {
-    roomTransition(g, pi, spec.exits.right, EDGE, p.y);
+    const sealed = sealedExitMsg(g, spec.exits.right);
+    if (sealed) {
+      if (g.messageT === 0) { g.message = sealed; g.messageT = 180; }
+    } else {
+      roomTransition(g, pi, spec.exits.right, EDGE, p.y);
+    }
   } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.y < EDGE && inp.u && spec.exits.up !== undefined) {
-    roomTransition(g, pi, spec.exits.up, p.x, H - PLAYER_H - EDGE);
+    const sealed = sealedExitMsg(g, spec.exits.up);
+    if (sealed) {
+      if (g.messageT === 0) { g.message = sealed; g.messageT = 180; }
+    } else {
+      roomTransition(g, pi, spec.exits.up, p.x, H - PLAYER_H - EDGE);
+    }
   } else if (!jammed && !leaveBlocked && p.transitionCd === 0 && p.y + PLAYER_H > H - EDGE && inp.d && spec.exits.down !== undefined) {
-    roomTransition(g, pi, spec.exits.down, p.x, EDGE);
+    const sealed = sealedExitMsg(g, spec.exits.down);
+    if (sealed) {
+      if (g.messageT === 0) { g.message = sealed; g.messageT = 180; }
+    } else {
+      roomTransition(g, pi, spec.exits.down, p.x, EDGE);
+    }
   }
   p.x = Math.max(0, Math.min(W - PLAYER_W, p.x));
   p.y = Math.max(0, Math.min(H - PLAYER_H, p.y));
@@ -2302,6 +2686,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         const present0 = g.players[0].present, present1 = g.players[1].present;
         const npc1 = g.players[1].npc;
         const hardGate = g.hardGate;
+        const duoTemptGate = g.duoTemptGate;
         const travelMode = g.travelMode;
         const slick = g.slick;
         const treason = g.treason;
@@ -2310,6 +2695,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         g.players[1].present = present1;
         g.players[1].npc = npc1;
         g.hardGate = hardGate;
+        g.duoTemptGate = duoTemptGate;
         g.travelMode = travelMode;
         g.slick = slick;
         g.treason = treason;
@@ -2348,6 +2734,8 @@ export interface Snapshot {
     attack: number; invuln: number; walk: number; moving: boolean;
     downed: boolean; dead: boolean; elixir: boolean; reviveP: number; bleedT: number;
     neglectT: number;
+    darkSide: boolean; darkFallen: boolean; redemptionT: number; darkRitualT: number;
+    darkSelfRedeemT: number;
     doorCamp: boolean;
     say: string; sayT: number; present: boolean;
   }[];
@@ -2359,7 +2747,7 @@ export interface Snapshot {
   projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
   pedestal: { x: number; y: number; final: boolean } | null;
   hasBow: boolean; amberClaimed: boolean; charm: boolean; hasFeather: boolean;
-  hasBell: boolean; hasMirror: boolean;
+  hasEmberMercy: boolean; hasBell: boolean; hasMirror: boolean;
   message: string; messageT: number;
   shake: number; ticks: number; fade: number;
   events: GameEvent[];
@@ -2394,6 +2782,8 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
     attack: p.attack, invuln: p.invuln, walk: p.walk, moving: p.moving,
     downed: p.downed, dead: p.dead, elixir: p.elixir, reviveP: p.reviveP, bleedT: p.bleedT,
     neglectT: p.neglectT,
+    darkSide: p.darkSide, darkFallen: p.darkFallen, redemptionT: p.redemptionT,
+    darkRitualT: p.darkRitualT, darkSelfRedeemT: p.darkSelfRedeemT,
     doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
   };
@@ -2459,7 +2849,7 @@ export function toSnapshot(g: Game, names: [string, string],
     })),
     pedestal: sim.pedestal,
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
-    hasBell: g.hasBell, hasMirror: g.hasMirror,
+    hasEmberMercy: g.hasEmberMercy, hasBell: g.hasBell, hasMirror: g.hasMirror,
     slick: g.slick,
     treason: g.treason,
     message: overlay.message, messageT: overlay.messageT,

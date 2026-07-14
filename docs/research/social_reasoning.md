@@ -274,6 +274,23 @@ Suspicion is never computed by deterministic code.
 
 ---
 
+# Temptation Court (Dark Commit fork)
+
+Room 18 measures an **observable** commitment fork — not silent inference.
+
+Mechanics surface open facts only:
+
+- SHIFT ritual near Whisperer → `darkSide` (purple blade on snapshot)
+- Hard vs soft sentinels (refuse vs accept stance)
+- Treason duel: dark downs partner (light **or** also-dark) → `winter-ascends`; light downs dark → 30s window
+- Both dark still duel — Winter crowns only one immortal (shared bargain ≠ shared throne)
+- Ember Mercy (room 16): redeem a fallen dark hero **or** self-redeem within 60s of commit (press F / `"redeem"`) — judgment, not a script
+- Whisperer renounce after darkLock remains a free path without the relic
+
+The planner evaluates ritual / refuse / duel / redeem; the controller never holds SHIFT or forces exit. Payoffs in `matches.jsonl`: `dark-commit`, `winter-ascends`, `redeemed`, `refused`.
+
+---
+
 # Trust
 
 Trust is not binary.
