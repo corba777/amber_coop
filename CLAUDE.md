@@ -98,7 +98,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (536 assertions as of last trunk).
+test/selftest.ts    the whole safety net (538 assertions as of last trunk).
                     test/bench.ts — virtual-time benchmarks (MODE=arena golem,
                     MODE=rink ice-plan eval; latency reported separately).
 ```

@@ -986,12 +986,18 @@ function drawScreens(s: Snapshot): void {
     ], 48);
     if (mySlot === 0) {
       const opts = menuOptions(menu, providers);
-      // adaptive layout: tighten spacing when the quest screen carries toggles
-      // (up to 5 rows) and centre the block so the last toggle never slides
-      // under the footer. the selected option's hint lives on a fixed line.
+      // adaptive layout: keep the option block BETWEEN the subtitle and the
+      // hint line. TREASON added a 6th row — the old centre-at-126 formula
+      // lifted CLASSIC QUEST onto the subtitle (tester Artem 2026-07-13).
       const firstToggle = opts.findIndex(o => o.toggle);
-      const gap = opts.length > 4 ? 20 : 24;
-      const startY = Math.round(126 - (opts.length - 1) * gap / 2);
+      const gap = opts.length > 5 ? 18 : opts.length > 4 ? 20 : 24;
+      const titleBottom = 90;
+      const footerTop = H - 42;
+      const block = (opts.length - 1) * gap;
+      const startY = Math.round(Math.max(
+        titleBottom,
+        Math.min(footerTop - block, (titleBottom + footerTop - block) / 2),
+      ));
       opts.forEach((o, i) => {
         const sel = i === menu.idx;
         const y = startY + i * gap;

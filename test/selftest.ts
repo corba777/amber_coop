@@ -620,6 +620,8 @@ function freshPlay(): Game {
     // empty Enter used to dismiss the gate and log everyone as ILYA — refuse it
     ok(src.includes("name required"),
        `${file}: name gate refuses empty name (attribution)`);
+    ok(src.includes("titleBottom") || src.includes("footerTop"),
+       `${file}: quest menu keeps options below the subtitle (no CLASSIC QUEST overlap)`);
     ok(src.includes("DISCONNECTED") && src.includes("offline"),
        `${file}: WS drop shows DISCONNECTED + offline RTT (no stale ping)`);
     ok(src.includes('addEventListener("close"'),
