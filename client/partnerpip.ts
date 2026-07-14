@@ -51,7 +51,7 @@ function drawPipEnemy(ctx: CanvasRenderingContext2D, e: PartnerView["enemies"][n
     ctx.drawImage(SPR.sentinel[0], Math.round(x) - 2, Math.round(y) - 2);
   } else if (e.kind === "spitter") {
     ctx.drawImage(SPR.spitter[0], Math.round(x) - 2, Math.round(y) - 2);
-  } else if (e.kind === "wraith") {
+  } else if (e.kind === "wraith" || e.kind === "whisperer") {
     const bob = Math.sin(ticks * 0.06) * 2;
     ctx.drawImage(SPR.wraith, Math.round(x) - 2, Math.round(y) - 3 + bob);
   } else {

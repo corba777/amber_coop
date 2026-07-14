@@ -10,7 +10,7 @@
 import * as THREE from "three";
 import {
   TILE, COLS, ROWS, W, H, PLAYER_W, PLAYER_H,
-  Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS,
+  Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
 import { drawDuoSpectatorHud, drawHearts } from "./hud";
@@ -122,6 +122,8 @@ let names: [string, string] = ["ILYA", "?"];
 interface ProviderInfo { ok: boolean; label: string; hint: string; }
 let providers: Record<string, ProviderInfo> = {};
 let sessionMode: string | null = null;
+let menuFlash = "";
+let menuFlashT = 0;
 
 function isSpectator(s: Snapshot | null): boolean {
   return sessionMode === "auto" || sessionMode === "duo" ||
@@ -138,7 +140,8 @@ ws.onmessage = ev => {
     | { t: "state"; s: Snapshot }
     | { t: "kicked"; reason: string }
     | { t: "pong"; n: number }
-    | { t: "full"; reason?: string };
+    | { t: "full"; reason?: string }
+    | { t: "setup-fail"; reason?: string };
   if (msg.t === "pong") {
     rttMs = Math.round(performance.now() - (msg.n as number));
     return;
@@ -152,6 +155,9 @@ ws.onmessage = ev => {
     names = msg.names;
     providers = msg.providers ?? {};
     sessionMode = msg.mode;
+  } else if (msg.t === "setup-fail") {
+    menuFlash = msg.reason || "setup failed";
+    menuFlashT = 240;
   } else if (msg.t === "kicked") {
     alert("Disconnected: " + msg.reason);
   } else if (msg.t === "state") {
@@ -220,6 +226,11 @@ function setUrlRoom(on: boolean): void {
 }
 
 function menuSend(payload: Record<string, unknown>): void {
+  if (disconnected || ws.readyState !== WebSocket.OPEN) {
+    menuFlash = "not connected — hard-refresh the page";
+    menuFlashT = 240;
+    return;
+  }
   ws.send(JSON.stringify(payload));
 }
 
@@ -573,6 +584,7 @@ const enemyTex = {
   golem: [spriteTex(SPR.golem)],
   ember: [spriteTex(SPR.ember)],
   wraith: [spriteTex(SPR.wraith)],
+  whisperer: [spriteTex(SPR.wraith)],
   sentinel: SPR.sentinel.map(spriteTex),
   spitter: SPR.spitter.map(spriteTex),
 };
@@ -914,6 +926,8 @@ function drawHud(s: Snapshot): void {
   const artifacts3d: [boolean, HTMLCanvasElement][] = [
     [s.hasBow, SPR.bow],
     [s.players[mySlot].elixir, SPR.elixir],
+    [!!s.hasFeather, SPR.elixir],
+    [!!s.hasEmberMercy, SPR.charm],
     [!!s.hasBell, SPR.bell],
     [!!s.hasMirror, SPR.mirror],
   ];
@@ -923,11 +937,14 @@ function drawHud(s: Snapshot): void {
     artX3d -= 14;
     uictx.drawImage(spr, artX3d, 1, 14, 14);
   }
-  const boss = s.enemies.find(e => (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember") && !e.dead);
+  const boss = s.enemies.find(e =>
+    (e.kind === "golem" || e.kind === "wraith" || e.kind === "ember" || e.kind === "whisperer") && !e.dead);
   if (boss) {
     uictx.fillStyle = "rgba(0,0,0,0.5)";
     uictx.fillRect(48, H - 12, 160, 7);
-    uictx.fillStyle = boss.kind === "wraith" ? "#9fe8ff" : boss.kind === "ember" ? "#ff7a3d" : "#e8384f";
+    uictx.fillStyle = boss.kind === "wraith" ? "#9fe8ff"
+      : boss.kind === "ember" ? "#ff7a3d"
+      : boss.kind === "whisperer" ? "#c89bff" : "#e8384f";
     uictx.fillRect(49, H - 11, 158 * (boss.hp / boss.maxHp), 5);
   }
   if (disconnected || (rttMs >= 0 && s.screen === "play")) {
@@ -1033,6 +1050,11 @@ function drawScreens(s: Snapshot): void {
       if (serverBuild && serverBuild !== BUILD) {
         uictx.fillStyle = "#e8384f";
         uictx.fillText("client/server build mismatch — hard-refresh (Ctrl+Shift+R)", W / 2, 30);
+      }
+      if (menuFlashT > 0) {
+        menuFlashT--;
+        uictx.fillStyle = "#e8384f";
+        uictx.fillText(menuFlash.slice(0, 52), W / 2, 42);
       }
       uictx.textAlign = "left";
     } else {
@@ -1207,6 +1229,13 @@ function render(): void {
       ring.geometry.dispose();
       ring.geometry = new THREE.RingGeometry(0.5, 0.62, 24, 1, -Math.PI / 2, (p.reviveP / 90) * Math.PI * 2);
       (ring.material as THREE.MeshBasicMaterial).color.set(0x9be07a);
+    } else if (p.downed && p.darkFallen && p.redemptionT > 0) {
+      ring.visible = true;
+      ring.position.set(wx, 0.05, wz);
+      ring.geometry.dispose();
+      ring.geometry = new THREE.RingGeometry(0.5, 0.62, 24, 1, -Math.PI / 2,
+        (p.redemptionT / REDEMPTION_TICKS) * Math.PI * 2);
+      (ring.material as THREE.MeshBasicMaterial).color.set(0xff7a3d);
     } else if (p.downed && p.bleedT > 0) {
       ring.visible = true;
       ring.position.set(wx, 0.05, wz);
@@ -1220,7 +1249,8 @@ function render(): void {
       const ang = SWING_BASE[showDir] + (t - 0.5) * 1.9 * (showDir === 3 || showDir === 1 ? -1 : 1);
       sw.visible = true;
       const blade = sw.children[0] as THREE.Mesh;
-      (blade.material as THREE.MeshBasicMaterial).color.set(s.amberClaimed ? 0xffb545 : 0xf2f4fa);
+      const bladeColor = p.darkSide ? 0xc89bff : s.amberClaimed ? 0xffb545 : 0xf2f4fa;
+      (blade.material as THREE.MeshBasicMaterial).color.set(bladeColor);
       sw.position.set(wx, 0.5, wz);           // pivot rides the hero's hand
       sw.rotation.y = Math.PI / 2 - ang;      // +Z blade → (cos a, 0, sin a)
       sw.rotation.x = -0.12;                  // slight upward slash plane
@@ -1233,12 +1263,12 @@ function render(): void {
     const e = s.enemies[i];
     if (!e || e.dead) { bb.mesh.visible = bb.shadow.visible = false; return; }
     const ox = pv?.enemies[i]?.x ?? e.x, oy = pv?.enemies[i]?.y ?? e.y;
-    const big = e.kind === "golem" || e.kind === "wraith" || e.kind === "ember";
+    const big = e.kind === "golem" || e.kind === "wraith" || e.kind === "ember" || e.kind === "whisperer";
     const wx = (lerp(ox, e.x, alpha) + (big ? 14 : 6)) / TILE;
     const wz = (lerp(oy, e.y, alpha) + (big ? 14 : 6)) / TILE;
     bb.mesh.visible = !(e.hurt > 0 && Math.floor(e.hurt / 3) % 2 === 0);
     bb.shadow.visible = true;
-    const texArr = enemyTex[e.kind];
+    const texArr = enemyTex[e.kind] ?? enemyTex.wraith;
     const frame = texArr.length > 1
       ? (e.kind === "slime" ? (e.phase === 1 ? 1 : Math.floor(e.t / 30) % 2)
         : e.kind === "bat" ? Math.floor(e.t / 8) % 2
@@ -1248,7 +1278,7 @@ function render(): void {
     const size = big ? 2.0 : 0.95;
     bb.mesh.scale.set(size, size, 1);
     bb.shadow.scale.setScalar(big ? 1.7 : 0.9);
-    const hover = e.kind === "bat" || e.kind === "wisp" || e.kind === "wraith"
+    const hover = e.kind === "bat" || e.kind === "wisp" || e.kind === "wraith" || e.kind === "whisperer"
       ? 0.25 + Math.sin(now * 0.005 + i) * 0.08 : 0;
     bb.mesh.position.set(wx, size * 0.52 + hover, wz);
     bb.shadow.position.set(wx, 0.02, wz);
@@ -1259,6 +1289,9 @@ function render(): void {
     } else if (e.kind === "wraith" && e.phase === 9) {
       bb.mat.color.set(0xdff5ff);
       bb.mat.opacity = 0.7;
+    } else if (e.kind === "whisperer") {
+      bb.mat.color.set(0xc89bff);
+      bb.mat.opacity = 0.85;
     } else {
       bb.mat.opacity = 1;
       bb.mat.color.set(

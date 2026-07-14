@@ -401,7 +401,7 @@ function freshPlay(): Game {
   console.log("[11] extended world: classic path intact, additive wings");
   const core = await import("../shared/core");
   core.validateRooms();
-  ok(core.ROOMS.length === 18, "18 rooms validate");
+  ok(core.ROOMS.length === 19, "19 rooms validate");
   // the classic route is untouched
   ok(core.ROOMS[4].exits.up === 5 && core.ROOMS[5].exits.down === 4,
      "old vault: guard leads straight to the boss, as it always did");
@@ -422,6 +422,13 @@ function freshPlay(): Game {
      "and also opens straight off the starting meadow (early access)");
   ok(core.ROOMS[0].exits.right === 1 && core.ROOMS[0].exits.up === 6,
      "the meadow's canon exits (right→forest, up→gate) are untouched");
+  // Temptation Court: additive wing west of Frost Woods (pre-Architect duo gate)
+  ok(core.ROOMS[7].exits.left === 18 && core.ROOMS[18].exits.right === 7,
+     "Temptation Court hangs west off Frost Woods");
+  ok(core.ROOMS[7].exits.right === 8 && core.ROOMS[7].exits.down === 6,
+     "Frost Woods canon exits (right→glacier, down→snowfield) untouched");
+  ok(core.ROOMS[18].enemies.some(e => e.kind === "whisperer"),
+     "Temptation Court hosts the Whisperer");
 
   // bow is back where veterans remember it
   const g = freshPlay();
@@ -3469,6 +3476,7 @@ function freshPlay(): Game {
   ok(g.players[1].bleedT === 0, "the bleed-out countdown is cut short");
   ok(g.screen === "play" && !g.bleedoutLoss, "the game does NOT end — the traitor quests on");
   ok(g.betrayed && core.endingFor(g).id === "betrayal", "the epilogue names the traitor");
+  ok(g.betrayalCause === "cord-cut", "SHIFT abandon logs cause cord-cut");
   ok(!g.players[1].elixir && core.simOf(g, 1).pickups.some(p => p.kind === "elixir" && p.t >= 0),
      "the fallen hero's Elixir spills back into their room for the survivor");
 
@@ -4162,8 +4170,8 @@ function freshPlay(): Game {
   ok(full.takeSay() == null, "controller does not auto-say a tip — planner judgment");
 
   const doctrine = readFileSync("server/agent.ts", "utf8");
-  ok(/SHARE TIPS — HIGH/.test(doctrine) && /SHARE TIPS — LOW/.test(doctrine),
-     "temperament doctrine spans high→low share-tip priority");
+  ok(/shareTips: often/.test(doctrine) && /shareTips: rare/.test(doctrine),
+     "temperament doctrine spans shareTips often→rare (preference, not a script)");
 }
 
 // ------------------------------------------------- 101. clear-room neglect → betrayal solo
@@ -4187,6 +4195,7 @@ function freshPlay(): Game {
   }
   ok(g.players[0].dead, "after 15s clear-room silence the fallen dies for good");
   ok(g.betrayed, "neglect sets the betrayal flag (no Shift required)");
+  ok(g.betrayalCause === "neglect", "cause is neglect — not blade / not Shift cord-cut");
   ok(g.stats[1].betrayalDowns >= 1, "the living partner owns the betrayalDown");
   ok(g.screen === "play", "game continues — survivor solos, no shared gameover");
   ok(core.endingFor(g).id === "betrayal", "epilogue is THE BLADE THAT TURNED");
@@ -4259,6 +4268,454 @@ function freshPlay(): Game {
   ok(obs.partner.neglectSecLeft === 10, "observation exposes ~10s left on clear-room clock");
   ok(/LOW≠Shift|neglect|bond/i.test(obs.partner.note ?? ""),
      "hunter note: LOW ≠ Shift; neglect clock named");
+}
+
+{
+  console.log("[102] Temptation Court: TREASON opens the wing; AI DUO gate before Wraith");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  /** Ice Guard → Throne: unlock the L-door, then walk up. */
+  const tryThrone = (g: ReturnType<typeof freshPlay>, expectRoom: number, label: string): void => {
+    core.loadRoom(g, 10, 7.5 * TILE, 2 * TILE);
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[0].present = true;
+    g.players[0].keys = 1;
+    g.players[0].x = 7.5 * TILE; g.players[0].y = 1 * TILE + 2;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    const up = { ...emptyInput(), u: true };
+    for (let i = 0; i < 15 && !g.doors[10]; i++) step(g, up, emptyInput(), prev);
+    ok(g.doors[10] === true, `${label}: ice-guard door unlocked`);
+    for (let i = 0; i < 40 && g.room === 10; i++) step(g, up, emptyInput(), prev);
+    ok(g.room === expectRoom, label);
+  };
+
+  // Classic TREASON-off: Court inaccessible (wall + exit reject)
+  const gNoT = freshPlay();
+  gNoT.treason = false;
+  gNoT.duoTemptGate = false;
+  ok(!core.temptationCourtOpen(gNoT), "Court closed without TREASON");
+  ok(!core.throneTemptSealed(gNoT), "no throne seal without TREASON even if duo flag later");
+  core.loadRoom(gNoT, 7, 2 * TILE, 6.5 * TILE);
+  gNoT.screen = "play"; gNoT.fade = 0; gNoT.enemies = [];
+  ok(core.tileAt(gNoT, 0, 6) === "m" && core.tileAt(gNoT, 0, 7) === "m",
+     "TREASON-off: Frost Woods west edge is solid wall");
+  gNoT.players[0].present = true;
+  gNoT.players[0].x = 2; gNoT.players[0].y = 6.5 * TILE;
+  const prevNo: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 25; i++) step(gNoT, { ...emptyInput(), l: true }, emptyInput(), prevNo);
+  ok(gNoT.room === 7, "TREASON-off: cannot walk into Temptation Court");
+
+  // Classic TREASON-on, no duo gate: optional wing opens; throne stays free
+  const gClassic = freshPlay();
+  gClassic.treason = true;
+  gClassic.duoTemptGate = false;
+  ok(core.temptationCourtOpen(gClassic), "Court open when TREASON is on");
+  tryThrone(gClassic, 11, "Classic TREASON-on (no duo gate): throne opens without visiting Court");
+  core.loadRoom(gClassic, 7, 2 * TILE, 6.5 * TILE);
+  gClassic.fade = 0; gClassic.enemies = [];
+  ok(core.tileAt(gClassic, 0, 6) === "n", "TREASON-on: Frost Woods west edge open");
+  gClassic.players[0].x = 2; gClassic.players[0].y = 6.5 * TILE;
+  const prevC: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30 && gClassic.room === 7; i++) {
+    step(gClassic, { ...emptyInput(), l: true }, emptyInput(), prevC);
+  }
+  ok(gClassic.room === 18, "Classic TREASON-on: west door reaches Temptation Court");
+
+  // AI DUO + TREASON: throne sealed until visit
+  const gDuo = freshPlay();
+  gDuo.treason = true;
+  gDuo.duoTemptGate = true;
+  gDuo.temptationVisited = false;
+  ok(core.throneTemptSealed(gDuo), "seal helper fires when duo + TREASON + unvisited");
+  // Duo without TREASON must NOT seal the throne (Court is unreachable)
+  const gDuoNoT = freshPlay();
+  gDuoNoT.treason = false;
+  gDuoNoT.duoTemptGate = true;
+  ok(!core.throneTemptSealed(gDuoNoT), "duoTemptGate alone does not seal throne without TREASON");
+
+  core.loadRoom(gDuo, 10, 7.5 * TILE, 2 * TILE);
+  gDuo.screen = "play"; gDuo.fade = 0; gDuo.enemies = [];
+  ok(!gDuo.temptationVisited, "loading Ice Guard does not mark temptation visited");
+  gDuo.players[0].present = true;
+  gDuo.players[0].keys = 1;
+  gDuo.players[0].x = 7.5 * TILE; gDuo.players[0].y = 1 * TILE + 2;
+  const prevD: [Input, Input] = [emptyInput(), emptyInput()];
+  const upD = { ...emptyInput(), u: true };
+  for (let i = 0; i < 15 && !gDuo.doors[10]; i++) step(gDuo, upD, emptyInput(), prevD);
+  ok(gDuo.doors[10] === true, "duo: ice-guard door still unlocks");
+  for (let i = 0; i < 40; i++) step(gDuo, upD, emptyInput(), prevD);
+  ok(gDuo.room === 10, "duo+TREASON: throne stays sealed until visit");
+
+  core.loadRoom(gDuo, 18, 8 * TILE, 8 * TILE);
+  ok(gDuo.temptationVisited, "entering Temptation Court marks visited");
+  ok(gDuo.enemies.some(e => e.kind === "whisperer" && !e.dead), "Whisperer present");
+  ok(!core.throneTemptSealed(gDuo), "after visit, throne seal lifts");
+  const whisper = gDuo.enemies.find(e => e.kind === "whisperer")!;
+  // Steel cannot grind away the fork — blows shrug off
+  const hpW = whisper.hp;
+  gDuo.players[0].x = whisper.x; gDuo.players[0].y = whisper.y;
+  gDuo.players[0].dir = 2;
+  gDuo.enemies = [whisper];
+  const prevHit: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 80; i++) {
+    step(gDuo, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prevHit);
+  }
+  ok(whisper.hp === hpW && !whisper.dead,
+     "Whisperer shrugs off steel — bargain / leave, not a grind");
+  const hx = gDuo.players[0].hp;
+  for (let i = 0; i < 40; i++) step(gDuo, emptyInput(), emptyInput(), prevHit);
+  ok(gDuo.players[0].hp === hx, "Whisperer never deals contact damage");
+
+  tryThrone(gDuo, 11, "after visit, duo can enter the Throne of Winter");
+
+  const gRoute = freshPlay();
+  gRoute.treason = true;
+  gRoute.duoTemptGate = true;
+  gRoute.temptationVisited = false;
+  gRoute.golemDead = true;
+  gRoute.amberClaimed = true;
+  gRoute.gateMelted = true;
+  gRoute.hasBow = true;
+  core.loadRoom(gRoute, 7, 8 * TILE, 8 * TILE);
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "companion" });
+  const obs = JSON.parse(leader.observe(gRoute)) as {
+    temptation?: { sealedThrone?: boolean };
+    objective: string;
+  };
+  ok(obs.temptation?.sealedThrone === true, "observation: sealed throne fact for duo+TREASON");
+  ok(/Temptation/i.test(obs.objective), "objective steers duo toward Temptation Court");
+
+  const gEdge = freshPlay();
+  gEdge.treason = true;
+  gEdge.duoTemptGate = true;
+  core.loadRoom(gEdge, 18, W - PLAYER_W - 4, 6.5 * TILE);
+  gEdge.screen = "play"; gEdge.fade = 0;
+  gEdge.enemies = [];
+  gEdge.players[0].present = true;
+  gEdge.players[0].x = W - PLAYER_W - 2;
+  gEdge.players[0].y = 6.5 * TILE;
+  const prevE: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 25 && gEdge.room === 18; i++) {
+    step(gEdge, { ...emptyInput(), r: true }, emptyInput(), prevE);
+  }
+  ok(gEdge.room === 7 && gEdge.temptationResolved,
+     "leaving Temptation Court after visit marks temptationResolved");
+}
+
+{
+  console.log("[103] Dark Court arc: ritual, duel, winter-ascends, Ember Mercy redeem");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const {
+    DARK_RITUAL_TICKS, DARK_RENOUNCE_TICKS, DARK_LOCK_TICKS,
+    COURT_SENTINEL_HARD_HP, COURT_SENTINEL_SOFT_HP, REDEMPTION_TICKS,
+  } = core;
+
+  // SHIFT ritual near Whisperer → darkSide (observable commit)
+  const gRit = freshPlay();
+  gRit.treason = true;
+  core.loadRoom(gRit, 18, 7 * TILE, 6 * TILE);
+  gRit.screen = "play"; gRit.fade = 0;
+  gRit.players[0].present = true;
+  gRit.players[0].x = 7 * TILE;
+  gRit.players[0].y = 5 * TILE + 18;
+  const prevRit: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRit, { ...emptyInput(), k: true }, emptyInput(), prevRit);
+  }
+  ok(gRit.players[0].darkSide, "SHIFT ritual commits darkSide (purple blade flag)");
+  ok(gRit.temptationDeal && gRit.temptationPayoff === "dark-commit",
+     "ritual sets temptationDeal + dark-commit payoff");
+  const sentAfter = gRit.enemies.find(e => e.kind === "sentinel" && !e.dead);
+  ok(sentAfter && sentAfter.maxHp === COURT_SENTINEL_SOFT_HP,
+     "after dark commit sentinels soften in-room");
+
+  const gHard = freshPlay();
+  gHard.treason = true;
+  core.loadRoom(gHard, 18, 8 * TILE, 8 * TILE);
+  const sentHard = gHard.enemies.find(e => e.kind === "sentinel" && !e.dead)!;
+  ok(sentHard.maxHp === COURT_SENTINEL_HARD_HP, "refuse path: sentinels start HARD");
+  ok(!gHard.players[0].darkSide, "no ritual yet — hero stays light");
+
+  const { readFileSync } = await import("node:fs");
+  ok(!/immortality-reversed/.test(readFileSync("shared/core.ts", "utf8")),
+     "immortality-reversed removed from core");
+
+  // Dark downs light → winter-ascends (evil wins, no Wraith)
+  const gWin = freshPlay();
+  gWin.treason = true;
+  core.loadRoom(gWin, 7, 7 * TILE, 8 * TILE);
+  gWin.screen = "play"; gWin.fade = 0;
+  gWin.enemies = [];
+  gWin.players[0].present = true;
+  gWin.players[1].present = true;
+  gWin.players[0].darkSide = true;
+  gWin.players[0].x = 7 * TILE; gWin.players[0].y = 8 * TILE; gWin.players[0].dir = 2;
+  gWin.players[1].x = 7 * TILE + 12; gWin.players[1].y = 8 * TILE;
+  gWin.players[1].hp = 1;
+  const prevWin: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200 && gWin.screen === "play"; i++) {
+    step(gWin, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevWin);
+  }
+  ok(gWin.temptationPayoff === "winter-ascends", "dark hero downing partner → winter-ascends");
+  ok(gWin.screen === "win", "winter-ascends ends in win screen (evil victory)");
+  ok(gWin.ending?.id === "winter-ascends", "winter-ascends ending id");
+  ok(!gWin.players[0].dead, "winning dark hero survives");
+
+  // Light downs dark → redemption window; Ember Mercy redeems
+  const gFall = freshPlay();
+  gFall.treason = true;
+  core.loadRoom(gFall, 7, 7 * TILE, 8 * TILE);
+  gFall.screen = "play"; gFall.fade = 0;
+  gFall.enemies = [];
+  gFall.players[0].present = true;
+  gFall.players[1].present = true;
+  gFall.players[1].darkSide = true;
+  gFall.players[1].x = 7 * TILE + 14; gFall.players[1].y = 8 * TILE; gFall.players[1].dir = 0;
+  gFall.players[0].x = 7 * TILE; gFall.players[0].y = 8 * TILE; gFall.players[0].dir = 2;
+  gFall.players[1].hp = 1;
+  const prevFall: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200 && !gFall.players[1].downed; i++) {
+    step(gFall, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevFall);
+  }
+  ok(gFall.players[1].downed && gFall.players[1].darkFallen, "light downs dark → darkFallen");
+  ok(gFall.players[1].redemptionT > 0 && !gFall.players[1].dead,
+     "darkFallen gets 30s redemption window — not instantly dead");
+  ok(gFall.screen === "play", "survivor quests on after darkFallen");
+
+  gFall.hasEmberMercy = true;
+  gFall.players[0].x = gFall.players[1].x - 4;
+  gFall.players[0].y = gFall.players[1].y;
+  const prevRed: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gFall, { ...emptyInput(), f: true }, emptyInput(), prevRed);
+  ok(!gFall.players[1].darkSide && !gFall.players[1].downed,
+     "Ember Mercy + F redeems darkFallen to light");
+  ok(gFall.temptationPayoff === "redeemed", "payoff records redeemed");
+
+  // darkLock blocks renounce until expired
+  const gLock = freshPlay();
+  gLock.treason = true;
+  core.loadRoom(gLock, 18, 7 * TILE, 6 * TILE);
+  gLock.enemies = [core.makeEnemy("whisperer", 7 * TILE, 5 * TILE)];
+  gLock.players[0].present = true;
+  gLock.players[0].darkSide = true;
+  gLock.players[0].darkLockT = DARK_LOCK_TICKS;
+  gLock.players[0].x = 7 * TILE;
+  gLock.players[0].y = 5 * TILE + 18;
+  const prevLock: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
+    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
+  }
+  ok(gLock.players[0].darkSide, "darkLock blocks renounce near Whisperer");
+  gLock.players[0].darkLockT = 0;
+  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
+    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
+  }
+  ok(!gLock.players[0].darkSide, "after lock expires SHIFT renounce clears darkSide");
+
+  // Betrayal OUTSIDE the Court → ordinary TREASON, no dark-commit auto
+  const gOut = freshPlay();
+  gOut.treason = true;
+  core.loadRoom(gOut, 7, 7 * TILE, 8 * TILE);
+  gOut.screen = "play"; gOut.fade = 0; gOut.enemies = [];
+  gOut.players[0].present = true;
+  gOut.players[1].present = true;
+  gOut.players[0].x = 7 * TILE; gOut.players[0].y = 8 * TILE; gOut.players[0].dir = 2;
+  gOut.players[1].x = 7 * TILE + 12; gOut.players[1].y = 8 * TILE;
+  gOut.players[1].hp = 1;
+  const prevO: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200 && !gOut.players[1].downed; i++) {
+    step(gOut, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevO);
+  }
+  ok(gOut.betrayed && !gOut.temptationDeal,
+     "treason outside Court is ordinary — no dark-commit");
+  ok(!gOut.players[0].dead, "traitor outside Court does not auto-die");
+
+  // Refuse: leave east without ritual
+  const gRefuse = freshPlay();
+  gRefuse.treason = true;
+  core.loadRoom(gRefuse, 18, W - PLAYER_W - 4, 6.5 * TILE);
+  gRefuse.screen = "play"; gRefuse.fade = 0;
+  gRefuse.enemies = gRefuse.enemies.filter(e => e.kind === "whisperer");
+  gRefuse.players[0].present = true;
+  gRefuse.players[0].x = W - PLAYER_W - 2;
+  gRefuse.players[0].y = 6.5 * TILE;
+  const prevR: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30 && gRefuse.room === 18; i++) {
+    step(gRefuse, { ...emptyInput(), r: true }, emptyInput(), prevR);
+  }
+  ok(gRefuse.room === 7 && !gRefuse.players[0].darkSide,
+     "refuse: leave east alive without darkSide");
+  ok(gRefuse.temptationPayoff === "refused", "refuse payoff recorded");
+
+  const gAtk = freshPlay();
+  gAtk.treason = true;
+  core.loadRoom(gAtk, 18, 8 * TILE, 8 * TILE);
+  gAtk.enemies = [core.makeEnemy("whisperer", 8 * TILE, 5 * TILE)];
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "hunter" });
+  type Mut = { intent: { action: string } };
+  (leader as unknown as Mut).intent = { action: "attack", target: 0 };
+  leader.control(gAtk);
+  ok((leader as unknown as Mut).intent.action !== "exit",
+     "controller does not force exit on whisperer attack");
+  const temptObs = JSON.parse(leader.observe(gAtk)) as {
+    temptation?: { unkillable?: boolean; sentinelsStance?: string };
+  };
+  ok(temptObs.temptation?.unkillable === true, "observation: Whisperer unkillable");
+  ok(temptObs.temptation?.sentinelsStance === "hard", "observation: hard sentinels before commit");
+
+  // Both dark — still duel; Winter crowns only one
+  const gBoth = freshPlay();
+  gBoth.treason = true;
+  core.loadRoom(gBoth, 7, 7 * TILE, 8 * TILE);
+  gBoth.screen = "play"; gBoth.fade = 0;
+  gBoth.enemies = [];
+  gBoth.players[0].present = true;
+  gBoth.players[1].present = true;
+  gBoth.players[0].darkSide = true;
+  gBoth.players[1].darkSide = true;
+  gBoth.players[0].x = 7 * TILE; gBoth.players[0].y = 8 * TILE; gBoth.players[0].dir = 2;
+  gBoth.players[1].x = 7 * TILE + 12; gBoth.players[1].y = 8 * TILE;
+  gBoth.players[1].hp = 1;
+  const prevBoth: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 200 && gBoth.screen === "play"; i++) {
+    step(gBoth, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevBoth);
+  }
+  ok(gBoth.temptationPayoff === "winter-ascends" && gBoth.screen === "win",
+     "both darkSide: dark downs dark still → winter-ascends (only one remains)");
+  ok(gBoth.players[1].dead && !gBoth.players[0].dead,
+     "loser of mutual-dark duel dies permanently; winner lives");
+  const bothObs = JSON.parse(
+    new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true }).observe(
+      (() => {
+        const g = freshPlay();
+        g.treason = true;
+        core.loadRoom(g, 18, 8 * TILE, 8 * TILE);
+        g.players[0].present = true;
+        g.players[1].present = true;
+        g.players[0].darkSide = true;
+        g.players[1].darkSide = true;
+        return g;
+      })(),
+    ),
+  ) as { temptation?: { bothDark?: boolean; onlyOneRemains?: string } };
+  ok(bothObs.temptation?.bothDark === true,
+     "observation flags bothDark when both took the bargain");
+  ok(/only one|only ONE/i.test(bothObs.temptation?.onlyOneRemains ?? ""),
+     "world rule: Winter crowns only one immortal");
+}
+
+{
+  console.log("[105] Dark Court: Ember Mercy spawn + redemption expiry");
+  const core = await import("../shared/core");
+  const { REDEMPTION_TICKS } = core;
+
+  const gEm = freshPlay();
+  gEm.emberDead = true;
+  core.loadRoom(gEm, 16, 8 * TILE, 8 * TILE);
+  ok(gEm.pickups.some(p => p.kind === "embermercy" && p.t >= 0),
+     "Ember Sanctum spawns embermercy after ember boss dead");
+
+  const gExp = freshPlay();
+  gExp.treason = true;
+  core.loadRoom(gExp, 7, 8 * TILE, 8 * TILE);
+  gExp.screen = "play"; gExp.fade = 0;
+  gExp.players[0].present = true;
+  gExp.players[1].present = true;
+  gExp.players[1].darkSide = true;
+  gExp.players[1].downed = true;
+  gExp.players[1].darkFallen = true;
+  gExp.players[1].redemptionT = 3;
+  gExp.players[1].hp = 0;
+  gExp.hasEmberMercy = false;
+  const prevE: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 10; i++) step(gExp, emptyInput(), emptyInput(), prevE);
+  ok(gExp.players[1].dead, "redemption window expiry → permanent dead without Ember Mercy");
+
+  // Self-redeem: living dark spends Ember Mercy within 60s
+  const gSelf = freshPlay();
+  gSelf.treason = true;
+  gSelf.screen = "play"; gSelf.fade = 0;
+  gSelf.players[0].present = true;
+  gSelf.players[0].darkSide = true;
+  gSelf.players[0].darkSelfRedeemT = core.DARK_SELF_REDEEM_TICKS;
+  gSelf.hasEmberMercy = true;
+  const prevS: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gSelf, { ...emptyInput(), f: true }, emptyInput(), prevS);
+  ok(!gSelf.players[0].darkSide && gSelf.temptationPayoff === "redeemed",
+     "dark self-redeem: F + Ember Mercy clears own darkSide within 60s");
+  ok(!gSelf.hasEmberMercy && gSelf.emberMercyUsed, "self-redeem spends Ember Mercy");
+
+  const gLate = freshPlay();
+  gLate.treason = true;
+  gLate.screen = "play"; gLate.fade = 0;
+  gLate.players[0].present = true;
+  gLate.players[0].darkSide = true;
+  gLate.players[0].darkSelfRedeemT = 0;
+  gLate.hasEmberMercy = true;
+  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gLate, { ...emptyInput(), f: true }, emptyInput(), prevL);
+  ok(gLate.players[0].darkSide && gLate.hasEmberMercy,
+     "after 60s window, F + Ember Mercy does not clear darkSide (too late)");
+
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const gPlan = freshPlay();
+  gPlan.treason = true;
+  gPlan.players[0].present = true;
+  gPlan.players[0].darkSide = true;
+  gPlan.players[0].darkSelfRedeemT = 600;
+  gPlan.hasEmberMercy = true;
+  const ap = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
+  type Mut = { intent: { action: string } };
+  (ap as unknown as Mut).intent = { action: "redeem" };
+  const inpR = ap.control(gPlan);
+  ok(inpR.f === true, "planner redeem presses F for self-redeem when dark + relic");
+}
+
+{
+  console.log("[104] bossContext: world rules — model evaluates; harness does not force");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { readFileSync } = await import("node:fs");
+  const agentSrc = readFileSync("server/agent.ts", "utf8");
+  ok(/bossContext/i.test(agentSrc) && /onRoomExit|reloads at full strength/i.test(agentSrc),
+     "world rules: room exit reloads boss (open knowledge)");
+  ok(/WORLD RULES|EVALUATE/i.test(agentSrc),
+     "prompts tell the model to evaluate against open rules");
+  ok(!/NEVER "exit" mid-boss|NEVER "exit" mid-fight|do not exit mid-fight/i.test(agentSrc),
+     "no NEVER-exit command replacing evaluation");
+  ok(!/bossLiveHere/.test(agentSrc),
+     "no mid-boss route-assist lock — doors stay open");
+  ok(!/bossArena/.test(agentSrc), "legacy bossArena renamed to bossContext");
+
+  const g = freshPlay();
+  core.loadRoom(g, 5, 8 * TILE, 10 * TILE);
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [core.makeEnemy("golem", 7 * TILE, 4 * TILE)];
+  g.players[0].present = true;
+  g.players[1].present = true;
+  const leader = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "companion" });
+  const obs = JSON.parse(leader.observe(g)) as {
+    bossContext?: {
+      kind: string; hp?: number; maxHp?: number; phase?: number;
+      vulnerable?: boolean; onRoomExit?: string;
+    };
+    objective: string;
+  };
+  ok(obs.bossContext?.kind === "golem", "observation names the living golem");
+  ok(typeof obs.bossContext?.hp === "number" && typeof obs.bossContext?.maxHp === "number",
+     "bossContext exposes hp/maxHp");
+  ok(/reload|full strength/i.test(obs.bossContext?.onRoomExit ?? ""),
+     "bossContext.onRoomExit: leaving reloads at full strength (fact)");
+  ok(!/do not exit|stay and finish|NEVER/i.test(obs.bossContext?.onRoomExit ?? ""),
+     "onRoomExit has no stay/leave command");
+  ok(/Living golem|bossContext/i.test(obs.objective) && !/do not exit/i.test(obs.objective),
+     "objective states living boss + your call — no exit ban");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
