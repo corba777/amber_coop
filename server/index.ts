@@ -178,11 +178,10 @@ class Session {
     });
 
     const wireAgent = (agent: AgentPlayer, slot: number): void => {
-      const tracker = new EpisodeTracker(slot, this.id);
-      this.episodeTrackers[slot] = tracker;
+      this.episodeTrackers[slot] = new EpisodeTracker(slot, this.id);
       agent.onPlan = rec => {
         const ctx = planGameContext(this.game, slot);
-        tracker.onPlan(this.game, rec);
+        this.episodeTrackers[slot]?.onPlan(this.game, rec);
         this.planTaxonomyBuf[slot].push({
           betray: rec.betray, say: rec.say, why: rec.why, ok: rec.ok,
         });
@@ -260,6 +259,16 @@ class Session {
     this.mode = m;
     console.log(`[${this.id}] setup mode=${m}${provider ? ` provider=${provider}` : ""} hardGate=${this.game.hardGate} travel=${this.game.travelMode}`);
     return true;
+  }
+
+  /** After Enter from win/gameover, core resets the Game but Session flags
+   *  must arm a fresh matches.jsonl line — else Esc/quit on the rematch is a
+   *  silent no-op (BT9J: testers thought Esc never saved). */
+  beginRematchLogging(): void {
+    this.matchLogged = false;
+    this.planTaxonomyBuf = [[], []];
+    if (this.leaderAgent) this.episodeTrackers[0] = new EpisodeTracker(0, this.id);
+    if (this.agent) this.episodeTrackers[1] = new EpisodeTracker(1, this.id);
   }
 
   resetToMenu(): void {
@@ -417,6 +426,9 @@ class Session {
 
       const before = this.game.screen;
       update(this.game, latched);
+      if ((before === "gameover" || before === "win") && this.game.screen === "play") {
+        this.beginRematchLogging();
+      }
       if (this.game.screen === "play") {
         for (const tr of this.episodeTrackers) tr?.tick(this.game);
       }
