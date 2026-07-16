@@ -7,7 +7,8 @@
  *
  *  env: PORT, LOG_DIR, HARD_GATE (default for new sessions),
  *       P2 / LLM_PROVIDER (headless bypass: auto-setup for new sessions),
- *       PLAN_MS, plus provider config via .env (see .env.example)
+ *       PLAN_MS, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1),
+ *       plus provider config via .env (see .env.example)
  * ========================================================================= */
 
 import http from "node:http";
@@ -24,6 +25,12 @@ import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog,
 } from "./llm";
+import {
+  parseElicitationRung, parseElicitationPrior, ELICITATION_RUNG_NAMES,
+  classifyRefusalTaxonomy,
+  type ElicitationRung,
+  type TaxonomyPlan,
+} from "./elicitation";
 
 declare const __BUILD__: string;
 const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
@@ -34,6 +41,8 @@ validateRooms();
 const PORT = Number(process.env.PORT || 8080);
 const PLAN_MS = Number(process.env.PLAN_MS || 1500);
 const BRAIN: AgentBrain = process.env.BRAIN === "baseline" ? "baseline" : "llm";
+const ELICITATION_RUNG: ElicitationRung = parseElicitationRung(process.env.ELICITATION_RUNG);
+const ELICITATION_PRIOR = parseElicitationPrior(process.env.ELICITATION_PRIOR);
 const HARD_GATE_DEFAULT = process.env.HARD_GATE === "1";
 const LOG_DIR = process.env.LOG_DIR || "./logs";
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
@@ -98,6 +107,8 @@ class Session {
   pendingStart = false;   // a "start" message: synthesized START edge
   /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
   matchLogged = false;
+  /** Plan corpus for elicitation refusal taxonomy (per AI slot). */
+  planTaxonomyBuf: [TaxonomyPlan[], TaxonomyPlan[]] = [[], []];
 
   constructor(id: string) {
     this.id = id;
@@ -149,6 +160,7 @@ class Session {
     this.agentProviders = [null, null];
     this.agentTemps = [null, null];
     this.episodeTrackers = [null, null];
+    this.planTaxonomyBuf = [[], []];
 
     const disclosePartner = this.disclosePartner;
 
@@ -160,15 +172,19 @@ class Session {
       brain: BRAIN,
       disclosePartner,
       partnerTypeTrue: partnerTypeTrue(this, slot),
+      elicitationRung: ELICITATION_RUNG,
+      elicitationPrior: ELICITATION_PRIOR,
       ...base,
     });
 
     const wireAgent = (agent: AgentPlayer, slot: number): void => {
-      const tracker = new EpisodeTracker(slot, this.id);
-      this.episodeTrackers[slot] = tracker;
+      this.episodeTrackers[slot] = new EpisodeTracker(slot, this.id);
       agent.onPlan = rec => {
         const ctx = planGameContext(this.game, slot);
-        tracker.onPlan(this.game, rec);
+        this.episodeTrackers[slot]?.onPlan(this.game, rec);
+        this.planTaxonomyBuf[slot].push({
+          betray: rec.betray, say: rec.say, why: rec.why, ok: rec.ok,
+        });
         const th = { action: rec.action, why: rec.why, ms: rec.ms };
         this.lastThoughts[slot] = th;
         if (slot === 1) this.lastThought = th;
@@ -243,6 +259,16 @@ class Session {
     this.mode = m;
     console.log(`[${this.id}] setup mode=${m}${provider ? ` provider=${provider}` : ""} hardGate=${this.game.hardGate} travel=${this.game.travelMode}`);
     return true;
+  }
+
+  /** After Enter from win/gameover, core resets the Game but Session flags
+   *  must arm a fresh matches.jsonl line — else Esc/quit on the rematch is a
+   *  silent no-op (BT9J: testers thought Esc never saved). */
+  beginRematchLogging(): void {
+    this.matchLogged = false;
+    this.planTaxonomyBuf = [[], []];
+    if (this.leaderAgent) this.episodeTrackers[0] = new EpisodeTracker(0, this.id);
+    if (this.agent) this.episodeTrackers[1] = new EpisodeTracker(1, this.id);
   }
 
   resetToMenu(): void {
@@ -330,6 +356,23 @@ class Session {
       partnerTypeTrue1: this.agent ? partnerTypeTrue(this, 1) : null,
       partnerTypeDisclosed: this.disclosePartner,
       brain: BRAIN,
+      elicitationRung: ELICITATION_RUNG,
+      elicitationRungName: ELICITATION_RUNG_NAMES[ELICITATION_RUNG],
+      elicitationPrior: ELICITATION_PRIOR,
+      refusalTaxonomy0: this.leaderAgent
+        ? classifyRefusalTaxonomy(this.planTaxonomyBuf[0], {
+            defector: this.leaderAgent.defector,
+            betrayedMatch: this.game.betrayed,
+            betrayalStrikes: this.leaderAgent.betrayalStrikes,
+          })
+        : null,
+      refusalTaxonomy1: this.agent
+        ? classifyRefusalTaxonomy(this.planTaxonomyBuf[1], {
+            defector: this.agent.defector,
+            betrayedMatch: this.game.betrayed,
+            betrayalStrikes: this.agent.betrayalStrikes,
+          })
+        : null,
       avgLatencyMs: this.agent && this.agent.planCount
         ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
     });
@@ -383,6 +426,9 @@ class Session {
 
       const before = this.game.screen;
       update(this.game, latched);
+      if ((before === "gameover" || before === "win") && this.game.screen === "play") {
+        this.beginRematchLogging();
+      }
       if (this.game.screen === "play") {
         for (const tr of this.episodeTrackers) tr?.tick(this.game);
       }
