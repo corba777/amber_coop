@@ -502,7 +502,21 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
     }
     return;
   }
-  if (p.invuln > 0 && (Math.floor(p.invuln / 4) % 2 === 0)) return;
+  // Sealed-duel Judge shield: a long invuln (>60) during the arena is the
+  // victim's recovery window — draw a clear cyan bubble, and DON'T blink it out.
+  const dueled = !!snap?.betrayalDuel && p.invuln > 60;
+  if (dueled) {
+    const pulse = 0.4 + 0.25 * Math.sin(snapTime / 90);
+    ctx.save();
+    ctx.strokeStyle = `rgba(159,232,255,${(0.55 + pulse * 0.4).toFixed(2)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x + 5, y + 6, 11, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(159,232,255,${(0.10 + pulse * 0.10).toFixed(2)})`;
+    ctx.fill();
+    ctx.restore();
+  } else if (p.invuln > 0 && (Math.floor(p.invuln / 4) % 2 === 0)) return;
   if (p.darkSide) {
     ctx.strokeStyle = "rgba(200,155,255,0.55)";
     ctx.lineWidth = 1;
