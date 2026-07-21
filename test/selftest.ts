@@ -19,7 +19,7 @@ function ok(cond: boolean, name: string): void {
   console.log("  ok — " + name);
 }
 
-const NAMES: [string, string] = ["ILYA", "MOCK"];
+const NAMES: [string, string] = ["HERO", "MOCK"];
 const idle = (): LatchedInput => latch(emptyInput(), emptyInput());
 
 function step(g: Game, i0: Input, i1: Input, prev: [Input, Input]): void {
@@ -474,7 +474,7 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 12. team keys
 {
-  console.log("[12] partner-held key opens the door (Ilya's bug)");
+  console.log("[12] partner-held key opens the door (QA Lead's bug)");
   const core = await import("../shared/core");
   const g = freshPlay();
   core.loadRoom(g, 4, 7.5 * TILE, 2 * TILE);   // guard room, near the top door
@@ -628,7 +628,7 @@ function freshPlay(): Game {
     ok(src.includes("localAttack--"),
        `${file}: local swing visual counts down (own-hero sword animates)`);
     ok(src.includes("namegate"), `${file}: name gate present`);
-    // empty Enter used to dismiss the gate and log everyone as ILYA — refuse it
+    // empty Enter used to dismiss the gate and log everyone as the default name — refuse it
     ok(src.includes("name required"),
        `${file}: name gate refuses empty name (attribution)`);
     ok(src.includes("titleBottom") || src.includes("footerTop"),
@@ -771,11 +771,11 @@ function freshPlay(): Game {
     });
     await new Promise(r => setTimeout(r, 500));
     ok(G.room === H.room && G.slot === 1, "room link seats the guest in the host's game");
-    guest.send(JSON.stringify({ t: "name", name: "ilya the qa" }));
+    guest.send(JSON.stringify({ t: "name", name: "lex the qa" }));
     await new Promise(r => setTimeout(r, 500));
     ok(H.screen === "title", "lobby became the title once the partner arrived");
     ok(H.names[0] === "ARTEM", "host name travels in snapshots");
-    ok(H.names[1] === "ILYA THE QA", "guest name too (sanitized, uppercased)");
+    ok(H.names[1] === "LEX THE QA", "guest name too (sanitized, uppercased)");
     host.close(); guest.close();
   } finally {
     srv.kill();
@@ -825,7 +825,7 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 19. message word-wrap
 {
-  console.log("[19] long riddles wrap instead of running off-screen (Ilya's bug)");
+  console.log("[19] long riddles wrap instead of running off-screen (QA Lead's bug)");
   const { wrapText } = await import("../client/textutil");
   // canvas-free mock: 5px per character, like a tiny monospace font
   const fakeCtx = { measureText: (s: string) => ({ width: s.length * 5 }) };
@@ -969,8 +969,8 @@ function freshPlay(): Game {
     JSON.stringify({ dmgDealt: dmg, bossDmg: 0, kills: 0, dmgTaken: 1, downs: 0, revives: 1, elixirsUsed: 0 });
   fs2.writeFileSync(pathm.join(dir, "matches.jsonl"),
     `{"mode":"single","p1name":"ARTEM","partner":"(solo)","outcome":"loss","ticks":500,"p1":${st(9)},"p2":${st(0)}}\n` +
-    `{"mode":"human","p1name":"ARTEM","partner":"ILYA","outcome":"win","ticks":900,"p1":${st(30)},"p2":${st(70)}}\n` +
-    `{"mode":"llm","p1name":"ILYA","partner":"ANTHROPIC","outcome":"win","ticks":800,"p1":${st(73)},"p2":${st(69)}}\n`);
+    `{"mode":"human","p1name":"ARTEM","partner":"LEX","outcome":"win","ticks":900,"p1":${st(30)},"p2":${st(70)}}\n` +
+    `{"mode":"llm","p1name":"LEX","partner":"ANTHROPIC","outcome":"win","ticks":800,"p1":${st(73)},"p2":${st(69)}}\n`);
   const { proc: srv, port: PORT } = await spawnTestServer(
     { LOG_DIR: dir }, ["P2", "LLM_PROVIDER"],
   );
@@ -982,12 +982,12 @@ function freshPlay(): Game {
     });
     const data = JSON.parse(body) as { heroes: Record<string, unknown>[]; partners: Record<string, unknown>[] };
     const artem = data.heroes.find(h => h.hero === "ARTEM");
-    const ilya = data.heroes.find(h => h.hero === "ILYA");
+    const lex = data.heroes.find(h => h.hero === "LEX");
     ok(!!artem && artem.games === 2 && artem.winrate === 0.5, "ARTEM: 2 games as hero, winrate 0.5");
-    ok(!!ilya && ilya.games === 2 && ilya.winrate === 1, "ILYA: counted as host AND as human guest");
+    ok(!!lex && lex.games === 2 && lex.winrate === 1, "LEX: counted as host AND as human guest");
     ok(!data.heroes.some(h => h.hero === "ANTHROPIC"), "LLMs stay out of the hero table");
     ok(data.partners.some(p => p.partner === "ANTHROPIC"), "...they live in the partner table");
-    ok(data.partners.some(p => p.partner === "ILYA"), "a human guest shows as a partner too");
+    ok(data.partners.some(p => p.partner === "LEX"), "a human guest shows as a partner too");
   } finally {
     srv.kill();
   }

@@ -1,6 +1,6 @@
 /* =========================================================================
  *  AMBER COOP — shared simulation core
- *  Two-player server-authoritative version of "Ilya and the Amber Blade".
+ *  Two-player server-authoritative version of "The Amber Blade".
  *  Pure logic: no DOM, no audio. Emits events; the client renders them.
  * ========================================================================= */
 

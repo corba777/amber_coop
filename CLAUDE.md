@@ -1,6 +1,6 @@
-# CLAUDE.md — Ilya and the Amber Blade (amber-coop)
+# CLAUDE.md — The Amber Blade (amber-coop)
 
-A tiny cooperative Zelda-like, built as a gift for the author's son (Ilya, QA Lead)
+A tiny cooperative Zelda-like, built as a gift for the author's son (the QA Lead)
 that grew into an LLM-agent research testbed. Two heroes quest to end an endless
 winter; the second hero can be a human, an LLM agent, or absent (AI autopilot with
 a human spectator). PvE co-op is treated as a three-player coalition game — hero,
@@ -115,7 +115,7 @@ is opt-in.
 
 ## Iron rules
 
-1. **The classic quest is canon and canon is guarded by tests.** Ilya cleared it;
+1. **The classic quest is canon and canon is guarded by tests.** The QA Lead cleared it;
    it stays exactly as he knows it. World growth is open-closed: add side wings,
    optional bosses (Emberdeep), new modes — never edit the classic path. Canon
    changes require explicit tester consensus and a comment in the guarding test
@@ -545,7 +545,7 @@ weights. Styles are also the bench ablation axis.
    corridor-time %, downs caused, gameovers, director parse-fail rate. This is
    an adversarial eval (partner model × temperament vs director model × style)
    that no public benchmark has — and it validates the director's judgment
-   before any experiment touches Ilya.
+   before any experiment touches the family testers.
 2. Then a menu toggle for humans (default OFF; canon quest without the
    director stays byte-identical — guard with a test).
 
