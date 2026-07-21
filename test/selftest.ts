@@ -656,6 +656,8 @@ function freshPlay(): Game {
        `${file}: free roam travel toggle on quest screen`);
     ok(src.includes("DEFEAT OR BE DEFEATED") && src.includes("betrayalDuel"),
        `${file}: sealed-duel sticky HUD wired`);
+    ok(src.includes("invuln > 60"),
+       `${file}: sealed-duel Judge shield is drawn (invuln > 60 during duel)`);
     ok(/build [0-9]{10}-[a-z0-9]{4}/.test(src) || src.includes("__BUILD__") === false,
        `${file}: build id stamped`);
   }

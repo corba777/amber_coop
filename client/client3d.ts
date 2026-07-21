@@ -1217,7 +1217,9 @@ function render(): void {
       showAttack = Math.max(p.attack, localAttack);
     }
     const wx = toWX(gx), wz = toWZ(gy);
-    bb.mesh.visible = !(p.invuln > 0 && Math.floor(p.invuln / 4) % 2 === 0) || p.downed;
+    const dueledShield = !!s.betrayalDuel && p.invuln > 60 && !p.downed;
+    bb.mesh.visible = dueledShield ||
+      !(p.invuln > 0 && Math.floor(p.invuln / 4) % 2 === 0) || p.downed;
     bb.shadow.visible = true;
     const frame = p.moving ? Math.floor(p.walk) % 2 : 0;
     const set = heroTex[i];
@@ -1255,6 +1257,13 @@ function render(): void {
       ring.geometry.dispose();
       ring.geometry = new THREE.RingGeometry(0.5, 0.62, 24, 1, -Math.PI / 2, (p.bleedT / BLEED_TICKS) * Math.PI * 2);
       (ring.material as THREE.MeshBasicMaterial).color.set(0xe8384f);
+    } else if (dueledShield) {
+      // sealed-duel Judge shield: full cyan ring under the standing victim
+      ring.visible = true;
+      ring.position.set(wx, 0.05, wz);
+      ring.geometry.dispose();
+      ring.geometry = new THREE.RingGeometry(0.5, 0.66, 28, 1, 0, Math.PI * 2);
+      (ring.material as THREE.MeshBasicMaterial).color.set(0x9fe8ff);
     } else ring.visible = false;
     // sword
     if (showAttack > 0 && !p.downed) {

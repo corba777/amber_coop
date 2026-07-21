@@ -2,7 +2,7 @@
 
 A tiny cooperative Zelda-like where your partner can be a human in another
 browser tab, another country — **or a large language model** with its own
-sword, bow, temperament, and a visible train of thought. You can also watch
+sword, bow, temperament, and a visible one-line rationale. You can also watch
 two models quest together, or send one alone into the dungeon while you
 spectate.
 
@@ -20,8 +20,8 @@ browser P1 ──ws──┐
 browser P2 ──ws──┘        │
       (P2 = human)        └── AgentPlayer (P2 = LLM, or both in AI DUO)
                                ├─ planner: LLM → intent JSON  {action, say, why}
-                               └─ controller: 60 Hz reflexes (engage, rescue,
-                                  pathfinding, survival pickups, failsafes)
+                               └─ controller: 60 Hz mechanics (combat reflexes,
+                                  pathfinding, survival pickups, locomotion)
 ```
 
 ## Features
@@ -41,8 +41,8 @@ browser P2 ──ws──┘        │
 - **An LLM teammate** — Anthropic / OpenAI / Ollama (fully local, no keys)
   behind one interface, plus a deterministic `mock` for tests. Pick a
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
-  agent joins fights, how close it sticks, how long it argues before rescuing
-  you, and even its mercy decisions. After temperament, pick a **speech**
+  agent joins fights, how close it sticks, and how it weighs rescue and mercy
+  decisions. After temperament, pick a **speech**
   profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both public `say`
   and private `why`; JSON actions stay English. AI+AI picks speech
   independently per hero.
@@ -57,13 +57,25 @@ browser P2 ──ws──┘        │
   ROAM revive), Miner's Charm (fire arrows), Frost Bell (`C`, freeze lesser
   foes once), Mirror Shard (sharper partner scry). Heart containers: full
   heart when alone, **split half-and-half** when both heroes are present.
-- **TREASON (opt-in)** — hold **Shift** while swinging or shooting and your
-  blade/arrow can hurt your partner (same room). Deliberate abandonment:
-  hold Shift while they bleed out alone to cut the cord. Unlock the
-  **betrayal ending**. The AI can carry a hidden agenda when TREASON is on —
-  public `why` stays loyal; the truth lives only in the logs.
-- **Many endings** — betrayal, solo, lone-thaw, mercy (spare the yielding
-  Wraith by standing close), flawless, ember-pact, classic, abandoned…
+- **TREASON (opt-in)** — hold **Shift** while swinging or shooting to turn on
+  a living partner. The first hit seals the room in ice: exits close, monsters
+  cannot hurt either hero, friendly fire opens, and the undeclared victim gets
+  a brief Judge shield to recover. One hero must fall. A loyal winner continues
+  SOLO; a betraying winner carries a draining **Winter Mark** until they spend
+  Ember Mercy or spare the Wraith. Shift can also cut the cord on a downed
+  partner; 15 seconds of clear-room neglect counts as implicit betrayal.
+  Human↔AI and AI↔AI use the same rules.
+- **Hidden motives, visible evidence** — an AI may carry a secret winter-side
+  objective when TREASON is on. Its public `why` is only a claim; physical
+  costly acts feed neutral Relationship Memory, while plans and match outcomes
+  preserve the ground truth for analysis.
+- **Temptation Court** — an optional TREASON-only persuasion wing. Hold Shift
+  near the Whisperer to take the Dark Commit, soften its sentinels, and pursue
+  the `winter-ascends` ending—or refuse, self-redeem with Ember Mercy, or be
+  defeated and redeemed by a partner.
+- **Many endings** — betrayal, redeemed, winter-ascends, solo, lone-thaw,
+  mercy (spare the yielding Wraith by standing close), flawless, ember-pact,
+  classic, abandoned…
 - **Frozen Playground** — optional commit-slide ice puzzle wing (reach it
   after the Amber Blade melts the Frozen Falls, or via the Crypt). Agents
   skate too; the planner may propose an `icePlan`.
@@ -96,7 +108,7 @@ provider/temperament/speech (where needed) → CLASSIC or LONG QUEST (plus toggl
 | X (or K) | bow |
 | F | Phoenix Feather — remote FREE ROAM revive (team, one use) |
 | C | Frost Bell — freeze the room's lesser foes (one use) |
-| **Shift** | TREASON modifier — FF on swing/shot; cut the cord on alone bleed-out |
+| **Shift** | TREASON modifier — declare with swing/shot; cut a downed partner's cord; Whisperer ritual |
 | M | music mute |
 | T | toggle thought panel |
 | ENTER | start / continue (also click / tap) |
@@ -107,19 +119,21 @@ the party. Downed alone in FREE ROAM: partner has ~30 s before bleed-out.
 
 ## The LLM partner, briefly
 
-The agent is two layers. A **planner** asks the model for a JSON intent every
+The agent has two layers. A **planner** asks the model for a JSON intent every
 `PLAN_MS` (~1.5–4 s): `{"action": "attack", "target": 0, "say": "on it!",
 "why": "two slimes ganging up on the archer"}`. A **controller** turns
 intents into button presses at 60 Hz and carries the reflexes no one should
 have to prompt for: joining a fight that's already happening, grabbing a
-heart when hurt, tile-BFS pathfinding, dodging a charging golem on the way
-to revive you — and a failsafe that makes the rescue mandatory on a timer set
-by temperament (a bodyguard drops everything fast; a berserker may finish
-the kill first, but never leaves you long).
+heart when hurt, tile-BFS pathfinding, combat on an errand, and slide-aware
+navigation. Optional social choices remain with the planner: revive or leave,
+spend the Phoenix Feather, show mercy, answer betrayal, or turn the blade.
+There is no temperament timer that forces a rescue.
 
 Personality lives in the agent; invariants live in the mechanics. Honest
 metrics (`routeAssists`, `icePlans`, `betrayalStrikes`, bleed episodes,
-Relationship Memory) are logged, not polished away.
+Relationship Memory) are logged, not polished away. Relationship Memory uses
+physically worded costly acts—not verdicts like “selfish”—so the model, rather
+than the harness, constructs trust and suspicion.
 
 ## Benchmark
 
