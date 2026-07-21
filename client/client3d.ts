@@ -67,7 +67,7 @@ function sendName(): void {
   };
   const submit = (): void => {
     const v = (input?.value ?? "").trim().slice(0, 12);
-    // refuse empty name — otherwise matches.jsonl collapses everyone to ILYA
+    // refuse empty name — otherwise matches.jsonl collapses everyone to HERO
     // and tester bug reports cannot be attributed (author Artem 2026-07-13)
     if (!v) {
       if (input) {
@@ -117,7 +117,7 @@ ws.addEventListener("error", () => {
 let snap: Snapshot | null = null;
 let prevSnap: Snapshot | null = null;
 let snapTime = 0, snapInterval = 33;
-let names: [string, string] = ["ILYA", "?"];
+let names: [string, string] = ["HERO", "?"];
 
 interface ProviderInfo { ok: boolean; label: string; hint: string; }
 let providers: Record<string, ProviderInfo> = {};
@@ -1058,7 +1058,7 @@ function drawScreens(s: Snapshot): void {
       uictx.fillStyle = "#4a4560";
       uictx.fillText(`build ${BUILD}${rttMs >= 0 ? ` \u00b7 ${rttMs}ms` : ""}`, W - 3, H - 4);
       uictx.textAlign = "left";
-      uictx.fillText(`playing as ${myName ? myName.toUpperCase() : "ILYA"}`, 3, H - 4);
+      uictx.fillText(`playing as ${myName ? myName.toUpperCase() : "HERO"}`, 3, H - 4);
       uictx.textAlign = "center";
       if (serverBuild && serverBuild !== BUILD) {
         uictx.fillStyle = "#e8384f";
@@ -1091,8 +1091,8 @@ function drawScreens(s: Snapshot): void {
     uictx.fillRect(0, 0, W, H);
     const pulse = 0.6 + Math.sin(Date.now() * 0.004) * 0.4;
     centerText([
-      ["ILYA", 24, "#ffe9c2"],
-      ["and the AMBER BLADE — HD-2D", 10, "#ffb545"],
+      ["THE AMBER BLADE", 20, "#ffe9c2"],
+      ["a winter coop quest — HD-2D", 10, "#ffb545"],
     ], 68);
     uictx.globalAlpha = pulse;
     centerText([["PRESS ENTER TO START", 8, "#ffffff"]], 132);

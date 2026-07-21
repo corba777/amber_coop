@@ -1,7 +1,7 @@
 {
   "name": "amber-coop",
   "version": "1.0.0",
-  "description": "Ilya and the Amber Blade \u2014 coop server with human or LLM player 2 (Ollama/OpenAI/Anthropic)",
+  "description": "The Amber Blade \u2014 coop server with human or LLM player 2 (Ollama/OpenAI/Anthropic)",
   "main": "index.js",
   "scripts": {
     "build:persona": "npm run build --prefix vendor/persona-composer",

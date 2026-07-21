@@ -64,7 +64,7 @@ function sendName(): void {
   };
   const submit = (): void => {
     const v = (input?.value ?? "").trim().slice(0, 12);
-    // refuse empty name — otherwise matches.jsonl collapses everyone to ILYA
+    // refuse empty name — otherwise matches.jsonl collapses everyone to HERO
     // and tester bug reports cannot be attributed (author Artem 2026-07-13)
     if (!v) {
       if (input) {
@@ -117,7 +117,7 @@ let sessionMode: string | null = null;
 let snap: Snapshot | null = null;
 let prevSnap: Snapshot | null = null;
 let snapTime = 0, snapInterval = 33;
-let names: [string, string] = ["ILYA", "PLAYER 2"];
+let names: [string, string] = ["HERO", "PLAYER 2"];
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; color: string; }
 const particles: Particle[] = [];
@@ -1093,7 +1093,7 @@ function render(): void {
       ctx.fillStyle = "#4a4560";
       ctx.fillText(`build ${BUILD}${rttMs >= 0 ? ` \u00b7 ${rttMs}ms` : ""}`, W - 3, H - 4);
       ctx.textAlign = "left";
-      ctx.fillText(`playing as ${myName ? myName.toUpperCase() : "ILYA"}`, 3, H - 4);
+      ctx.fillText(`playing as ${myName ? myName.toUpperCase() : "HERO"}`, 3, H - 4);
       ctx.textAlign = "center";
       if (serverBuild && serverBuild !== BUILD) {
         ctx.fillStyle = "#e8384f";
@@ -1126,8 +1126,8 @@ function render(): void {
     ctx.fillRect(0, 0, W, H);
     const pulse = 0.6 + Math.sin(Date.now() * 0.004) * 0.4;
     centerText([
-      ["ILYA", 24, "#ffe9c2"],
-      ["and the AMBER BLADE — COOP", 10, "#ffb545"],
+      ["THE AMBER BLADE", 20, "#ffe9c2"],
+      ["a winter coop quest", 10, "#ffb545"],
     ], 68);
     ctx.globalAlpha = pulse;
     centerText([["PRESS ENTER TO START", 8, "#ffffff"]], 132);

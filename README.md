@@ -1,4 +1,4 @@
-# Ilya and the Amber Blade — co-op
+# The Amber Blade — co-op
 
 A tiny cooperative Zelda-like where your partner can be a human in another
 browser tab, another country — **or a large language model** with its own
@@ -13,6 +13,15 @@ alone — and, when you ask it to, to keep a secret. It is still a game a
 teenager loves. It is also, quietly, a testbed for questions like *"can a
 small model beat a dungeon without a human?"*, *"what does trusting an AI
 teammate feel like?"*, and *"when does that trust break?"*
+
+Two LLM heroes questing together while a human spectates — click a screenshot
+to watch the gameplay video:
+
+[![AI DUO spectator view — two LLM heroes, hearts and thought panel](images/screenshot-1.png)](https://www.youtube.com/watch?v=9anI3ezSaKo)
+
+[![The duo talks the golem fight through — speech bubbles and plan panel](images/screenshot-2.png)](https://www.youtube.com/watch?v=9anI3ezSaKo)
+
+▶ **[Watch gameplay on YouTube](https://www.youtube.com/watch?v=9anI3ezSaKo)**
 
 ```
 browser P1 ──ws──┐
@@ -162,8 +171,8 @@ engineering map and roadmap.
 ## Credits
 
 Design & code: Artem Zvyagintsev, with an AI pair (Claude).
-QA Lead: Ilya, who cleared the classic quest before it had a name for its
-difficulty and whose canon the tests guard.
+QA Lead: the author's son, who cleared the classic quest before it had a name
+for its difficulty and whose canon the tests guard.
 QA and Contributor: [Alexey Belozerov](https://github.com/abelozerov) — playtesting across
 the ocean, latency reports, and the agent-combat tickets that became tests.
 Playtesters: family and friends who filed every ticket in this changelog.

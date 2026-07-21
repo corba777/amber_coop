@@ -89,7 +89,7 @@ class Session {
   // divergence, not latency.
   ackPos: [{ x: number; y: number }, { x: number; y: number }] =
     [{ x: 0, y: 0 }, { x: 0, y: 0 }];
-  names: [string, string] = ["ILYA", "?"];
+  names: [string, string] = ["HERO", "?"];
   mode: Mode | null = null;
   agent: AgentPlayer | null = null;
   leaderAgent: AgentPlayer | null = null;   // AI DUO: slot 0
@@ -154,7 +154,7 @@ class Session {
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.disclosePartner = extra?.disclosePartner ?? "hidden";
     this.leaderAgent = null;
-    if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "ILYA");
+    if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "HERO");
 
     const pickTemp = (t?: Temperament): Temperament =>
       (["guard", "companion", "hunter"] as Temperament[]).includes(t as Temperament)
@@ -359,7 +359,7 @@ class Session {
       t: new Date().toISOString(),
       sid: this.id,
       mode: this.mode,
-      p1name: this.names[0] || "ILYA",
+      p1name: this.names[0] || "HERO",
       partner: this.names[1] || "(solo)",
       temperament: this.mode === "llm" ? this.temperament : null,
       // AI DUO: both heroes are agents — log each slot's provider + temperament
@@ -769,7 +769,7 @@ wss.on("connection", (ws, req) => {
           } catch { /* */ }
         }
       } else if (msg.t === "name" && typeof msg.name === "string") {
-        const clean = cleanName(msg.name, slot === 0 ? "ILYA" : "PLAYER 2");
+        const clean = cleanName(msg.name, slot === 0 ? "HERO" : "PLAYER 2");
         if (slot === 0) session.names[0] = clean;
         else if (session.mode === "human") session.names[1] = clean;
       } else if (msg.t === "tomenu" && slot === 0) {
