@@ -42,7 +42,10 @@ browser P2 ──ws──┘        │
   behind one interface, plus a deterministic `mock` for tests. Pick a
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
   agent joins fights, how close it sticks, how long it argues before rescuing
-  you, and even its mercy decisions.
+  you, and even its mercy decisions. After temperament, pick a **speech**
+  profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both public `say`
+  and private `why`; JSON actions stay English. AI+AI picks speech
+  independently per hero.
 - **Thought panel** — the agent's plan and one-line `why` run at the bottom
   (`AI: pickup — At 2/6 HP, grabbing the container is survival`). AI DUO
   stacks both minds. Toggle with `T`. Every plan is logged — a small
@@ -82,7 +85,7 @@ node dist/selftest.js       # the full suite; prints the assertion count
 ```
 
 Open the URL, enter a hero name, choose single or multiplayer → party path →
-provider/temperament (where needed) → CLASSIC or LONG QUEST (plus toggles).
+provider/temperament/speech (where needed) → CLASSIC or LONG QUEST (plus toggles).
 
 ### Controls
 

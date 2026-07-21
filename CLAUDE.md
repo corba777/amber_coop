@@ -97,10 +97,21 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (712 assertions as of last trunk).
-                    test/bench.ts — virtual-time benchmarks (MODE=arena golem,
-                    MODE=rink ice-plan eval; latency reported separately).
+test/selftest.ts    the whole safety net (749 assertions as of last trunk).
+ test/bench.ts — virtual-time benchmarks (MODE=arena golem,
+ MODE=rink ice-plan eval; latency reported separately).
 ```
+
+Speech profiles (Persona Composer): menu step after temperament selects
+`standard` | `raw-ru` per AI slot (AI+AI independent). One working raw profile
+(author Artem 2026-07-20 — LITE/FULL/ULTRA collapsed to a single `raw-ru`; the
+tiered overlays mostly produced English anyway). The raw overlay FORCES Russian
+in `say`+`why` and explicitly reframes the upstream skill's "keep public text
+clean" rule — in-game `say`/`why` ARE the chat, not code — which was the cause
+of the English fallback. Identities live in `persona/modules/`; live addenda
+still append in `server/agent.ts`. Telemetry: `personas.jsonl` +
+`speech1`/`speech2` in matches. Menu never names the upstream skill; 16+ Russian
+is opt-in.
 
 ## Iron rules
 

@@ -7,8 +7,8 @@ import {
   newGame, update, latch, emptyInput, toSnapshot, validateRooms, tileAt,
   Game, Input, LatchedInput, TILE, W, H, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
 } from "../shared/core";
-import { AgentPlayer } from "../server/agent";
-import { mock } from "../server/llm";
+import { AgentPlayer, stripReasoning } from "../server/agent";
+import { mock, openaiRestrictedParams, ollamaChatBody } from "../server/llm";
 
 let passed = 0;
 
@@ -598,6 +598,10 @@ function freshPlay(): Game {
        `${file}: autopilot and AI duo paths present`);
     ok(src.includes("HUMAN + AI"), `${file}: human + AI party option present`);
     ok(src.includes("THE ARCHITECT"), `${file}: architect toggle stub on quest screen`);
+    ok(src.includes("RAW RUSSIAN") && src.includes("STANDARD"),
+       `${file}: speech profile step present`);
+    ok(src.includes("speech:") && src.includes("speech2:"),
+       `${file}: setup carries speech / speech2`);
     for (const mode of ["single", "human"]) {
       ok(src.includes(`mode: "${mode}"`) && src.includes("hardGate"),
          `${file}: mode "${mode}" setup carries hardGate`);
@@ -3060,6 +3064,79 @@ function freshPlay(): Game {
   ok(g.pedestal === null, "the pedestal is spent");
 }
 
+// FREE ROAM AI DUO: both NPCs present; planner thrashing "attack" with no foes
+// must still walk onto the pedestal (Docker plans: thousands of ticks of
+// attack/pickup/exit while saying "к пьедесталу"). Bow errand waits until
+// amberClaimed. Human in-room still blocks auto-claim.
+{
+  console.log("[78b] FREE ROAM AI DUO claims blade despite attack-thrash; bow waits; human blocks");
+  const core = await import("../shared/core");
+
+  // (a) thrashing attack + FREE ROAM peers both present
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.golemDead = true;
+    core.loadRoom(g, 5, 3 * TILE, 2 * TILE);
+    g.players[0].npc = true;
+    g.players[1].npc = true;
+    const a0 = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter", leader: true, duoPeer: true });
+    const a1 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion", duoPeer: true });
+    type Mut = { intent: { action: string } };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 600 && !g.amberClaimed; i++) {
+      (a0 as unknown as Mut).intent = { action: "attack", target: 0 };
+      (a1 as unknown as Mut).intent = { action: "pickup", target: 0 };
+      step(g, a0.control(g), a1.control(g), prev);
+    }
+    ok(g.amberClaimed, "FREE ROAM AI DUO overrides attack/pickup thrash and claims the blade");
+  }
+
+  // (b) bow errand must not fire until amber is claimed
+  {
+    const { newRoomSim } = await import("../shared/core");
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.golemDead = true;
+    g.amberClaimed = false;
+    g.hasBow = false;
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;
+    g.players[1].simIndex = 1;
+    g.players[1].npc = true;
+    g.activeSim = 1;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+    type Mut = { intent: { action: string } };
+    (agent as unknown as Mut).intent = { action: "follow" };
+    agent.control(g);
+    ok(agent.errandLog.length === 0,
+       "bow errand does not start while Amber Blade is still unclaimed");
+    g.amberClaimed = true;
+    agent.control(g);
+    ok(agent.errandLog.length === 1 && agent.errandLog[0].goal === "bow",
+       "bow errand starts once the blade is claimed");
+  }
+
+  // (c) human mate in-room: companion must NOT auto-grab the pedestal
+  {
+    const g = freshPlay();
+    g.golemDead = true;
+    core.loadRoom(g, 5, 3 * TILE, 2 * TILE);
+    g.players[0].npc = false; // human host
+    g.players[1].npc = true;
+    const companion = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+    type Mut = { intent: { action: string } };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 180; i++) {
+      (companion as unknown as Mut).intent = { action: "follow" };
+      step(g, emptyInput(), companion.control(g), prev);
+    }
+    ok(!g.amberClaimed, "human+AI companion does not auto-claim while human shares the room");
+  }
+}
+
 // ------------------------------------------------- 79. AI DUO boots and BOTH
 // agents' thoughts reach spectators (dual-thought HUD substrate). (author Artem
 // 2026-07-12 — closing Stage 4.5: two minds on screen, one line each.)
@@ -4945,10 +5022,12 @@ function freshPlay(): Game {
   const agentSrc = readFileSync("server/agent.ts", "utf8");
   const elSrc = readFileSync("server/elicitation.ts", "utf8");
 
-  ok(/You LEAD the quest/i.test(agentSrc),
-     "LINKED LEADER_PROMPT still casts slot 0 as Leader");
-  ok(/FREE_PEER_PROMPT|NO party leader/i.test(agentSrc),
-     "FREE ROAM peer prompt exists (no Leader cast)");
+  ok(/You LEAD the quest/i.test(agentSrc) || /You LEAD the quest/i.test(
+       readFileSync("persona/modules/identity/duo-leader.md", "utf8")),
+     "LINKED LEADER identity still casts slot 0 as Leader");
+  ok(/FREE_PEER_PROMPT|NO party leader|independent equals/i.test(agentSrc)
+     || /independent equals/i.test(readFileSync("persona/modules/identity/duo-peer.md", "utf8")),
+     "FREE ROAM peer identity exists (no Leader cast)");
   ok(/There is NO party leader here/i.test(agentSrc),
      "FREE_ROAM_ADDENDUM states no party leader (AI+Human and AI+AI)");
   ok(/VEILCUT/i.test(agentSrc) && /"veilcut": true/.test(agentSrc),
@@ -5291,6 +5370,185 @@ function freshPlay(): Game {
   ok(/aloneBleedFate|SHARED gameover/i.test(src)
      && /bleed→0 is SHARED gameover/i.test(src),
      "FREE_ROAM / objective doctrine mentions shared bleed fate");
+}
+
+{
+  // Author Artem 2026-07-20 — per-agent speech profiles via Persona Composer
+  console.log("[114] per-agent speech profiles (Persona Composer)");
+  const { createHash } = await import("node:crypto");
+  const { readFileSync } = await import("node:fs");
+  const {
+    compilePersona, clearPersonaCache, pickSpeech, isSpeechProfile,
+    selectPersonaRole, POHUY_SOURCE_HASHES, SPEECH_PROFILES,
+  } = await import("../server/persona");
+  const { AgentPlayer } = await import("../server/agent");
+  const {
+    freshMenu, menuConfirm, menuBack, menuOptions, SPEECH_PROFILES: MENU_SPEECH,
+  } = await import("../client/menu");
+
+  clearPersonaCache();
+  for (const [rel, want] of Object.entries(POHUY_SOURCE_HASHES)) {
+    const got = createHash("sha256")
+      .update(readFileSync(`persona/modules/${rel}`))
+      .digest("hex");
+    ok(got === want, `vendored ${rel} content hash pinned`);
+  }
+
+  ok(SPEECH_PROFILES.length === 2 && MENU_SPEECH.join(",") === SPEECH_PROFILES.join(","),
+     "menu SPEECH_PROFILES match server registry (standard + raw-ru)");
+  ok(pickSpeech(undefined) === "standard" && pickSpeech("nope") === "standard",
+     "pickSpeech defaults unknown/missing to standard");
+  ok(!isSpeechProfile("pohuy") && !isSpeechProfile("raw-ru-full"),
+     "upstream skill name / retired levels are not speech ids");
+  ok(isSpeechProfile("raw-ru"), "raw-ru is the single working raw profile");
+
+  const std = compilePersona("companion", "standard");
+  const raw = compilePersona("companion", "raw-ru");
+  ok(std.promptHash !== raw.promptHash, "standard vs raw-ru produce different hashes");
+  ok(/You are Player 2/i.test(std.promptXml), "standard companion identity present");
+  ok(!/наебнулось|заебись/i.test(std.promptXml), "standard has no raw Russian lexicon");
+  ok(/наебнулось|заебись|пиздец/i.test(raw.promptXml), "raw-ru inlines vendored speech");
+  ok(/ГОВОРИ ПО-РУССКИ/i.test(raw.promptXml), "raw-ru forces Russian in say + why");
+  ok(/БОЛТАЙ КАЖДЫЙ ХОД/i.test(raw.promptXml)
+     && /include a non-empty .{0,8}say.{0,8} on EVERY turn/i.test(raw.promptXml),
+     "raw-ru requires a say every turn (chatty on every provider, not just Haiku)");
+
+  // Provider robustness: newer models were "walking silently" — a failed
+  // provider call falls back to a mute `follow`. Two boring causes handled:
+  // (a) GPT-5/o-series reject legacy params, (b) reasoning models wrap JSON in
+  // <think>…</think> that broke the first-{…}-last-} slice.
+  ok(openaiRestrictedParams("gpt-5.4-nano") && openaiRestrictedParams("o3-mini")
+     && openaiRestrictedParams("gpt-6"),
+     "openai restricted-param families detected (gpt-5/gpt-6/o-series)");
+  ok(!openaiRestrictedParams("gpt-4o-mini") && !openaiRestrictedParams("gpt-4.1"),
+     "classic openai models keep legacy max_tokens/temperature");
+  {
+    const body = ollamaChatBody("qwen3.6:35b", "sys", "user");
+    ok(body.think === false && body.format === "json",
+       "ollama planner disables think (Qwen otherwise empties content into thinking)");
+  }
+  {
+    const wrapped = "<think>hmm {maybe attack} or flee?</think>\n" +
+      '{"action":"follow","say":"погнали нахуй"}';
+    const s = stripReasoning(wrapped);
+    ok(!/<think>/i.test(s) && s.trim().startsWith("{"),
+       "stripReasoning removes <think> reasoning before the JSON intent");
+    const parsed = JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1));
+    ok(parsed.action === "follow" && parsed.say === "погнали нахуй",
+       "intent survives after reasoning strip (no silent follow fallback)");
+    ok(stripReasoning('{"action":"attack"}') === '{"action":"attack"}',
+       "stripReasoning is a no-op when there is no reasoning block");
+  }
+  ok(/междометие|усилитель/i.test(raw.promptXml)
+     && /В ТОЙ ЖЕ КОМНАТЕ/i.test(raw.promptXml)
+     && /можешь крыть и его самого/i.test(raw.promptXml),
+     "raw-ru: no personal insult when partner is in-room, allowed with context when away");
+  ok(raw.manifest.modules.every(m => !m.path.startsWith("/")),
+     "manifest module paths are relative (not absolute)");
+  ok(raw.manifest.modules.some(m => m.source?.includes("vendor/pohuy")),
+     "manifest records relative vendor sources");
+
+  const std2 = compilePersona("companion", "standard");
+  ok(std2.promptHash === std.promptHash && std2.promptXml === std.promptXml,
+     "compilePersona caches by role×speech");
+
+  ok(selectPersonaRole(true, "linked", { leader: true }) === "solo",
+     "cord-cut / autopilot → solo role");
+  ok(selectPersonaRole(false, "linked", { leader: true }) === "duo-leader",
+     "LINKED AI DUO slot 0 → duo-leader");
+  ok(selectPersonaRole(false, "free", { leader: true, duoPeer: true }) === "duo-peer",
+     "FREE ROAM AI DUO slot 0 → duo-peer");
+  ok(selectPersonaRole(false, "free", { duoPeer: true }) === "duo-peer",
+     "FREE ROAM AI DUO slot 1 → duo-peer");
+  ok(selectPersonaRole(false, "free", {}) === "companion",
+     "FREE ROAM AI+Human companion stays companion identity");
+  ok(selectPersonaRole(false, "linked", {}) === "companion",
+     "LINKED companion / AI+Human → companion");
+
+  const leadId = compilePersona("duo-leader", "standard");
+  const peerId = compilePersona("duo-peer", "standard");
+  ok(/You LEAD the quest/i.test(leadId.promptXml), "duo-leader identity LEADs");
+  ok(/independent equals|NO party leader/i.test(peerId.promptXml)
+     && !/You LEAD the quest/i.test(peerId.promptXml),
+     "duo-peer identity has no Leader cast");
+
+  // Menu: autopilot reaches speech then quest; duo has independent speech2
+  const menu = freshMenu();
+  const providers = {
+    ollama: { ok: true, label: "Ollama", hint: "local" },
+    anthropic: { ok: false, label: "Anthropic", hint: "no key" },
+    openai: { ok: false, label: "OpenAI", hint: "no key" },
+  };
+  const sent: Record<string, unknown>[] = [];
+  const send = (p: Record<string, unknown>) => { sent.push(p); };
+  menuConfirm(menu, providers, send, () => {}); // single
+  menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // AI autopilot
+  menu.idx = 0; menuConfirm(menu, providers, send, () => {}); // provider ollama
+  menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // companion temp
+  ok(menu.step === 4 && menuOptions(menu, providers).some(o => o.label.includes("RAW RUSSIAN")),
+     "after temperament, speech step shows RAW RUSSIAN option");
+  menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // raw-ru
+  ok(menu.step === 8, "after speech, autopilot reaches quest");
+  menu.idx = 0; menuConfirm(menu, providers, send, () => {}); // classic
+  ok(sent.length === 1 && sent[0].speech === "raw-ru" && sent[0].mode === "auto",
+     "autopilot setup carries selected speech");
+
+  const duo = freshMenu();
+  const sent2: Record<string, unknown>[] = [];
+  duo.idx = 1; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // multi
+  duo.idx = 2; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // AI+AI
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // prov0
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // temp0 guard
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // speech0 standard
+  ok(duo.speech === 0 && duo.step === 5, "duo hero speech independent; next is companion AI");
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // prov1
+  duo.idx = 2; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // temp1 hunter
+  duo.idx = 1; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // speech2 raw-ru
+  ok(duo.speech === 0 && duo.speech2 === 1 && duo.step === 8,
+     "duo speech2 independent of speech");
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {});
+  const duoSetup = sent2.find(p => p.mode === "duo");
+  ok(!!duoSetup && duoSetup.speech === "standard" && duoSetup.speech2 === "raw-ru",
+     "duo setup carries independent speech / speech2");
+
+  menuBack(duo);
+  ok(duo.step === 7, "back from quest returns to companion speech");
+
+  let sawSys = "";
+  const spy = new AgentPlayer({
+    name: "speechSpy",
+    async chat(sys: string) {
+      sawSys = sys;
+      return JSON.stringify({ action: "follow", why: "ok" });
+    },
+  } as never, 1, { planMs: 0, speechProfile: "raw-ru" });
+  const g = freshPlay();
+  g.players[0].present = true;
+  g.players[1].present = true;
+  g.screen = "play"; g.fade = 0; g.enemies = [];
+  await spy.planOnce(g);
+  ok(/наебнулось|заебись|ГОВОРИ ПО-РУССКИ/i.test(sawSys),
+     "planOnce system prompt includes raw-ru speech + Russian directive");
+  ok(spy.lastPersona?.speech === "raw-ru" && !!spy.lastPersona?.promptHash,
+     "agent exposes lastPersona for telemetry");
+
+  const inp = spy.control(g);
+  ok(typeof inp.l === "boolean" && typeof inp.a === "boolean",
+     "controller still returns Input after speech profiles");
+
+  // controller-authored errand quips must follow the speech profile too
+  const agentSrc2 = readFileSync("server/agent.ts", "utf8");
+  ok(/Хватаю элик|За луком метнусь/.test(agentSrc2)
+     && /private cSay\(/.test(agentSrc2),
+     "controller errand quips localize via cSay (raw-ru) — not always English");
+  ok(!/say: "Grabbing an elixir/.test(agentSrc2),
+     "elixir errand say is no longer a hardcoded English literal");
+
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/personas\.jsonl/.test(idxSrc) && /speech1:/.test(idxSrc) && /personaHash1:/.test(idxSrc),
+     "personas.jsonl + matches speech/hash fields wired");
+  ok(/isSpeechProfile\(extra\.speech\)/.test(idxSrc),
+     "unknown speech profiles reject setup");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

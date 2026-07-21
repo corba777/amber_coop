@@ -43,4 +43,7 @@ await build({
   bundle: true, platform: 'node', target: 'node18',
   external: ['ws'], outfile: 'dist/selftest.js',
 });
+
+// Persona Composer modules (read at runtime from dist/)
+fs.cpSync('persona/modules', 'dist/persona-modules', { recursive: true });
 console.log('build ok');

@@ -60,7 +60,9 @@ Model version
 
 Temperature
 
-Prompt version
+Speech profile (standard | raw-ru)
+
+Prompt version / persona hash (`personas.jsonl`)
 
 Relationship Memory version
 
@@ -77,6 +79,10 @@ Build ID
 Number of episodes
 
 Without this information no experiment should be considered valid.
+
+Speech profile is an experimental axis independent of temperament: it shapes
+`say`/`why` register only. JSON actions and mechanics stay English and
+unchanged. Default is `standard` (off for 16+ Russian profiles).
 
 ---
 

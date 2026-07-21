@@ -6,6 +6,8 @@ dist
 .git
 .gitignore
 *.md
+!persona/**/*.md
+!vendor/**/*.md
 Dockerfile
 docker-compose.yml
 .dockerignore

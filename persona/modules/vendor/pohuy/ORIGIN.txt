@@ -1,0 +1,4 @@
+upstream: https://github.com/smixs/pohuy
+path: skills/pohuy (SKILL.md + references/)
+commit: d84fb76 (fetched 2026-07-20)
+note: menu labels never use the upstream name; amber profiles are raw-ru-*

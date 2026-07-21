@@ -3,3 +3,4 @@ dist/
 .env
 logs/
 .DS_Store
+vendor/persona-composer/node_modules/
