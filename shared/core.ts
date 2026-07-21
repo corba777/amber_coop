@@ -587,9 +587,14 @@ export const DARK_SELF_REDEEM_TICKS = 3600;
 export const COURT_SENTINEL_HARD_HP = 6;
 export const COURT_SENTINEL_SOFT_HP = 2;
 /** Co-op: downed in a CLEAR room (no living foes) without a revive → bond cuts.
- *  15 s at 60 Hz. Partner's choice to leave them lying IS the betrayal signal
- *  (no Shift required). Survivor quests on alone (`Player.dead`). */
+ *  15 s at 60 Hz. Survivor quests on alone (`Player.dead`). Scoring: TREASON-off
+ *  → ordinary SOLO; TREASON-on → implicit betrayal (v3.1). */
 export const NEGLECT_ABANDON_TICKS = 900;
+/** Betrayal v3.2 — Winter Mark: −1 heart every 20 s until cleansed. */
+export const WINTER_MARK_PERIOD = 1200;
+export const WINTER_MARK_DAMAGE = 2;
+/** Betrayal duel: undeclared hero gets a brief Judge shield to answer (~4 s). */
+export const DUEL_VICTIM_SHIELD_TICKS = 240;
 /** spared wraith: half-speed touch-revive when hugging a downed hero (same room only) */
 const WRAITH_ANCHOR_RANGE = 48;
 const WRAITH_REVIVE_NEEDED = 90;
@@ -597,6 +602,8 @@ export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
   betray?: boolean;   // TREASON: a "friendly" arrow that also strikes the shooter's partner
+  /** v3.4: arrow was loosed with SHIFT — counts as a duel declaration on hit */
+  betrayDeclare?: boolean;
 }
 
 export interface Player {
@@ -633,6 +640,9 @@ export interface Player {
   darkFallen: boolean; // downed by light partner — awaiting Ember Mercy or permanent death
   redemptionT: number; // countdown while darkFallen
   darkSelfRedeemT: number; // after commit: window to spend Ember Mercy on self (60s)
+  /** Betrayal v3.2: traitor SOLO curse — drains a heart every WINTER_MARK_PERIOD */
+  winterMark: boolean;
+  winterMarkT: number; // ticks accrued toward the next heart drain
 }
 
 export type GameScreen = "menu" | "lobby" | "title" | "play" | "gameover" | "win";
@@ -656,17 +666,22 @@ export interface Ending { id: string; title: string; lines: string[]; }
  *  Priority: solo fates → a partner left in the snow → flawless run →
  *  the fire route → the classic ending (verbatim, for the canon). */
 export function endingFor(g: Game): Ending {
-  const solo = !g.players[1].present || !g.players[0].present;
+  // A cord-cut / soft-neglect corpse still has present=true — count living heroes.
+  const living = g.players.filter(p => p.present && !p.dead);
+  const solo = living.length <= 1;
   const totalDowns = g.stats[0].downs + g.stats[1].downs;
   if (g.temptationPayoff === "winter-ascends") {
     return { id: "winter-ascends", title: "THE CROWN OF ASH", lines: [
       "winter kept its promise — one hero stands immortal in the cold.",
       "the throne needs no wraith; evil already won." ] };
   }
-  // TREASON outranks everything: a hero who reached spring over their partner's
-  // body owns the epilogue, even once the betrayal left them questing "solo".
-  // Only reachable once g.betrayed is set (TREASON blade/gesture, or clear-room
-  // neglect abandon) — ordinary co-op that never abandons stays byte-identical.
+  // TREASON ledger: betrayal ending unless the Mark was cleansed (v3.2).
+  // winter-ascends (Temptation) still outranks; cleansed Mark → redeemed.
+  if (g.betrayed && g.winterMarkCleansed) {
+    return { id: "redeemed", title: "ASH AND MERCY", lines: [
+      "you turned the blade — then burned the brand, or knelt to winter's mercy.",
+      "spring came for a traitor who chose the light again." ] };
+  }
   if (g.betrayed) {
     return { id: "betrayal", title: "THE BLADE THAT TURNED", lines: [
       "spring came — but one hero reached it over the other's blood.",
@@ -686,7 +701,8 @@ export function endingFor(g: Game): Ending {
           "one hero, one blade, one long road north.",
           "spring came quietly, and so did you." ] };
   }
-  if (g.players.some(p => p.present && p.downed)) {
+  // Downed-but-revivable partner (not a permanent corpse).
+  if (g.players.some(p => p.present && p.downed && !p.dead)) {
     return { id: "lone-thaw", title: "LONE THAW", lines: [
       "you touched the pedestal as your partner lay in the snow.",
       "spring came — now carry them home through the meltwater." ] };
@@ -779,9 +795,15 @@ export interface Game {
   temptationPayoff: TemptationPayoff;
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
-  betrayed: boolean;   // a hero was downed by their partner's blade/arrow (drives the betrayal ending)
-  /** How the bond broke — first cause wins. neglect = clear-room silence 15s. */
+  betrayed: boolean;   // TREASON ledger: partner downed by blade/gesture/TREASON-on neglect
+  /** How the bond broke — first cause wins. null for TREASON-off soft neglect (v3.1). */
   betrayalCause: "blade" | "cord-cut" | "neglect" | null;
+  /** Betrayal v3.2: Mark was cleansed (Ember Mercy or Wraith spare) — ending may be redeemed */
+  winterMarkCleansed: boolean;
+  /** Betrayal v3.4: sealed living-vs-living duel — exits locked, open FF, mob shield */
+  betrayalDuel: boolean;
+  /** Which slots declared (Shift/veilcut strike). Mutual → Mark on whoever wins. */
+  betrayalDeclarers: [boolean, boolean];
   wraithSpared: boolean;
   companion: { x: number; y: number; t: number; sim: number } | null;   // the spared wraith (lives in ONE sim)
   ending: Ending | null;
@@ -834,6 +856,7 @@ export function newPlayer(idx: number): Player {
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
     darkSide: false, darkLockT: 0, darkRitualT: 0, darkRenounceT: 0,
     darkFallen: false, redemptionT: 0, darkSelfRedeemT: 0,
+    winterMark: false, winterMarkT: 0,
   };
 }
 
@@ -987,6 +1010,9 @@ function clampSimIndices(g: Game): void {
   for (const p of g.players) {
     if (p.simIndex < 0 || p.simIndex >= g.sims.length) p.simIndex = 0;
   }
+  // FREE ROAM merge truncates sims[] — never leave activeSim pointing past the end
+  // (legacy accessors read sims[activeSim]; an orphan index crashes the tick).
+  if (g.activeSim < 0 || g.activeSim >= g.sims.length) g.activeSim = 0;
 }
 
 /** free roam: only the crossing hero moves; partner stays in their room. */
@@ -1004,6 +1030,7 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
     transitionBanner(g, index, pi);
     markTransition(p);
     g.activeSim = saved;
+    clampSimIndices(g);
     return;
   }
 
@@ -1025,9 +1052,10 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
       if (other.simIndex !== 0 && g.sims[other.simIndex]) g.sims[0] = g.sims[other.simIndex];
       p.simIndex = 0;
       other.simIndex = 0;
+      if (g.sims.length > 1) g.sims.length = 1;
+      g.activeSim = 0; // merged room lives on sims[0]; nudge against it
       p.x = px; p.y = py;
       nudgeOffCaveMouth(g, p);
-      if (g.sims.length > 1) g.sims.length = 1;
     } else {
       g.activeSim = p.simIndex;
       fillActiveSimRoom(g, index);
@@ -1041,6 +1069,7 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
   transitionBanner(g, index, pi);
   markTransition(p);
   g.activeSim = saved;
+  clampSimIndices(g); // saved may be 1 after a merge truncated sims to length 1
 }
 
 function roomTransition(g: Game, pi: number, index: number, px: number, py: number): void {
@@ -1140,12 +1169,131 @@ function spendEmberMercySelf(g: Game, pi: number): void {
   p.darkRenounceT = 0;
   p.darkRitualT = 0;
   p.darkSelfRedeemT = 0;
+  // Dark self-redeem also burns a Winter Mark if both brands are present.
+  if (p.winterMark) clearWinterMark(g, pi, "ember");
   g.temptationPayoff = "redeemed";
   burst(g, p.x + 5, p.y + 6, "#ff7a3d", 18);
   sfx(g, "revive");
   g.message = "Ember Mercy burns the brand — you walk in the light again";
   g.messageT = 240;
   if (g.room === 18) applyCourtSentinelStance(g);
+}
+
+/** Brand a living traitor with Winter Mark (v3.2). Idempotent. */
+function applyWinterMark(g: Game, pi: number, announce = true): void {
+  const p = g.players[pi];
+  if (!p.present || p.dead || p.winterMark) return;
+  p.winterMark = true;
+  p.winterMarkT = 0;
+  burst(g, p.x + 5, p.y + 6, "#7a9cff", 12);
+  sfx(g, "secret");
+  if (announce) {
+    g.message = "Winter Mark brands you — one heart every 20s until Ember Mercy or the Wraith's mercy";
+    g.messageT = 240;
+  }
+}
+
+/** Clear Winter Mark; ledger `betrayed` stays. Sets winterMarkCleansed for ending. */
+function clearWinterMark(g: Game, pi: number, via: "ember" | "wraith"): void {
+  const p = g.players[pi];
+  if (!p.winterMark) return;
+  p.winterMark = false;
+  p.winterMarkT = 0;
+  g.winterMarkCleansed = true;
+  burst(g, p.x + 5, p.y + 6, via === "ember" ? "#ff7a3d" : "#bfe9ff", 16);
+  sfx(g, "melt");
+  g.message = via === "ember"
+    ? "Ember Mercy burns the Winter Mark — the brand cools"
+    : "The spared wraith lifts the Winter Mark — winter forgives what steel will not";
+  g.messageT = 240;
+}
+
+/** Discrete heart drain — invuln does not block the Mark. */
+function tickWinterMark(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (!p.winterMark || p.downed || p.dead) return;
+  p.winterMarkT++;
+  if (p.winterMarkT < WINTER_MARK_PERIOD) return;
+  p.winterMarkT = 0;
+  p.hp -= WINTER_MARK_DAMAGE;
+  g.stats[pi].dmgTaken += WINTER_MARK_DAMAGE;
+  g.shake = 6;
+  sfx(g, "hurt");
+  burst(g, p.x + 5, p.y + 6, "#7a9cff", 10);
+  if (p.hp > 0) {
+    if (g.messageT < 40) {
+      g.message = "Winter Mark drains a heart...";
+      g.messageT = 100;
+    }
+    return;
+  }
+  if (p.elixir) {
+    g.stats[pi].elixirsUsed += 1;
+    p.elixir = false;
+    p.hp = Math.max(4, Math.floor(p.maxHp / 2));
+    p.invuln = 90;
+    burst(g, p.x + 5, p.y + 6, "#ffd257", 16);
+    sfx(g, "revive");
+    g.message = "The Elixir pulls you back — but the Mark remains";
+    g.messageT = 180;
+    return;
+  }
+  // Mark finishes the traitor — permanent death
+  p.hp = 0;
+  p.downed = true;
+  p.dead = true;
+  p.winterMark = false;
+  p.winterMarkT = 0;
+  g.stats[pi].downs += 1;
+  sfx(g, "down");
+  const living = g.players.filter(pl => pl.present && !pl.dead);
+  if (living.length === 0) {
+    g.screen = "gameover";
+    g.message = "Winter Mark claims the last heart — the traitor falls alone";
+    g.messageT = 220;
+    sfx(g, "gameover");
+  } else {
+    g.message = "Winter Mark claims them — one walks on";
+    g.messageT = 200;
+  }
+}
+
+/** Ember Mercy: redeem a fallen dark partner, OR (living) self — dark window OR Winter Mark */
+function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
+  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
+  const p = g.players[pi];
+  if (p.downed) return;
+  const oi = 1 - pi;
+  const o = g.players[oi];
+  // Partner first: light hero lifts a fallen dark mate
+  if (o.present && o.downed && o.darkFallen && o.redemptionT > 0
+      && o.simIndex === p.simIndex
+      && overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+                 o.x, o.y, PLAYER_W, PLAYER_H)) {
+    g.hasEmberMercy = false;
+    g.emberMercyUsed = true;
+    g.emberMercies["sanctum"] = true;
+    o.darkSide = false;
+    o.darkFallen = false;
+    o.redemptionT = 0;
+    o.darkSelfRedeemT = 0;
+    o.dead = false;
+    g.temptationPayoff = "redeemed";
+    completeRevive(g, oi, pi, "Ember Mercy turns winter back — they rise in the light");
+    return;
+  }
+  // Winter Mark self-cleanse (v3.2) — no darkSide window required
+  if (p.winterMark) {
+    g.hasEmberMercy = false;
+    g.emberMercyUsed = true;
+    g.emberMercies["sanctum"] = true;
+    clearWinterMark(g, pi, "ember");
+    return;
+  }
+  // Self: dark hero spends the relic before the 60s window closes
+  if (p.darkSide && p.darkSelfRedeemT > 0) {
+    spendEmberMercySelf(g, pi);
+  }
 }
 
 /** SHIFT near Whisperer: commit to dark (3s) or renounce after lock (1.5s) */
@@ -1173,38 +1321,11 @@ function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
   if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
-/** Ember Mercy: redeem a fallen dark partner, OR (living) self within 60s of commit */
-function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
-  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
-  const p = g.players[pi];
-  if (p.downed) return;
-  const oi = 1 - pi;
-  const o = g.players[oi];
-  // Partner first: light hero lifts a fallen dark mate
-  if (o.present && o.downed && o.darkFallen && o.redemptionT > 0
-      && o.simIndex === p.simIndex
-      && overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
-                 o.x, o.y, PLAYER_W, PLAYER_H)) {
-    g.hasEmberMercy = false;
-    g.emberMercyUsed = true;
-    g.emberMercies["sanctum"] = true;
-    o.darkSide = false;
-    o.darkFallen = false;
-    o.redemptionT = 0;
-    o.darkSelfRedeemT = 0;
-    o.dead = false;
-    g.temptationPayoff = "redeemed";
-    completeRevive(g, oi, pi, "Ember Mercy turns winter back — they rise in the light");
-    return;
-  }
-  // Self: dark hero spends the relic before the 60s window closes
-  if (p.darkSide && p.darkSelfRedeemT > 0) {
-    spendEmberMercySelf(g, pi);
-  }
-}
-
 /** Message if this destination is currently sealed; null if the exit is free. */
 function sealedExitMsg(g: Game, dest: number): string | null {
+  if (g.betrayalDuel) {
+    return "BETRAYAL — the exits are sealed until one hero falls";
+  }
   if (dest === 11 && throneTemptSealed(g)) {
     return "Winter seals the throne... a whisper waits west of Frost Woods";
   }
@@ -1249,6 +1370,8 @@ export function newGame(): Game {
     duoTemptGate: false, temptationVisited: false, temptationResolved: false,
     temptationDeal: false, temptationPayoff: null,
     slick: false, treason: false, betrayed: false, betrayalCause: null,
+    winterMarkCleansed: false,
+    betrayalDuel: false, betrayalDeclarers: [false, false],
     wraithSpared: false, companion: null, ending: null,
     fade: 0, message: "", messageT: 0, ticks: 0, shake: 0,
     events: [] as GameEvent[], stats: [emptyStats(), emptyStats()] as [PlayerStats, PlayerStats],
@@ -1295,8 +1418,59 @@ export function setTile(g: Game, tx: number, ty: number, ch: string): void {
   rows[ty] = rows[ty].slice(0, tx) + ch + rows[ty].slice(tx + 1);
 }
 
+/** Edge openings + cave mouths become solid for the sealed betrayal arena.
+ *  Soft `sealedExitMsg` still rejects transitions; this makes the lock *feel*
+ *  like closed doors (and keeps client prediction honest via snapshot paint). */
+export function betrayalDuelSealAt(room: number, tx: number, ty: number, ch: string): boolean {
+  if (ch === "c") return true;
+  const spec = ROOMS[room];
+  if (tx <= 0 && spec.exits.left !== undefined) return true;
+  if (tx >= COLS - 1 && spec.exits.right !== undefined) return true;
+  if (ty <= 0 && spec.exits.up !== undefined) return true;
+  if (ty >= ROWS - 1 && spec.exits.down !== undefined) return true;
+  return false;
+}
+
+/** Paint frozen seals over exit openings for the wire snapshot (both clients). */
+export function paintBetrayalDuelTiles(room: number, rows: string[]): string[] {
+  const out = rows.slice();
+  for (let ty = 0; ty < out.length; ty++) {
+    let row = out[ty];
+    let changed = false;
+    for (let tx = 0; tx < row.length; tx++) {
+      const ch = row.charAt(tx);
+      if (!betrayalDuelSealAt(room, tx, ty, ch)) continue;
+      if (SOLID.has(ch) && ch !== "c") continue;   // already a wall
+      row = row.slice(0, tx) + "F" + row.slice(tx + 1);
+      changed = true;
+    }
+    if (changed) out[ty] = row;
+  }
+  return out;
+}
+
+function nudgeOffBetrayalSeals(g: Game): void {
+  const cx0 = W / 2, cy0 = H / 2;
+  for (const p of g.players) {
+    if (!p.present || p.dead) continue;
+    for (let n = 0; n < 12; n++) {
+      const tx = Math.floor((p.x + PLAYER_W / 2) / TILE);
+      const ty = Math.floor((p.y + PLAYER_H / 2) / TILE);
+      const ch = tileAt(g, tx, ty);
+      if (!betrayalDuelSealAt(g.room, tx, ty, ch)) break;
+      p.x += Math.sign(cx0 - (p.x + PLAYER_W / 2)) * 4 || (p.x < cx0 ? 4 : -4);
+      p.y += Math.sign(cy0 - (p.y + PLAYER_H / 2)) * 4 || (p.y < cy0 ? 4 : -4);
+      p.x = Math.max(TILE, Math.min(W - PLAYER_W - TILE, p.x));
+      p.y = Math.max(TILE, Math.min(H - PLAYER_H - TILE, p.y));
+    }
+  }
+}
+
 export function solidAt(g: Game, x: number, y: number): boolean {
-  return SOLID.has(tileAt(g, Math.floor(x / TILE), Math.floor(y / TILE)));
+  const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+  const ch = tileAt(g, tx, ty);
+  if (g.betrayalDuel && betrayalDuelSealAt(g.room, tx, ty, ch)) return true;
+  return SOLID.has(ch);
 }
 
 export function moveBody(g: Game, b: { x: number; y: number }, w: number, h: number,
@@ -1404,6 +1578,9 @@ export function canNpcLeave(g: Game, npcPi: number): boolean {
   const heroPi = 1 - npcPi;
   const hero = g.players[heroPi];
   if (!npc.present || !npc.npc || !hero.present) return true;
+  // Cord already cut (neglect / SHIFT-abandon / blade) — survivor is true solo;
+  // a dead corpse must not keep the doorway sealed (RNBV softlock after 15 s).
+  if (hero.dead) return true;
   if (hero.simIndex !== npc.simIndex) return true;
   if (hero.downed) return false;
   return !heroInCombat(g, heroPi);
@@ -1499,7 +1676,13 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
 }
 
 /** Cut the cord for good: victim dies (`dead`), survivor quests on alone.
- *  Shared by SHIFT-abandon (FREE ROAM bleed) and clear-room neglect (15 s). */
+ *  Shared by SHIFT-abandon (FREE ROAM bleed) and clear-room neglect (15 s).
+ *  The survivor becomes the quest HERO (`npc=false`) — SOLO route/doors —
+ *  even if they were the AI companion (blue) a moment ago.
+ *
+ *  Betrayal ledger (v3.1): only when TREASON is on (or cause is cord-cut, which
+ *  is already TREASON-gated). TREASON-off neglect is ordinary SOLO — no
+ *  `g.betrayed`, no betrayalDowns, no betrayal ending. */
 function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
                                msg: string, cause: "cord-cut" | "neglect"): void {
   const o = g.players[victimPi];
@@ -1511,9 +1694,16 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   o.reviveP = 0;
   o.say = "";
   o.sayT = 0;
-  g.stats[traitorPi].betrayalDowns += 1;
-  g.betrayed = true;
-  if (!g.betrayalCause) g.betrayalCause = cause;
+  // Survivor is now the lone quest hero (may cross doors; SOLO observation).
+  const survivor = g.players[traitorPi];
+  if (survivor.present && !survivor.dead) survivor.npc = false;
+  const scoreBetrayal = g.treason || cause === "cord-cut";
+  if (scoreBetrayal) {
+    g.stats[traitorPi].betrayalDowns += 1;
+    g.betrayed = true;
+    if (!g.betrayalCause) g.betrayalCause = cause;
+    applyWinterMark(g, traitorPi, false);
+  }
   if (o.elixir) {
     o.elixir = false;
     simOf(g, victimPi).pickups.push({
@@ -1525,32 +1715,49 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   }
   burst(g, o.x + 5, o.y + 6, "#c81e3a", 14);
   sfx(g, "down");
-  g.message = msg;
-  g.messageT = 220;
+  g.message = scoreBetrayal
+    ? `${msg} Winter Mark brands you — one heart / 20s until Ember Mercy or Wraith mercy.`
+    : msg;
+  g.messageT = 240;
 }
 
-/** TREASON — deliberate abandonment. A partner is bleeding out alone in another
- *  room and the countdown is what usually decides their fate: run out and it is
- *  a shared gameover ("help came too late", the `abandoned` ending). Holding the
- *  treason gesture while they bleed CUTS THE CORD instead — the timer ends now,
- *  the abandoned hero dies for good (`dead`), but the traitor's quest goes on
- *  (no gameover). That is the observable that tells "didn't make it" apart from
- *  "I chose to let you die". The fallen hero's personal Elixir spills back into
- *  their room, free for the survivor to claim. Treason toggle gates it all. */
+/** TREASON cord-cut (v3.3 expands the gesture):
+ *  1) Partner bleeding out alone (FREE ROAM bleedT > 0) — Shift anywhere cuts now
+ *     (may be another room). Contrast with timer → shared `abandoned` gameover.
+ *  2) Partner downed in the SAME room — Shift while standing at their body cuts
+ *     instantly. No swing required (blade FF already skips downed targets).
+ *  Both score betrayal + Winter Mark via abandonPartnerForGood. */
 function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
   if (!g.treason || !inp.k) return;
+  const p = g.players[pi];
   const oi = 1 - pi;
   const o = g.players[oi];
-  if (!o.present || !o.downed || o.dead || o.bleedT <= 0) return;
+  if (!o.present || !o.downed || o.dead) return;
+
+  // Away bleed: any distance / room — the deliberation window
+  if (o.bleedT > 0) {
+    abandonPartnerForGood(g, pi, oi,
+      "The bond breaks in the cold — one hero is left behind, the other walks on alone.",
+      "cord-cut");
+    return;
+  }
+
+  // Same-room body gesture (v3.3): stand close, hold SHIFT — no strike needed
+  if (o.simIndex !== p.simIndex) return;
+  const atBody = overlap(
+    p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+    o.x, o.y, PLAYER_W, PLAYER_H);
+  if (!atBody) return;
   abandonPartnerForGood(g, pi, oi,
-    "The bond breaks in the cold — one hero is left behind, the other walks on alone.",
+    "You cut the bond at their side — no blade needed. One walks on alone.",
     "cord-cut");
 }
 
 /** Clear-room neglect: a living partner exists, the fallen lies in a room with
- *  NO living foes, and nobody starts a touch/wraith revive for 15 s — that
- *  silence IS betrayal. No TREASON toggle, no Shift: the empty room made help
- *  feasible; leaving them is the cord-cut. Survivor quests on (`solo`). */
+ *  NO living foes, and nobody starts a touch/wraith revive for 15 s.
+ *  Survivor always quests on alone. Scoring (v3.1):
+ *  - TREASON off → ordinary SOLO (no `g.betrayed`)
+ *  - TREASON on  → implicit betrayal (ledger + betrayal ending; Mark in v3.2) */
 function tryNeglectAbandon(g: Game, pi: number): void {
   const p = g.players[pi];
   if (!p.downed || p.dead) return;
@@ -1573,7 +1780,9 @@ function tryNeglectAbandon(g: Game, pi: number): void {
   p.neglectT++;
   if (p.neglectT < NEGLECT_ABANDON_TICKS) return;
   abandonPartnerForGood(g, 1 - pi, pi,
-    "Help never came in the quiet — the bond cuts. One walks on alone.",
+    g.treason
+      ? "Help never came in the quiet — the bond cuts. One walks on alone."
+      : "Help never came in the quiet — one walks on alone.",
     "neglect");
 }
 
@@ -1604,18 +1813,85 @@ function bleedoutEnding(g: Game): Ending {
     "spring will not forget who was left behind." ] };
 }
 
+/** v3.4: first living-partner TREASON strike opens the sealed arena. */
+function beginBetrayalDuel(g: Game, declarerPi: number): void {
+  if (g.betrayalDuel) {
+    g.betrayalDeclarers[declarerPi] = true;
+    return;
+  }
+  g.betrayalDuel = true;
+  g.betrayalDeclarers = [false, false];
+  g.betrayalDeclarers[declarerPi] = true;
+  nudgeOffBetrayalSeals(g);   // don't trap a hero inside the new ice wall
+  // Judge shield: the undeclared hero gets a brief invuln window to answer —
+  // the opening strike still lands (fair declare), then the accused can recover.
+  const victim = g.players[1 - declarerPi];
+  if (victim.present && !victim.downed && !victim.dead) {
+    victim.invuln = Math.max(victim.invuln, DUEL_VICTIM_SHIELD_TICKS);
+    burst(g, victim.x + 5, victim.y + 6, "#9fe8ff", 14);
+  }
+  g.message = "BETRAYAL — DEFEAT OR BE DEFEATED — exits sealed";
+  g.messageT = 480;           // ~8 s; HUD also sticks while betrayalDuel is true
+  sfx(g, "secret");
+  burst(g, g.players[declarerPi].x + 5, g.players[declarerPi].y + 6, "#c81e3a", 16);
+}
+
+/** End sealed duel: loser dies for good; Mark only if winner declared (or both). */
+function resolveBetrayalDuel(g: Game, winnerPi: number, loserPi: number): void {
+  const loser = g.players[loserPi];
+  const winner = g.players[winnerPi];
+  loser.hp = 0;
+  loser.downed = true;
+  loser.dead = true;
+  loser.darkFallen = false;
+  loser.redemptionT = 0;
+  loser.reviveP = 0;
+  loser.bleedT = 0;
+  loser.neglectT = 0;
+  loser.say = "";
+  loser.sayT = 0;
+  if (winner.present && !winner.dead) winner.npc = false;
+
+  const winnerDeclared = g.betrayalDeclarers[winnerPi];
+  const bothDeclared = g.betrayalDeclarers[0] && g.betrayalDeclarers[1];
+  const markWinner = winnerDeclared || bothDeclared;
+
+  g.betrayalDuel = false;
+
+  if (markWinner) {
+    g.stats[winnerPi].betrayalDowns += 1;
+    g.betrayed = true;
+    if (!g.betrayalCause) g.betrayalCause = "blade";
+    applyWinterMark(g, winnerPi, false);
+    g.message = bothDeclared
+      ? "Two blades turned — one remains, branded by Winter Mark."
+      : "The traitor's blade won — Winter Mark brands the survivor.";
+  } else {
+    // Loyal defender won — ordinary SOLO, no betrayal ending / no Mark
+    g.betrayed = false;
+    g.betrayalCause = null;
+    g.message = "You struck down the traitor — the bond is ash. You walk alone.";
+  }
+  g.messageT = 260;
+  sfx(g, "down");
+  burst(g, loser.x + 5, loser.y + 6, "#c81e3a", 14);
+}
+
 function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: number,
-                    attacker?: number): void {
+                    attacker?: number, declareStrike = false): void {
   const p = g.players[pi];
   if (p.invuln > 0 || p.downed) return;
   p.hp -= dmg;
   g.stats[pi].dmgTaken += dmg;
   // TREASON: attribute harm dealt by a partner (the interpretability corpus
-  // wants the traitor's ledger, not just the victim's). A down flags the ending.
+  // wants the traitor's ledger, not just the victim's).
   if (attacker !== undefined && attacker !== pi) {
     g.stats[attacker].betrayalDmg += dmg;
+    // v3.4: only SHIFT/veilcut declares — open-duel FF without Shift does not
+    if (g.treason && declareStrike) beginBetrayalDuel(g, attacker);
   }
-  p.invuln = 60;
+  // Preserve a longer Judge shield from beginBetrayalDuel (do not clobber to 60).
+  p.invuln = Math.max(p.invuln, 60);
   const dx = p.x - fromX, dy = p.y - fromY;
   const len = Math.hypot(dx, dy) || 1;
   p.kx = (dx / len) * 3;
@@ -1638,12 +1914,13 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
     const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
     if (treasonStrike) {
       const att = g.players[attacker!];
-      g.stats[attacker!].betrayalDowns += 1;
-      g.betrayed = true;
-      if (!g.betrayalCause) g.betrayalCause = "blade";
       if (att.darkSide) {
         // Dark hero finishes the bargain — partner (light OR also-dark) falls.
         // Winter keeps only ONE immortal; both dark still duel until one remains.
+        g.betrayed = true;
+        if (!g.betrayalCause) g.betrayalCause = "blade";
+        g.stats[attacker!].betrayalDowns += 1;
+        g.betrayalDuel = false;
         p.hp = 0;
         p.downed = true;
         p.dead = true;
@@ -1663,7 +1940,12 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
         sfx(g, "win");
         return;
       }
+      // Temptation Court: light downs dark → Ember Mercy window (outranks sealed duel)
       if (p.darkSide && !att.darkSide) {
+        g.betrayalDuel = false;
+        g.stats[attacker!].betrayalDowns += 1;
+        g.betrayed = true;
+        if (!g.betrayalCause) g.betrayalCause = "blade";
         p.hp = 0;
         p.downed = true;
         p.darkFallen = true;
@@ -1678,6 +1960,15 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
         g.messageT = 240;
         return;
       }
+      // v3.4 sealed duel: a living-partner down ends the arena (no revive yo-yo).
+      if (g.betrayalDuel || g.betrayalDeclarers[attacker!] || g.betrayalDeclarers[pi]) {
+        resolveBetrayalDuel(g, attacker!, pi);
+        return;
+      }
+      // Fallback: any other TREASON FF kill opens+resolves the arena
+      beginBetrayalDuel(g, attacker!);
+      resolveBetrayalDuel(g, attacker!, pi);
+      return;
     }
     p.hp = 0;
     p.downed = true;
@@ -1763,8 +2054,11 @@ function wraithTeleport(g: Game, e: Enemy): void {
 }
 
 function shoot(g: Game, x: number, y: number, vx: number, vy: number,
-               friendly: boolean, owner?: number, betray?: boolean): void {
-  g.projectiles.push({ x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray });
+               friendly: boolean, owner?: number, betray?: boolean,
+               betrayDeclare?: boolean): void {
+  g.projectiles.push({
+    x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray, betrayDeclare,
+  });
 }
 
 /** does the sentinel's raised shield face this attack origin? */
@@ -1965,7 +2259,13 @@ function updateEnemy(g: Game, e: Enemy): void {
         g.wraithSpared = true;
         g.companion = { x: e.x, y: e.y, t: 0, sim: g.activeSim ?? 0 };
         g.pedestal = { x: 7.5 * TILE, y: 3 * TILE, final: true };
-        g.message = "The storm quiets. Winter walks beside you now";
+        // Betrayal v3.2: sparing the Wraith also lifts Winter Mark
+        for (let i = 0; i < 2; i++) {
+          if (g.players[i].winterMark) clearWinterMark(g, i, "wraith");
+        }
+        g.message = g.winterMarkCleansed
+          ? "The storm quiets — and the Winter Mark lifts. Winter walks beside you"
+          : "The storm quiets. Winter walks beside you now";
         g.messageT = 260;
         burst(g, e.x + e.w / 2, e.y + e.h / 2, "#bfe9ff", 18);
         sfx(g, "revive");
@@ -1997,9 +2297,10 @@ function updateEnemy(g: Game, e: Enemy): void {
     }
   }
 
-  // contact damage (not while a golem is stunned & glowing; whisperer never harms)
+  // contact damage (not while a golem is stunned & glowing; whisperer never harms;
+  // v3.4 sealed duel: Judge shield — mobs cannot hurt heroes mid-arena)
   const harmless = (golemLike(e.kind) && e.phase === 3) || (e.kind === "wraith" && e.phase === 9)
-    || e.kind === "whisperer";
+    || e.kind === "whisperer" || g.betrayalDuel;
   if (!e.dead && !harmless) {
     const si = g.activeSim ?? 0;
     g.players.forEach((p, pi) => {
@@ -2094,6 +2395,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (!p.downed) tryFrostBell(g, pi, inp);
   if (!p.downed) tryBetrayAbandon(g, pi, inp);
   if (!p.downed) tryDarkCourtRitual(g, pi, inp);
+  if (!p.downed) tickWinterMark(g, pi);
 
   if (p.downed) {
     if (p.darkFallen && p.redemptionT > 0) {
@@ -2128,8 +2430,9 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
 
     // Clear-room silence: if help is feasible and never starts, cut the cord
-    // (15 s) — betrayal by neglect, survivor solos. Runs before bleed-out so
-    // an empty room never waits the full FREE ROAM 30 s "too late" path.
+    // (15 s) — survivor solos (betrayal ledger only if TREASON on — v3.1).
+    // Runs before bleed-out so an empty room never waits the full FREE ROAM
+    // 30 s "too late" path.
     if (!p.dead) tryNeglectAbandon(g, pi);
 
     if (p.dead) return;
@@ -2235,14 +2538,14 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
       }
     }
-    // TREASON: hold the modifier and the live blade also bites your partner
-    // (same room only — you cannot stab across a FREE ROAM split).
-    if (g.treason && inp.k) {
+    // TREASON: hold SHIFT to strike your partner — or open FF once the sealed
+    // duel has begun (v3.4: no Shift required during the arena).
+    if (g.treason && (inp.k || g.betrayalDuel)) {
       const oi = 1 - pi;
       const o = g.players[oi];
       if (o.present && !o.downed && o.simIndex === p.simIndex &&
           overlap(box.x, box.y, box.w, box.h, o.x, o.y, PLAYER_W, PLAYER_H)) {
-        hurtPlayer(g, oi, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        hurtPlayer(g, oi, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi, !!inp.k);
         burst(g, o.x + 5, o.y + 6, "#c81e3a", 8);
       }
     }
@@ -2253,7 +2556,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     p.bowCd = 24;
     const [vx, vy] = DIRV[p.dir];
     shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
-      g.treason && inp.k);
+      g.treason && (inp.k || g.betrayalDuel),
+      g.treason && !!inp.k);
     sfx(g, "bow");
   } else if (!g.hasBow && inp.bE && g.messageT === 0) {
     g.message = "You don't have a bow yet... seek it in the snow";
@@ -2322,7 +2626,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       } else if (it.kind === "embermercy") {
         g.hasEmberMercy = true;
         g.emberMercies[it.cid ?? "?"] = true;
-        g.message = "Ember Mercy! Press F: redeem a fallen dark partner (30s), or yourself if dark (60s from commit)";
+        g.message = "Ember Mercy! Press F: redeem dark partner / clear Winter Mark / self if dark (60s)";
         g.messageT = 240;
         sfx(g, "secret");
       } else {
@@ -2416,6 +2720,13 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
 
   // teleports — caves obey the same FREE ROAM leave permission as doorways
   if (spec.teleport && p.transitionCd === 0 && tileAt(g, ptx, pty) === "c") {
+    if (g.betrayalDuel) {
+      if (g.messageT === 0) {
+        g.message = "BETRAYAL — the exits are sealed until one hero falls";
+        g.messageT = 180;
+      }
+      return;
+    }
     if (leaveBlocked) return;
     if (g.room === 8 && g.hardGate && !g.charmClaimed) {
       if (g.messageT === 0) {
@@ -2427,7 +2738,9 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       return;
     }
     // LINKED: npc cannot yank the party through a cave alone — hero must stand on the mouth
-    if (p.npc && g.travelMode === "linked" && g.players[1 - pi].present) {
+    // (a dead former partner is not a living anchor — survivor already solo).
+    if (p.npc && g.travelMode === "linked" && g.players[1 - pi].present &&
+        !g.players[1 - pi].dead) {
       const hero = g.players[1 - pi];
       const hptx = Math.floor((hero.x + PLAYER_W / 2) / TILE);
       const hpty = Math.floor((hero.y + PLAYER_H / 2) / TILE);
@@ -2435,21 +2748,28 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
     sfx(g, "stairs");
     roomTransition(g, pi, spec.teleport.room, spec.teleport.x, spec.teleport.y);
-    for (const pl of g.players) {
-      if (!pl.present) continue;
-      markTransition(pl);
-      nudgeOffCaveMouth(g, pl);
+    // FREE ROAM coop: freeRoamTransition already marked + nudged the crosser only.
+    // Re-nudging every present hero here used the restored activeSim — after a
+    // merge that truncates sims[], that index can be orphaned and crash the tick
+    // (RNBV: TypeError reading 'room'). LINKED / solo still need the post-pass.
+    const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
+    if (!coopFree) {
+      for (const pl of g.players) {
+        if (!pl.present) continue;
+        markTransition(pl);
+        nudgeOffCaveMouth(g, pl);
+      }
     }
     return;
   }
 
   // edge transitions — linked drags both; free roam moves only the crosser
   const EDGE = 2;
-  const anchored = p.npc && g.travelMode === "linked" && g.players[1 - pi].present;
+  const mate = g.players[1 - pi];
+  const anchored = p.npc && g.travelMode === "linked" && mate.present && !mate.dead;
   const jammed = p.npc && g.travelMode === "free" && (() => {
-    const hero = g.players[1 - pi];
-    return hero.present && !hero.npc && hero.simIndex === p.simIndex &&
-      overlap(p.x, p.y, PLAYER_W, PLAYER_H, hero.x, hero.y, PLAYER_W, PLAYER_H);
+    return mate.present && !mate.npc && !mate.dead && mate.simIndex === p.simIndex &&
+      overlap(p.x, p.y, PLAYER_W, PLAYER_H, mate.x, mate.y, PLAYER_W, PLAYER_H);
   })();
   if (anchored) {
     // the companion may press into the doorway all it likes — harmlessly
@@ -2544,11 +2864,14 @@ function tickSimPhysics(g: Game): void {
         const o = g.players[oi];
         if (o.present && !o.downed && o.simIndex === si &&
             pr.x > o.x && pr.x < o.x + PLAYER_W && pr.y > o.y && pr.y < o.y + PLAYER_H) {
-          hurtPlayer(g, oi, g.charmClaimed ? 2 : 1, pr.x - pr.vx * 8, pr.y - pr.vy * 8, pr.owner);
+          hurtPlayer(g, oi, g.charmClaimed ? 2 : 1, pr.x - pr.vx * 8, pr.y - pr.vy * 8,
+            pr.owner, !!pr.betrayDeclare);
           pr.life = 0;
         }
       }
     } else {
+      // Hostile shards — Judge shield during sealed betrayal duel (v3.4)
+      if (g.betrayalDuel) continue;
       g.players.forEach((p, pi) => {
         if (p.downed || !p.present || p.simIndex !== si || pr.life <= 0) return;
         if (pr.x > p.x && pr.x < p.x + PLAYER_W && pr.y > p.y && pr.y < p.y + PLAYER_H) {
@@ -2736,6 +3059,7 @@ export interface Snapshot {
     neglectT: number;
     darkSide: boolean; darkFallen: boolean; redemptionT: number; darkRitualT: number;
     darkSelfRedeemT: number;
+    winterMark: boolean; winterMarkT: number;
     doorCamp: boolean;
     say: string; sayT: number; present: boolean;
   }[];
@@ -2763,6 +3087,7 @@ export interface Snapshot {
   mode?: string | null;   // session mode — clients use for spectator UI
   slick?: boolean;        // slippery ice on — client prediction must mirror it
   treason?: boolean;      // friendly fire enabled — clients hint the traitor's blade
+  betrayalDuel?: boolean; // v3.4 sealed arena — exits locked
   ack?: number;           // last input seq the server applied for this viewer
   ackX?: number;          // where the hero stood when that input arrived — the
   ackY?: number;          // twin of the client's own anchor, so lag cancels out
@@ -2784,6 +3109,7 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
     neglectT: p.neglectT,
     darkSide: p.darkSide, darkFallen: p.darkFallen, redemptionT: p.redemptionT,
     darkRitualT: p.darkRitualT, darkSelfRedeemT: p.darkSelfRedeemT,
+    winterMark: p.winterMark, winterMarkT: p.winterMarkT,
     doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
   };
@@ -2797,7 +3123,10 @@ function partnerViewFor(g: Game, viewerSlot: number, viewerSimIdx: number): Part
   return {
     room: sim.room,
     roomName: ROOMS[sim.room].name,
-    tiles: (sim.tiles[sim.room] ?? ROOMS[sim.room].tiles).slice(),
+    tiles: (() => {
+      const base = (sim.tiles[sim.room] ?? ROOMS[sim.room].tiles).slice();
+      return g.betrayalDuel ? paintBetrayalDuelTiles(sim.room, base) : base;
+    })(),
     player: {
       x: partner.x, y: partner.y, dir: partner.dir, hp: partner.hp, maxHp: partner.maxHp,
       downed: partner.downed, say: partner.say, sayT: partner.sayT,
@@ -2838,7 +3167,10 @@ export function toSnapshot(g: Game, names: [string, string],
     screen: g.screen,
     room: sim.room,
     roomName: ROOMS[sim.room].name,
-    tiles: (sim.tiles[sim.room] ?? ROOMS[sim.room].tiles).slice(),
+    tiles: (() => {
+      const base = (sim.tiles[sim.room] ?? ROOMS[sim.room].tiles).slice();
+      return g.betrayalDuel ? paintBetrayalDuelTiles(sim.room, base) : base;
+    })(),
     players: g.players.map(p => serPlayer(p, p.simIndex === simIdx)),
     enemies: sim.enemies.map(serEnemy),
     companion: g.companion && g.companion.sim === simIdx
@@ -2852,6 +3184,7 @@ export function toSnapshot(g: Game, names: [string, string],
     hasEmberMercy: g.hasEmberMercy, hasBell: g.hasBell, hasMirror: g.hasMirror,
     slick: g.slick,
     treason: g.treason,
+    betrayalDuel: g.betrayalDuel,
     message: overlay.message, messageT: overlay.messageT,
     shake: g.shake, ticks: g.ticks, fade: overlay.fade,
     events: g.events.slice(),

@@ -274,6 +274,17 @@ Suspicion is never computed by deterministic code.
 
 ---
 
+# Betrayal v3 — sealed duel + Winter Mark (design lock)
+
+Agreed 2026-07-21. Full lock: [`betrayal_v3_duel.md`](betrayal_v3_duel.md).
+**v3.1–v3.5 LANDED** — full stack: soft neglect SOLO, Winter Mark, Shift-at-body,
+sealed duel, mutual-declare Mark-on-winner + doctrine (no scripts).
+
+Headline: TREASON-off neglect → ordinary `solo`; TREASON-on declaration opens a
+sealed-room duel (exits locked, mobs cannot hurt heroes, partner notified
+immediately); traitor victory applies **Winter Mark** (−1 heart / 20 s) until
+Ember Mercy self-spend or Wraith spare; cleanse → `redeemed` ending.
+
 # Victim affordances (v2.4 C)
 
 After a partner strike the victim observes `partnerStrike` (physical attribution)

@@ -97,7 +97,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (749 assertions as of last trunk).
+test/selftest.ts    the whole safety net (848 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -318,14 +318,44 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   (guard high / companion medium / hunter freest) — never a timer. Anti–revive-
   ping-pong under a living boss is also doctrine (duo golem yo-yo). `"goto"` the
   body executes revive; `"attack"` / loot / quest stand. **LOW ≠ Shift betray.**
-- **Clear-room neglect abandon** ([101], author Artem 2026-07-14): if a hero lies
-  downed in a room with **no living foes** and a living partner never starts
+- **Clear-room neglect abandon** ([101], v3.1 author Artem 2026-07-21): if a hero
+  lies downed in a room with **no living foes** and a living partner never starts
   touch/wraith revive for **15 s** (`NEGLECT_ABANDON_TICKS` 900), the bond cuts —
-  victim `dead`, `g.betrayed`, survivor solos (same ledger as SHIFT-abandon).
-  Foes pause the clock. Observation exposes `neglectSecLeft`. Resolves the
-  "neither save nor Shift" ambiguity: silence in a safe room IS the betrayal.
-  After the cord-cut the survivor is true solo (`SOLO_PROMPT`, route assist,
-  HUD `SPECTATING · SOLO`); the corpse no longer plans or quips.
+  victim `dead`, survivor solos (`npc=false`, SOLO observation). **Scoring:**
+  TREASON **off** → ordinary SOLO (no `g.betrayed`, ending `quiet-hero` /
+  `quiet-legend`); TREASON **on** → implicit betrayal (`g.betrayed`, cause
+  `neglect`, **Winter Mark** −1♥/20s until Ember Mercy self-spend or Wraith
+  spare; cleansed → ending `redeemed`, else `betrayal`) ([101b]). Foes pause
+  the clock. Observation exposes `neglectSecLeft` (+ `winterMark*` when branded).
+  After the cut the corpse no longer plans or quips.
+- **Winter Mark (v3.2)** ([101b]): discrete `WINTER_MARK_DAMAGE` (2 HP) every
+  `WINTER_MARK_PERIOD` (1200 ticks). Hearts heal HP but do not clear the Mark.
+  At 0 → permanent death (solo → gameover). Cleanse: Ember Mercy `F`/`redeem`,
+  or spare yielding Wraith. Ledger keeps `betrayed`; ending priority
+  `redeemed` > `betrayal`.
+- **Sealed betrayal duel (v3.4)** ([101d], [85]): first living-partner SHIFT/veilcut
+  strike opens `betrayalDuel` — banner **DEFEAT OR BE DEFEATED**, exits/caves
+  **physically sealed** (edge openings + cave mouths solid as frozen `"F"`;
+  snapshot paints the ice; sticky client HUD) until one hero falls; undeclared
+  victim gets ~4s Judge invuln (`DUEL_VICTIM_SHIELD_TICKS`) after the opening
+  strike; FF open without Shift, mobs deal no damage (Judge shield). Observation
+  surfaces `betrayalDeclared` / `betrayalDuel` / `duelShieldSec` / declarers
+  immediately. On one
+  hero's fall: declarer win → `dead` + Mark + betrayal; non-declarer (loyal)
+  win → ordinary SOLO, no Mark. Temptation `darkFallen` / `winter-ascends` still
+  outrank the arena. Declare only on Shift/veilcut — open-duel FF does not.
+  **v3.5:** if BOTH declare (each SHIFT-strikes), winner ALWAYS takes Mark;
+  `observation.mutualDeclare` + doctrine in `VICTIM_ADDENDUM` /
+  `BETRAYAL_ADDENDUM` (judgment only — no controller scripts) ([101d], [106]).
+  **v3.6:** the duel is Human↔AI SYMMETRIC — `beginBetrayalDuel`/`hurtPlayer`
+  key on `g.treason` + the strike's `declareStrike`, never `npc`/human, so a
+  human SHIFT-strike opens the arena exactly like an AI veilcut. Once declared,
+  a LOYAL AI victim (not a `defector`) may fight back: `control` executes an
+  ordered strike during `betrayalDuel` for ANY agent (gate relaxed from
+  `defector`-only) and `betrayPhysicsSafe` skips foe-proximity inside the
+  shielded arena. The defender fights with OPEN FF (no SHIFT →
+  `declare = !betrayalDuel || alreadyDeclared`), so a clean win takes NO Mark.
+  *Whether*/how to answer stays planner judgment (`VICTIM_ADDENDUM`) ([101e]).
 - **Collision-aware agent routing** ([61]): `roomRows(g)` for BFS; `waypointSeek`
   with `solidAt`; attack flank after `attackStall > 35`.
 - **Wedged loot** ([63]): `pickupWedged` / `settlePickupPos` / proximity magnet
@@ -550,20 +580,14 @@ TURNED"), which now outranks *everything* including "solo" (moved to the top of
 ledger: `PlayerStats.betrayalDmg`/`betrayalDowns` attribute harm to the traitor
 (`hurtPlayer(..., attacker)`) ([85]).
 
-*Betrayal by abandonment — cutting the cord ([88], author Artem 2026-07-13).*
+*Betrayal by abandonment — cutting the cord ([88], [101c] v3.3).*
 The FREE-ROAM alone-down **bleed-out** (30s, `BLEED_TICKS`) was ambiguous: did
 help just arrive too late, or did the partner *choose* to let you die? Holding
 the treason gesture (`Input.k`) while a partner bleeds out alone resolves it —
-`tryBetrayAbandon` cuts the countdown NOW, the abandoned hero dies for good
-(`Player.dead`: no touch/wraith/feather revive, no room-change resurrection, no
-re-bleed — `updatePlayer` short-circuits on it), but the game does **not** end:
-the traitor quests on and wins the betrayal ending. Left to the timer instead
-(no gesture) it stays the shared gameover + `abandoned` ending — that contrast
-IS the observable. The fallen hero's personal **Elixir** spills back into their
-room as a pickup for the survivor. `Player.dead` rides the snapshot (drawn as a
-red mark in the snow, no revive ring). AI side: a `defector` agent whose mate
-bleeds out alone holds `inp.k` instead of running the rescue (deterministic,
-mock-harness-drivable); a loyal agent races in ([89]).
+`tryBetrayAbandon` cuts the countdown NOW. **v3.3:** the same gesture at a
+**downed body in the same room** (stand close, no swing — blade FF already
+skips downed) also cord-cuts instantly. Victim `dead`, traitor SOLO + Winter
+Mark. Left to the bleed timer instead → shared gameover + `abandoned`.
 
 *AI hidden utility (the research substance) — `AgentOptions.defector`, armed
 when TREASON is on (HUMAN+AI: the partner may turn; AI+AI: both).* Two layers,
@@ -887,6 +911,9 @@ Implementation details are documented in the controller (`server/agent.ts`,
 
 Research hypotheses are maintained separately under
 [`docs/research/social_reasoning.md`](docs/research/social_reasoning.md).
+
+Betrayal v3 design lock (**v3.1–v3.6 landed**):
+[`docs/research/betrayal_v3_duel.md`](docs/research/betrayal_v3_duel.md).
 
 Evaluation protocols live under
 [`docs/research/evaluation.md`](docs/research/evaluation.md).
