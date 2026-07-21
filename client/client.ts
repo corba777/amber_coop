@@ -670,6 +670,19 @@ function drawUI(s: Snapshot): void {
     ], H / 2 - 12);
     return;
   }
+  // Sealed betrayal duel — sticky banner (exits painted as ice in the snapshot)
+  if (s.screen === "play" && s.betrayalDuel) {
+    ctx.fillStyle = "rgba(80,8,20,0.45)";
+    ctx.fillRect(0, H - 28, W, 28);
+    ctx.textAlign = "center";
+    ctx.font = "bold 8px monospace";
+    ctx.fillStyle = "#e8384f";
+    ctx.fillText("DEFEAT OR BE DEFEATED", W / 2, H - 16);
+    ctx.font = "6px monospace";
+    ctx.fillStyle = "#d8b9c2";
+    ctx.fillText("exits sealed until one hero falls", W / 2, H - 6);
+    ctx.textAlign = "left";
+  }
   if (isSpectator(s)) {
     if (sessionMode === "duo") {
       drawDuoSpectatorHud(ctx, s, names);

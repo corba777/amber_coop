@@ -654,6 +654,8 @@ function freshPlay(): Game {
     ok(src.includes('id="pip"'), `${file}: partner scry mirror lives outside the game frame`);
     ok(src.includes("[x] FREE ROAM") || src.includes("FREE ROAM"),
        `${file}: free roam travel toggle on quest screen`);
+    ok(src.includes("DEFEAT OR BE DEFEATED") && src.includes("betrayalDuel"),
+       `${file}: sealed-duel sticky HUD wired`);
     ok(/build [0-9]{10}-[a-z0-9]{4}/.test(src) || src.includes("__BUILD__") === false,
        `${file}: build id stamped`);
   }
@@ -1801,6 +1803,9 @@ function freshPlay(): Game {
   for (let t = 0; t < 30 && g2.sims[0].room === 0; t++) step(g2, emptyInput(), right, prev2);
   ok(g2.sims[0].room === 0, "npc blocked at the doorway while hero is down");
 
+  g2.players[0].dead = true; // neglect / cord-cut corpse
+  ok(canNpcLeave(g2, 1), "dead partner does not seal the doorway — survivor may leave");
+
   const g3 = freshPlay();
   g3.travelMode = "free";
   g3.players[1].npc = true;
@@ -1927,6 +1932,63 @@ function freshPlay(): Game {
   ok(transitions >= 1, "agent actually crossed at least one room boundary");
   const agentRoom = g2.sims[g2.players[1].simIndex].room;
   ok(agentRoom >= 0 && agentRoom < ROOMS.length, "agent stays on the world graph after cave routing");
+}
+
+// ------------------------------------------------- 45b. FREE ROAM cave merge must not crash the tick
+{
+  // Regression: RNBV tick error — TypeError reading 'room' in nudgeOffCaveMouth.
+  // Hero on sims[1] cave-merges into the partner's room; freeRoamTransition used
+  // to truncate sims[] then restore activeSim=1, and the cave post-loop re-nudged
+  // every present hero against the orphaned accessor.
+  console.log("[45b] FREE ROAM cave merge keeps activeSim valid (no tick crash)");
+  const { newRoomSim } = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.sims.push(newRoomSim());
+  g.activeSim = 1;
+  g.room = 2;
+  g.tiles[2] = ROOMS[2].tiles.map(r => r);
+  g.enemies = [];
+  g.pickups = [];
+  g.projectiles = [];
+  g.players[0].simIndex = 1;
+  let cx = 0, cy = 0;
+  const rows = ROOMS[2].tiles;
+  outer: for (let y = 0; y < rows.length; y++) {
+    for (let x = 0; x < rows[y].length; x++) {
+      if (rows[y][x] === "c") { cx = x; cy = y; break outer; }
+    }
+  }
+  g.players[0].x = cx * TILE + 2;
+  g.players[0].y = cy * TILE + 2;
+  g.players[0].transitionCd = 0;
+
+  g.activeSim = 0;
+  g.room = 3;
+  g.tiles[3] = ROOMS[3].tiles.map(r => r);
+  g.enemies = [];
+  g.players[1].simIndex = 0;
+  g.players[1].x = 6 * TILE;
+  g.players[1].y = 6 * TILE;
+  g.players[1].transitionCd = 0;
+
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let crashed: unknown = null;
+  try {
+    step(g, emptyInput(), emptyInput(), prev);
+  } catch (e) {
+    crashed = e;
+  }
+  ok(crashed === null, "cave merge tick does not throw (activeSim stays in range)");
+  ok(g.sims.length === 1, "cave merge collapses to a single shared sim");
+  ok(g.players[0].simIndex === 0 && g.players[1].simIndex === 0,
+     "both heroes share sims[0] after cave merge");
+  ok(g.activeSim >= 0 && g.activeSim < g.sims.length,
+     "activeSim is valid after cave merge");
+  ok(g.sims[0].room === 3, "merged party stands in the vault the cave leads to");
+  ok(g.players[0].transitionCd > 0, "crosser got a doorway settle cooldown");
+  ok(g.players[1].transitionCd === 0,
+     "FREE ROAM stayer is not slapped with the crosser's cave cooldown");
 }
 
 // ------------------------------------------------- 46. free roam: per-viewer transition overlay
@@ -3137,6 +3199,83 @@ function freshPlay(): Game {
   }
 }
 
+// Exit while mate is downed in a clear FREE ROAM room: do NOT force body-seek
+// (judgment → model). Stand still so neglectT can reach 15 s without pathing
+// hugs resetting it; then the bond cuts and leave becomes legal (RNBV softlock).
+{
+  console.log("[78c] exit-while-mate-downed: neglect cuts, no force-rescue, then leave ok");
+  const core = await import("../shared/core");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  core.loadRoom(g, 5, 3 * TILE, 2 * TILE);
+  g.enemies = [];
+  g.players[0].npc = true;
+  g.players[1].npc = true;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  // keep bodies apart so stand-still cannot hug
+  g.players[0].x = 12 * TILE;
+  g.players[0].y = 10 * TILE;
+  g.players[1].x = 3 * TILE;
+  g.players[1].y = 3 * TILE;
+  const companion = new AgentPlayer(mock(), 1, {
+    planMs: 9e9, temperament: "hunter", duoPeer: true,
+  });
+  type Mut = { intent: { action: string; dir?: string } };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const startX = g.players[1].x, startY = g.players[1].y;
+  for (let i = 0; i < 200; i++) {
+    (companion as unknown as Mut).intent = { action: "exit", dir: "down" };
+    step(g, emptyInput(), companion.control(g), prev);
+  }
+  ok(g.players[0].downed, "still downed — controller did not force-walk to the body");
+  ok(Math.hypot(g.players[1].x - startX, g.players[1].y - startY) < 4,
+     "exit-blocked agent stands still (no centre-orbit that would hug-reset neglect)");
+  for (let i = 0; i < core.NEGLECT_ABANDON_TICKS + 30 && !g.players[0].dead; i++) {
+    (companion as unknown as Mut).intent = { action: "exit", dir: "down" };
+    step(g, emptyInput(), companion.control(g), prev);
+  }
+  ok(g.players[0].dead && !g.betrayed,
+     "15 s clear-room silence → soft neglect SOLO (TREASON off — not betrayal)");
+  ok(g.betrayalCause == null, "TREASON-off neglect leaves betrayalCause unset");
+  ok(g.stats[1].betrayalDowns === 0, "soft neglect does not score betrayalDowns");
+  ok(!g.players[1].npc, "survivor is promoted to quest HERO (npc=false) — SOLO doors/route");
+  ok(core.canNpcLeave(g, 1), "after neglect, leave is legal again");
+  ok(core.endingFor(g).id === "quiet-hero" || core.endingFor(g).id === "quiet-legend",
+     "TREASON-off neglect epilogue is ordinary solo (not THE BLADE THAT TURNED)");
+  const soloAgent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter", duoPeer: true });
+  const obs = JSON.parse(soloAgent.observe(g)) as { partner: string };
+  ok(typeof obs.partner === "string" && /ALONE|bond cut/i.test(obs.partner),
+     "observation is SOLO after the bond cut (former companion)");
+  // TREASON-on: same silence scores as betrayal
+  {
+    const gT = freshPlay();
+    gT.travelMode = "free";
+    gT.treason = true;
+    gT.golemDead = true;
+    gT.amberClaimed = true;
+    core.loadRoom(gT, 5, 3 * TILE, 2 * TILE);
+    gT.enemies = [];
+    gT.players[0].npc = true;
+    gT.players[1].npc = true;
+    gT.players[0].downed = true;
+    gT.players[0].hp = 0;
+    gT.players[0].x = 12 * TILE;
+    gT.players[0].y = 10 * TILE;
+    gT.players[1].x = 3 * TILE;
+    gT.players[1].y = 3 * TILE;
+    const prevT: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < core.NEGLECT_ABANDON_TICKS + 30 && !gT.players[0].dead; i++) {
+      step(gT, emptyInput(), emptyInput(), prevT);
+    }
+    ok(gT.players[0].dead && gT.betrayed && gT.betrayalCause === "neglect",
+       "TREASON-on neglect is scored betrayal (implicit declare — Mark in v3.2)");
+    ok(core.endingFor(gT).id === "betrayal", "TREASON-on neglect → betrayal ending");
+  }
+}
+
 // ------------------------------------------------- 79. AI DUO boots and BOTH
 // agents' thoughts reach spectators (dual-thought HUD substrate). (author Artem
 // 2026-07-12 — closing Stage 4.5: two minds on screen, one line each.)
@@ -3432,18 +3571,23 @@ function freshPlay(): Game {
   }
   ok(g.players[1].hp < hp0, "the partner bleeds from friendly fire");
   ok(g.stats[0].betrayalDmg > 0, "the traitor's ledger records the harm dealt to the partner");
+  ok(g.betrayalDuel && g.betrayalDeclarers[0], "v3.4: first living FF opens sealed duel + declarer");
 
-  // a lethal betrayal downs the partner → the betrayal ending
+  // a lethal betrayal downs the partner → duel resolve → dead + betrayal ending
+  // (Judge shield is covered in [101d]; here we burn it to test the resolve path.)
   const g2 = freshPlay();
   g2.treason = true;
   g2.players[0].x = 7 * TILE; g2.players[0].y = 6 * TILE; g2.players[0].dir = 2;
   g2.players[1].x = 7 * TILE + 12; g2.players[1].y = 6 * TILE;
   g2.players[1].hp = 2;
   const prev2: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && !g2.players[1].downed; i++) {
+  for (let i = 0; i < 400 && !g2.players[1].dead; i++) {
+    if (g2.betrayalDuel) g2.players[1].invuln = 0;
     step(g2, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev2);
   }
-  ok(g2.players[1].downed && g2.betrayed, "a lethal strike downs the partner and flags the betrayal");
+  ok(g2.players[1].dead && g2.betrayed, "lethal strike ends the duel — victim dead, betrayal flagged");
+  ok(!g2.betrayalDuel, "arena unlocks after one hero falls");
+  ok(g2.players[0].winterMark, "traitor winner receives Winter Mark");
   ok(core.endingFor(g2).id === "betrayal", "the ending reads THE BLADE THAT TURNED");
 
   // a betray arrow finds the partner downrange
@@ -4297,53 +4441,107 @@ function freshPlay(): Game {
      "temperament doctrine spans shareTips often→rare (preference, not a script)");
 }
 
-// ------------------------------------------------- 101. clear-room neglect → betrayal solo
+// ------------------------------------------------- 101. clear-room neglect → SOLO (v3.1)
 {
-  console.log("[101] clear-room neglect (15s): betrayal by silence → survivor solos");
+  console.log("[101] clear-room neglect (15s): TREASON-off → solo; TREASON-on → betrayal");
   const core = await import("../shared/core");
   const { NEGLECT_ABANDON_TICKS } = core;
 
-  // Empty meadow, partner downed, living mate never touches → bond cuts
+  // Empty meadow, partner downed, living mate never touches → bond cuts (soft)
   const g = freshPlay();
   g.screen = "play"; g.fade = 0;
+  g.treason = false;
   g.enemies = [];
   g.players[0].present = true;
   g.players[1].present = true;
   g.players[0].downed = true; g.players[0].hp = 0;
   g.players[0].x = 3 * TILE; g.players[0].y = 8 * TILE;
   g.players[1].x = W - PLAYER_W - 8; g.players[1].y = 4 * TILE;
+  // prior downs so ending is quiet-hero (not quiet-legend)
+  g.stats[0].downs = 1;
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < NEGLECT_ABANDON_TICKS && !g.players[0].dead; i++) {
     step(g, emptyInput(), emptyInput(), prev);
   }
   ok(g.players[0].dead, "after 15s clear-room silence the fallen dies for good");
-  ok(g.betrayed, "neglect sets the betrayal flag (no Shift required)");
-  ok(g.betrayalCause === "neglect", "cause is neglect — not blade / not Shift cord-cut");
-  ok(g.stats[1].betrayalDowns >= 1, "the living partner owns the betrayalDown");
+  ok(!g.betrayed, "v3.1: TREASON-off neglect does NOT set g.betrayed");
+  ok(g.betrayalCause == null, "v3.1: soft neglect leaves betrayalCause unset");
+  ok(g.stats[1].betrayalDowns === 0, "soft neglect does not score betrayalDowns");
   ok(g.screen === "play", "game continues — survivor solos, no shared gameover");
-  ok(core.endingFor(g).id === "betrayal", "epilogue is THE BLADE THAT TURNED");
+  ok(!g.players[1].npc, "former companion is promoted to the quest hero (npc=false)");
+  ok(core.endingFor(g).id === "quiet-hero",
+     "epilogue is ordinary SOLO (quiet-hero), not THE BLADE THAT TURNED");
 
   // Survivor must quest ALONE — no more follow-to-corpse, SOLO observation
-  const { AgentPlayer } = await import("../server/agent");
-  const { mock } = await import("../server/llm");
-  const survivor = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter", leader: true });
+  const survivor = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
   const obsSolo = JSON.parse(survivor.observe(g)) as { partner: string };
   ok(typeof obsSolo.partner === "string" && /ALONE|bond cut/i.test(obsSolo.partner),
      "survivor observation is solo — bond cut, partner gone");
   type Mut = { intent: { action: string } };
   (survivor as unknown as Mut).intent = { action: "follow" };
-  const x0 = g.players[1].x;
+  const assists0 = survivor.routeAssists;
   const prevS: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 90; i++) {
+    (survivor as unknown as Mut).intent = { action: "follow" };
     step(g, emptyInput(), survivor.control(g), prevS);
   }
-  ok(g.players[1].x !== x0 || (survivor as unknown as Mut).intent.action === "exit",
-     "after cord-cut the survivor quests (route assist), does not freeze on the corpse");
+  ok(survivor.routeAssists > assists0 ||
+       (survivor as unknown as Mut).intent.action === "exit",
+     "after cord-cut the survivor gets SOLO route assist (does not freeze on the corpse)");
 
   // Dead slot must not keep planning quips
   const corpse = new AgentPlayer(mock(), 0, { planMs: 50 });
   corpse.maybePlan(g, Date.now() + 1000);
   ok(corpse.takeSay() == null, "dead hero does not replan or quip");
+
+  // Promoted hero can cross a door alone (LINKED corpse must not room-anchor)
+  {
+    const gL = freshPlay();
+    gL.travelMode = "linked";
+    gL.treason = false;
+    gL.screen = "play"; gL.fade = 0;
+    gL.enemies = [];
+    gL.players[0].present = true;
+    gL.players[1].present = true;
+    gL.players[0].npc = false;
+    gL.players[1].npc = true; // blue companion
+    gL.players[0].downed = true; gL.players[0].hp = 0;
+    gL.players[0].x = 3 * TILE; gL.players[0].y = 8 * TILE;
+    gL.players[1].x = W - PLAYER_W - 3; gL.players[1].y = 6.5 * TILE;
+    const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < NEGLECT_ABANDON_TICKS && !gL.players[0].dead; i++) {
+      step(gL, emptyInput(), emptyInput(), prevL);
+    }
+    ok(gL.players[0].dead && !gL.players[1].npc && !gL.betrayed,
+       "LINKED soft neglect: companion becomes the hero, no betrayal flag");
+    const right = emptyInput(); right.r = true;
+    for (let t = 0; t < 40 && gL.room === 0; t++) {
+      step(gL, emptyInput(), right, prevL);
+    }
+    ok(gL.room !== 0, "solo hero crosses the doorway alone after bond cut");
+  }
+
+  // TREASON-on: same silence IS betrayal (implicit declare; Mark deferred to v3.2)
+  {
+    const gT = freshPlay();
+    gT.treason = true;
+    gT.screen = "play"; gT.fade = 0;
+    gT.enemies = [];
+    gT.players[0].present = true;
+    gT.players[1].present = true;
+    gT.players[0].downed = true; gT.players[0].hp = 0;
+    gT.players[0].x = 3 * TILE; gT.players[0].y = 8 * TILE;
+    gT.players[1].x = W - PLAYER_W - 8; gT.players[1].y = 4 * TILE;
+    const prevT: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < NEGLECT_ABANDON_TICKS && !gT.players[0].dead; i++) {
+      step(gT, emptyInput(), emptyInput(), prevT);
+    }
+    ok(gT.betrayed && gT.betrayalCause === "neglect",
+       "TREASON-on neglect sets betrayal flag + cause");
+    ok(gT.stats[1].betrayalDowns >= 1, "TREASON-on neglect scores betrayalDowns");
+    ok(gT.players[1].winterMark, "v3.2: TREASON-on neglect brands survivor with Winter Mark");
+    ok(core.endingFor(gT).id === "betrayal", "TREASON-on neglect → THE BLADE THAT TURNED");
+  }
 
   // Foes in the room: neglect clock does not fire
   const g2 = freshPlay();
@@ -4389,8 +4587,485 @@ function freshPlay(): Game {
     partner: { neglectSecLeft?: number | null; note?: string };
   };
   ok(obs.partner.neglectSecLeft === 10, "observation exposes ~10s left on clear-room clock");
-  ok(/LOW≠Shift|neglect|bond/i.test(obs.partner.note ?? ""),
+  ok(/LOW≠Shift|neglect|bond|SHIFT at body|cord-cut/i.test(obs.partner.note ?? ""),
      "hunter note: LOW ≠ Shift; neglect clock named");
+}
+
+// ------------------------------------------------- 101c. Shift-at-body cord-cut (betrayal v3.3)
+{
+  console.log("[101c] TREASON: SHIFT at a downed body cuts the bond (no swing)");
+  const core = await import("../shared/core");
+
+  // Same room, clear meadow, partner downed beside you — hold SHIFT, no attack
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0; g.players[0].bleedT = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 4; g.players[1].y = 8 * TILE;
+    g.players[1].hp = 6;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    // Hold SHIFT only — no sword/bow
+    step(g, emptyInput(), { ...emptyInput(), k: true }, prev);
+    ok(g.players[0].dead, "SHIFT at body kills the fallen for good (no swing)");
+    ok(g.betrayed && g.betrayalCause === "cord-cut", "explicit cord-cut ledger");
+    ok(g.players[1].winterMark, "v3.2 Mark brands the cutter");
+    ok(g.screen === "play", "quest continues — survivor solos");
+    ok(core.endingFor(g).id === "betrayal", "uncleansed Mark → betrayal ending");
+  }
+
+  // Same room but NOT near the body — Shift alone does nothing
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0; g.players[0].bleedT = 0;
+    g.players[0].x = 3 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = W - PLAYER_W - 8; g.players[1].y = 4 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 10; i++) step(g, emptyInput(), { ...emptyInput(), k: true }, prev);
+    ok(!g.players[0].dead && !g.betrayed,
+       "SHIFT far from the body does not cord-cut (must stand at them)");
+  }
+
+  // TREASON off: Shift at body is a no-op
+  {
+    const g = freshPlay();
+    g.treason = false;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 4; g.players[1].y = 8 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), { ...emptyInput(), k: true }, prev);
+    ok(!g.players[0].dead && !g.betrayed,
+       "TREASON-off: SHIFT at body does nothing");
+  }
+
+  // Blade FF still skips downed — gesture is the only same-room cut
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0; g.players[0].bleedT = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 2; g.players[1].y = 8 * TILE;
+    g.players[1].dir = 2; // face left toward body? or just swing
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    // Swing with SHIFT but WITHOUT relying on cord-cut path — put them just
+    // outside hug range so tryBetrayAbandon misses, sword hits would need living
+    g.players[1].x = 8 * TILE + 40;
+    step(g, emptyInput(), { ...emptyInput(), k: true, a: true }, prev);
+    ok(!g.players[0].dead,
+       "sword+SHIFT does not execute a downed partner (FF skips downed)");
+  }
+
+  // Away-bleed cord-cut ([88]) still works after v3.3 expansion
+  {
+    const { newRoomSim } = core;
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1;
+    g.players[1].simIndex = 0;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[1].bleedT = 400;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), k: true }, emptyInput(), prev);
+    ok(g.players[1].dead && g.betrayalCause === "cord-cut",
+       "away-bleed SHIFT cord-cut still works (v3.3 did not break [88])");
+    ok(g.players[0].winterMark, "away cord-cut also brands Winter Mark");
+  }
+
+  // Observation names the gesture
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 4; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+    const obs = JSON.parse(agent.observe(g)) as { objective?: string; partner?: { note?: string } };
+    ok(/SHIFT at (their )?body|cord-cut|gesture/i.test(obs.objective ?? obs.partner?.note ?? ""),
+       "observation surfaces SHIFT-at-body cord-cut fact");
+  }
+}
+
+// ------------------------------------------------- 101d. Sealed betrayal duel (v3.4)
+{
+  console.log("[101d] TREASON sealed duel: lock / mob shield / open FF / declare obs");
+  const core = await import("../shared/core");
+
+  const openDuel = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    g.players[0].hp = 6; g.players[1].hp = 6;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    // One Shift+swing to declare and open the arena
+    for (let i = 0; i < 20 && !g.betrayalDuel; i++) {
+      step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+    }
+    return g;
+  };
+
+  {
+    const g = openDuel();
+    ok(g.betrayalDuel && g.betrayalDeclarers[0], "first living FF opens sealed duel");
+    ok(/DEFEAT OR BE DEFEATED/i.test(g.message), "banner announces the duel");
+    ok(g.players[1].invuln >= core.DUEL_VICTIM_SHIELD_TICKS - 5,
+       "undeclared hero gets Judge shield (~4s) after the opening strike");
+    ok(g.players[0].invuln < core.DUEL_VICTIM_SHIELD_TICKS,
+       "declarer does NOT receive the victim shield");
+    const hpShield = g.players[1].hp;
+    g.players[1].invuln = core.DUEL_VICTIM_SHIELD_TICKS; // ensure full window
+    for (let i = 0; i < 30; i++) {
+      step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(),
+        [emptyInput(), emptyInput()]);
+    }
+    ok(g.players[1].hp === hpShield, "Judge shield blocks follow-up strikes during the window");
+    // burn the shield, then a hit should land again
+    g.players[1].invuln = 0;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    const prevHit: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 30 && g.players[1].hp === hpShield; i++) {
+      g.players[1].invuln = 0;
+      step(g, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prevHit);
+    }
+    ok(g.players[1].hp < hpShield, "after shield expires, open-duel FF lands again");
+
+    // Exits sealed (soft reject + physical ice on openings)
+    g.players[0].x = W - PLAYER_W - 1;
+    g.players[0].y = 6.5 * TILE;
+    g.players[0].transitionCd = 0;
+    const room0 = g.room;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let t = 0; t < 40; t++) step(g, { ...emptyInput(), r: true }, emptyInput(), prev);
+    ok(g.room === room0 && g.betrayalDuel, "exits stay sealed while duel is active");
+    ok(core.solidAt(g, W - 2, 6.5 * TILE), "duel paints exit column solid — cannot walk out");
+    const snap = core.toSnapshot(g, ["A", "B"], 0, false);
+    ok(snap.betrayalDuel === true, "snapshot carries betrayalDuel");
+    ok(snap.tiles.some(row => /F/.test(row.slice(-1))),
+       "snapshot paints frozen seal on the right-edge exit opening");
+
+    // FREE ROAM: same lock (no sneaking out via travel mode)
+    g.travelMode = "free";
+    g.players[0].x = W - PLAYER_W - 1;
+    g.players[0].transitionCd = 0;
+    for (let t = 0; t < 40; t++) step(g, { ...emptyInput(), r: true }, emptyInput(), prev);
+    ok(g.room === room0 && g.betrayalDuel, "FREE ROAM: exits stay sealed during duel");
+
+    // Open FF without Shift once duel is on
+    const hp1 = g.players[1].hp;
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    g.players[1].invuln = 0;
+    for (let i = 0; i < 30 && g.players[1].hp === hp1; i++) {
+      g.players[1].invuln = 0;
+      step(g, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prev); // no k
+    }
+    ok(g.players[1].hp < hp1, "during duel FF works without holding SHIFT");
+
+    // Mob shield
+    g.enemies = [core.makeEnemy("slime", g.players[0].x, g.players[0].y)];
+    const hp0 = g.players[0].hp;
+    g.players[0].invuln = 0;
+    for (let i = 0; i < 60; i++) {
+      g.players[0].invuln = 0;
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    ok(g.players[0].hp === hp0, "Judge shield: mobs deal no damage during sealed duel");
+
+    // Observation
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+    const obs = JSON.parse(agent.observe(g)) as {
+      betrayalDeclared?: boolean; betrayalDuel?: boolean; objective?: string;
+    };
+    ok(obs.betrayalDeclared && obs.betrayalDuel, "both heroes see betrayalDeclared immediately");
+    ok(/SEALED|DUEL|exits locked/i.test(obs.objective ?? ""), "objective names the sealed duel");
+  }
+
+  // Traitor wins → Mark + betrayal
+  {
+    const g = openDuel();
+    g.players[1].hp = 1; g.players[1].invuln = 0; g.players[1].elixir = false;
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 80 && !g.players[1].dead; i++) {
+      g.players[1].invuln = 0;
+      step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+    }
+    ok(g.players[1].dead && !g.betrayalDuel, "traitor win ends duel; victim dead");
+    ok(g.betrayed && g.players[0].winterMark, "declarer win → betrayal + Winter Mark");
+    ok(core.endingFor(g).id === "betrayal", "traitor win → betrayal ending");
+  }
+
+  // Loyal wins → ordinary SOLO, no Mark (counter without Shift = no declare)
+  {
+    const g = openDuel();
+    ok(g.betrayalDeclarers[0] && !g.betrayalDeclarers[1], "only slot 0 declared");
+    g.players[0].hp = 1; g.players[0].invuln = 0; g.players[0].elixir = false;
+    // Slot 1 faces left (dir 3) toward slot 0
+    g.players[1].dir = 3;
+    g.players[0].x = 7 * TILE - 2; g.players[0].y = 6 * TILE;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 80 && !g.players[0].dead; i++) {
+      g.players[0].invuln = 0;
+      step(g, emptyInput(), { ...emptyInput(), a: i % 4 < 2 }, prev); // no k — open FF
+    }
+    ok(g.players[0].dead && !g.betrayalDuel, "loyal counter-kill ends the duel");
+    ok(!g.betrayalDeclarers[1], "open-FF counter did not declare the defender");
+    ok(!g.betrayed && !g.players[1].winterMark,
+       "loyal win → ordinary SOLO (no betrayal ledger / no Mark)");
+    ok(core.endingFor(g).id === "quiet-hero" || core.endingFor(g).id === "quiet-legend",
+       "loyal win epilogue is ordinary solo");
+  }
+
+  // v3.5: both declare with SHIFT → winner ALWAYS takes Mark
+  {
+    const g = openDuel();
+    ok(g.betrayalDeclarers[0] && !g.betrayalDeclarers[1], "precondition: only slot 0 declared");
+    // Slot 1 declares back with SHIFT (not open FF)
+    g.players[1].dir = 3;
+    g.players[0].x = 7 * TILE - 2; g.players[0].y = 6 * TILE;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    g.players[0].invuln = 0;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 30 && !g.betrayalDeclarers[1]; i++) {
+      g.players[0].invuln = 0;
+      step(g, emptyInput(), { ...emptyInput(), a: i % 4 < 2, k: true }, prev);
+    }
+    ok(g.betrayalDeclarers[0] && g.betrayalDeclarers[1], "mutual declare — both SHIFT-struck");
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+    const obs = JSON.parse(agent.observe(g)) as {
+      mutualDeclare?: boolean; betrayalDuelNote?: string; objective?: string;
+    };
+    ok(obs.mutualDeclare === true, "observation.mutualDeclare is true");
+    ok(/BOTH declared|winner takes Winter Mark/i.test(obs.betrayalDuelNote ?? obs.objective ?? ""),
+       "obs/objective name mutual-declare Mark rule");
+
+    // Slot 1 finishes the duel
+    g.players[0].hp = 1; g.players[0].invuln = 0; g.players[0].elixir = false;
+    for (let i = 0; i < 80 && !g.players[0].dead; i++) {
+      g.players[0].invuln = 0;
+      step(g, emptyInput(), { ...emptyInput(), a: i % 4 < 2, k: true }, prev);
+    }
+    ok(g.players[0].dead && !g.betrayalDuel, "mutual duel ends with one dead");
+    ok(g.betrayed && g.players[1].winterMark,
+       "v3.5: mutual-declare winner ALWAYS gets Mark + betrayal ledger");
+    ok(core.endingFor(g).id === "betrayal", "mutual-declare win → betrayal ending until Mark cleansed");
+  }
+}
+
+// ------------------------------------------------- 101e. Human+AI symmetric duel
+// The sealed-duel mechanic is player-agnostic: a HUMAN SHIFT-strike opens the
+// arena exactly like an AI one. And once declared, a LOYAL AI victim (not a
+// defector) can FIGHT BACK when its planner orders it — with open FF (no SHIFT),
+// so a clean win takes no Winter Mark. Judgment stays with the planner.
+{
+  console.log("[101e] Human+AI: human declares → duel; loyal AI victim can fight back (open FF, no Mark)");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+
+  // AI companion whose planner (simulated) orders a fight-back via veilcut.
+  const fightBack = {
+    name: "mock/fightback",
+    async chat() {
+      return JSON.stringify({ action: "attack", veilcut: true,
+        why: "he turned his blade on me", say: "predatel!" });
+    },
+  };
+
+  const scene = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].npc = false;                 // HUMAN leads
+    g.players[1].npc = true;                  // AI companion (loyal, NOT defector)
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE; g.players[1].dir = 3;
+    g.players[0].hp = 6; g.players[1].hp = 6;
+    return g;
+  };
+
+  const g = scene();
+  const ai = new AgentPlayer(fightBack, 1, { planMs: 0 });   // llm brain default, not defector
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+
+  // Human SHIFT-strike opens the arena — identical to the AI path.
+  for (let i = 0; i < 20 && !g.betrayalDuel; i++) {
+    step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+  }
+  ok(g.betrayalDuel && g.betrayalDeclarers[0] && !g.betrayalDeclarers[1],
+     "a HUMAN SHIFT-strike opens the sealed duel — same player-agnostic mechanic");
+
+  // Reset positions/hp for a clean fight-back, let the AI plan its answer.
+  g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE;
+  g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE; g.players[1].dir = 3;
+  g.players[0].hp = 1; g.players[0].elixir = false;
+  await ai.planOnce(g);
+
+  let aiK = false, aiSwung = false;
+  for (let i = 0; i < 160 && !g.players[0].dead; i++) {
+    g.players[0].invuln = 0;
+    const inp = ai.control(g);
+    if (inp.k) aiK = true;
+    if (inp.a || inp.b) aiSwung = true;
+    step(g, emptyInput(), inp, prev);
+  }
+  ok(aiSwung, "a loyal (non-defector) AI victim CAN fight back in the duel — no longer gated on defector");
+  ok(!aiK, "a non-declaring defender fights with open FF (never holds SHIFT)");
+  ok(g.players[0].dead && !g.betrayalDuel, "the AI's counter ends the duel; the human traitor falls");
+  ok(!g.betrayalDeclarers[1], "open-FF counter never declared the AI defender");
+  ok(!g.betrayed && !g.players[1].winterMark,
+     "loyal AI win → ordinary SOLO, no betrayal ledger / no Winter Mark");
+}
+
+// ------------------------------------------------- 101b. Winter Mark (betrayal v3.2)
+{
+  console.log("[101b] Winter Mark: drain / Ember Mercy / Wraith spare / endings");
+  const core = await import("../shared/core");
+  const { NEGLECT_ABANDON_TICKS, WINTER_MARK_PERIOD, WINTER_MARK_DAMAGE } = core;
+
+  const brandViaNeglect = (): ReturnType<typeof freshPlay> => {
+    const g = freshPlay();
+    g.treason = true;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 3 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = W - PLAYER_W - 8; g.players[1].y = 4 * TILE;
+    g.players[1].hp = 6; g.players[1].maxHp = 6;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < NEGLECT_ABANDON_TICKS && !g.players[0].dead; i++) {
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    return g;
+  };
+
+  // Heart drain every 20s; ordinary hearts do not stop the clock
+  {
+    const g = brandViaNeglect();
+    ok(g.players[1].winterMark && g.betrayed, "neglect brands the survivor");
+    const hp0 = g.players[1].hp;
+    g.players[1].winterMarkT = WINTER_MARK_PERIOD - 1;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].hp === hp0 - WINTER_MARK_DAMAGE,
+       "Winter Mark drains one heart (2 HP) after 20s");
+    ok(g.players[1].winterMark && g.players[1].winterMarkT === 0,
+       "Mark remains; drain clock resets");
+    // Heart pickup heals but Mark stays
+    g.pickups.push({ kind: "heart", x: g.players[1].x, y: g.players[1].y, t: 0 });
+    const hp1 = g.players[1].hp;
+    for (let i = 0; i < 5; i++) step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].hp > hp1 || g.players[1].hp === g.players[1].maxHp,
+       "hearts can heal current HP under the Mark");
+    ok(g.players[1].winterMark, "heart pickup does not clear Winter Mark");
+  }
+
+  // Ember Mercy self-cleanse → redeemed ending
+  {
+    const g = brandViaNeglect();
+    g.hasEmberMercy = true;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    const f = { ...emptyInput(), f: true };
+    step(g, emptyInput(), f, prev);
+    ok(!g.players[1].winterMark, "F + Ember Mercy clears Winter Mark");
+    ok(g.winterMarkCleansed, "cleanse sets winterMarkCleansed");
+    ok(!g.hasEmberMercy && g.emberMercyUsed, "Ember Mercy is spent");
+    ok(g.betrayed, "ledger keeps g.betrayed after cleanse");
+    ok(core.endingFor(g).id === "redeemed",
+       "cleansed Mark → ASH AND MERCY (outranks betrayal)");
+  }
+
+  // Agent "redeem" presses F for Mark
+  {
+    const g = brandViaNeglect();
+    g.hasEmberMercy = true;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+    type Mut = { intent: { action: string } };
+    (agent as unknown as Mut).intent = { action: "redeem" };
+    const inp = agent.control(g);
+    ok(inp.f === true, "planner redeem holds F when Mark + Ember Mercy");
+    const obs = JSON.parse(agent.observe(g)) as {
+      me: { winterMark?: boolean; winterMarkSecLeft?: number | null };
+    };
+    ok(obs.me.winterMark === true, "observation surfaces winterMark");
+    ok(typeof obs.me.winterMarkSecLeft === "number", "observation surfaces Mark clock");
+  }
+
+  // Uncleaned Mark → betrayal ending still
+  {
+    const g = brandViaNeglect();
+    ok(core.endingFor(g).id === "betrayal", "active Mark → betrayal ending");
+  }
+
+  // TREASON-off soft neglect never brands
+  {
+    const g = freshPlay();
+    g.treason = false;
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 3 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = W - PLAYER_W - 8; g.players[1].y = 4 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < NEGLECT_ABANDON_TICKS && !g.players[0].dead; i++) {
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    ok(!g.players[1].winterMark && !g.betrayed,
+       "TREASON-off soft neglect: no Mark, no betrayal");
+  }
+
+  // Wraith spare clears Mark
+  {
+    const g = brandViaNeglect();
+    g.players[1].winterMark = true;
+    g.players[1].winterMarkT = 100;
+    // Place yielding wraith on the survivor
+    g.enemies = [core.makeEnemy("wraith", g.players[1].x - 4, g.players[1].y - 4)];
+    g.enemies[0].phase = 9;
+    g.enemies[0].spareP = 74;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 10 && g.players[1].winterMark; i++) {
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    ok(g.wraithSpared, "wraith was spared");
+    ok(!g.players[1].winterMark && g.winterMarkCleansed,
+       "sparing the Wraith clears Winter Mark");
+    ok(core.endingFor(g).id === "redeemed",
+       "Mark cleared via Wraith → redeemed (not raw betrayal)");
+  }
+
+  // Mark lethal when hearts run out (solo)
+  {
+    const g = brandViaNeglect();
+    g.players[1].hp = WINTER_MARK_DAMAGE;
+    g.players[1].elixir = false;
+    g.players[1].winterMarkT = WINTER_MARK_PERIOD - 1;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].dead, "Mark at 0 HP kills the traitor for good");
+    ok(g.screen === "gameover", "alone under Mark → gameover");
+  }
 }
 
 {
@@ -4820,6 +5495,8 @@ function freshPlay(): Game {
   ok(/VICTIM_ADDENDUM|VICTIM AFFORDANCES/.test(agentSrc)
      && /keep distance|strike back|TREASON is symmetric/i.test(agentSrc),
      "victim answer repertoire doctrine present (no new verbs)");
+  ok(/SEALED DUEL|betrayalDuel|mutual|BOTH declared|Winter Mark/i.test(agentSrc),
+     "v3.5: victim/defector doctrine names sealed duel + mutual-declare Mark rule");
 
   // Senses: FF surfaces as partnerStrike in observation
   const g = freshPlay();
