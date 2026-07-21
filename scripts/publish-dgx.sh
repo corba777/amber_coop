@@ -7,6 +7,7 @@ cd "$ROOT"
 
 echo "→ npm ci + build + selftest"
 npm ci
+npm run build:persona
 node scripts-build.mjs
 node dist/selftest.js
 

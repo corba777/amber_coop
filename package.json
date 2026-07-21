@@ -4,8 +4,10 @@
   "description": "Ilya and the Amber Blade \u2014 coop server with human or LLM player 2 (Ollama/OpenAI/Anthropic)",
   "main": "index.js",
   "scripts": {
+    "build:persona": "npm run build --prefix vendor/persona-composer",
+    "prebuild": "npm run build:persona",
     "build": "node scripts-build.mjs",
-    "test": "node scripts-build.mjs && node dist/selftest.js",
+    "test": "npm run build && node dist/selftest.js",
     "start": "node dist/server.js",
     "bench": "node dist/bench.js"
   },

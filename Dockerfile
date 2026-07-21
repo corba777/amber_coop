@@ -5,7 +5,11 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
-RUN npm ci
+# file:persona-composer exports ./dist — must exist before esbuild resolves it.
+# (.dockerignore / gitignore keep vendor dist out of the build context.)
+RUN npm ci --prefix vendor/persona-composer \
+ && npm run build --prefix vendor/persona-composer \
+ && npm ci
 
 COPY client ./client
 COPY server ./server
@@ -26,6 +30,7 @@ ENV PORT=8080
 
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
+COPY --from=builder /app/vendor/persona-composer/dist ./vendor/persona-composer/dist
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
