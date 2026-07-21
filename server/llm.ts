@@ -90,40 +90,78 @@ async function post(url: string, headers: Record<string, string>,
   }
 }
 
+/**
+ * Ollama chat body for the planner. Thinking models (Qwen3, …) default to
+ * filling `message.thinking` and often leave `message.content` empty when
+ * `num_predict` is small — every plan then parse-fails into a silent `follow`.
+ * Planner turns need the JSON intent, not a CoT trace → `think: false`.
+ */
+export function ollamaChatBody(
+  model: string,
+  system: string,
+  user: string,
+): Record<string, unknown> {
+  return {
+    model,
+    stream: false,
+    format: "json",
+    think: false,
+    options: { temperature: 0.6, num_predict: 200 },
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+}
+
 function ollama(cfg: LLMConfig): LLM {
   return {
     name: `ollama/${cfg.ollamaModel}`,
     async chat(system, user) {
-      const data = await post(`${cfg.ollamaUrl}/api/chat`, {}, {
-        model: cfg.ollamaModel,
-        stream: false,
-        format: "json",
-        options: { temperature: 0.6, num_predict: 200 },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }, cfg.timeoutMs) as { message?: { content?: string } };
+      const data = await post(
+        `${cfg.ollamaUrl}/api/chat`, {},
+        ollamaChatBody(cfg.ollamaModel, system, user),
+        cfg.timeoutMs,
+      ) as { message?: { content?: string } };
       return data.message?.content ?? "";
     },
   };
 }
 
+/**
+ * GPT-5 / o-series reasoning models reject the legacy `max_tokens` field (they
+ * want `max_completion_tokens`) and only accept the default temperature. Sending
+ * the classic params 400s every call, so the agent falls back to a silent
+ * `follow` — the "walks but never speaks" symptom. Detect the family by name and
+ * budget extra completion tokens (reasoning tokens count against the cap).
+ */
+export function openaiRestrictedParams(model: string): boolean {
+  return /^(o[0-9]|gpt-5|gpt-6)/i.test(model);
+}
+
 function openai(cfg: LLMConfig): LLM {
+  const restricted = openaiRestrictedParams(cfg.openaiModel);
   return {
     name: `openai/${cfg.openaiModel}`,
     async chat(system, user) {
+      const body: Record<string, unknown> = {
+        model: cfg.openaiModel,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      };
+      if (restricted) {
+        // reasoning families: new token field, no custom temperature, wider cap
+        body.max_completion_tokens = 1000;
+      } else {
+        body.max_tokens = 200;
+        body.temperature = 0.6;
+      }
       const data = await post("https://api.openai.com/v1/chat/completions",
-        { Authorization: `Bearer ${cfg.openaiKey}` }, {
-          model: cfg.openaiModel,
-          max_tokens: 200,
-          temperature: 0.6,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-        }, cfg.timeoutMs) as { choices?: { message?: { content?: string } }[] };
+        { Authorization: `Bearer ${cfg.openaiKey}` }, body,
+        cfg.timeoutMs) as { choices?: { message?: { content?: string } }[] };
       return data.choices?.[0]?.message?.content ?? "";
     },
   };

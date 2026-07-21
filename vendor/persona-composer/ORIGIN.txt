@@ -1,0 +1,4 @@
+upstream: https://github.com/corba777/persona_composer
+commit: e15868a72fc8a722edb7f2141a38891261ae091f
+path: ts/
+license: MIT

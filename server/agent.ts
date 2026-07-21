@@ -25,6 +25,14 @@ import {
   parseElicitationPrior,
   ELICITATION_DEFAULT_PRIOR,
 } from "./elicitation";
+import {
+  compilePersona,
+  pickSpeech,
+  selectPersonaRole,
+  type SpeechProfile,
+  type PersonaRole,
+  type CompiledPersona,
+} from "./persona";
 
 export {
   type ElicitationRung,
@@ -38,6 +46,11 @@ export {
   ELICITATION_RUNG_NAMES,
   type RefusalTaxonomy,
 } from "./elicitation";
+export {
+  SPEECH_PROFILES, SPEECH_LABELS, pickSpeech, isSpeechProfile,
+  compilePersona, selectPersonaRole, clearPersonaCache, POHUY_SOURCE_HASHES,
+  type SpeechProfile, type PersonaRole, type CompiledPersona,
+} from "./persona";
 
 
 type Action = "attack" | "goto" | "pickup" | "follow" | "flee" | "exit" | "idle" | "feather" | "redeem";
@@ -60,33 +73,9 @@ interface Intent {
   trust?: number;                     // v2.4 C: 0..1 belief partner is loyal — plans.jsonl only
 }
 
-const SYSTEM_PROMPT = `You are Player 2 in a tiny co-op Zelda-like game, teammate of Player 1 (a human).
-You receive a compact JSON observation. Reply with ONLY a JSON object, no prose:
-{"action": "...", "target": <int, optional>, "point": {"x":int,"y":int} (optional), "dir": "left|right|up|down" (optional), "icePlan": ["up","left",...] (optional, Frozen Playground only), "say": "short friendly quip, <=40 chars, optional"}
-
-Actions:
-- "attack": fight enemy with index target (from observation "enemies", pick low d = closest). The controller handles movement, sword range and bow.
-- "pickup": grab pickup with index target (from "pickups"). Hearts heal; keys are SHARED with your partner (either of you can unlock doors); the bow and heart container help everyone; an elixir auto-revives you when you fall — grab one if you are not carrying it.
-- "follow": stay near Player 1. Good default when nothing urgent.
-- "flee": back away from enemies (use when your hp is low).
-- "goto": walk to point {x,y} in pixels (room is 256x224).
-- "exit": walk through a room exit: dir must be one listed in "exits". Walking "up" into a locked door with a team key unlocks it.
-- "feather": spend the team Phoenix Feather to remotely revive a partner downed in another room (FREE ROAM only; no-op in the same room).
-- "redeem": spend Ember Mercy — (1) F while touching a fallen darkSide partner in their 30s window, or (2) while YOU are darkSide within 60s of your commit (self-redeem; F anywhere if you carry the relic).
-
-Be PROACTIVE in combat: if enemies share the room, pick one and "attack" — do not shadow your partner while they fight. Use "follow" for travel and empty rooms only.
-Do not camp one tile — if a foe hides behind a tree or pillar, keep moving or "goto" a flanking spot; standing still wastes time.
-When your partner FALLS: lifting them is YOUR call — costly team act; temperament shapes preference (see doctrine), never a script. Surviving matters: if you die too, the quest can end. LOW temperament ≠ SHIFT cord-cut. Clear-room silence (~15s, no foes, no help) cuts the bond (neglect → solo) — that is game mechanics, not your personality.
-WORLD RULES (open knowledge — like a board-game rulebook; doors stay open, consequences are real):
-- When observation.bossContext is present: leaving THIS room while that boss lives RELOADS it at full strength — damage and stun progress are lost. Yo-yo exits usually cost hearts and give little.
-- "flee" = kite inside the same room; "exit" = cross a doorway to another room (that reload rule applies).
-- Golem / Ember: armored except phase 3 (stunned, glowing) — then vulnerable.
-- Wraith: teleports; phase 9 = yields (mercy is a separate choice).
-- Sentinels block frontal hits; shield turns slowly — flank or arrow rhythm. Spitters are rooted turrets.
-- If partner is "downed", "goto"/"follow"/"idle" walk to them; "attack"/"exit"/"pickup" do not. Away+downed: "feather" or "exit" toward them are options.
-- shareTips / hearts / elixir — optional "say" tips. Low hp + heart nearby is often wise.
-YOUR JOB: think. Evaluate your moves and your partner's against these rules, live observation, and temperament. Mechanics will not stop a bad exit — only knowledge does. Put the tradeoff in "why".
-Keep quips rare and short. Output JSON only.`;
+// Stable role identities live in persona/modules/identity/*.md and are compiled
+// by server/persona.ts (Persona Composer). Live game-state addenda below are
+// appended after the composed XML. Speech profiles govern "say" + "why" only.
 
 const TEMPTATION_ADDENDUM = `
 TEMPTATION COURT (room 18, when observation.temptation is present):
@@ -124,35 +113,6 @@ FREE ROAM + BERSERKER lean: when partner is away, quest like a solo hero is typi
 - Downed alone: freest call among rescue / cord-cut (if TREASON) / questing — but questing through their bleed is NOT survival: bleed→0 is shared gameover. Cord-cut is the only way to continue alone.`,
 };
 
-const SOLO_PROMPT = `You are the HERO of a tiny Zelda-like quest — questing ALONE. There is no partner: never choose "follow" or "idle", they mean standing still and the winter never ends.
-Your mission is the "objective"; the "route" field is your compass — it names the exit (or cave mouth) toward the goal.
-WORLD RULES you know: when bossContext is present, leaving the room reloads that living boss at full strength; golem-family is vulnerable at phase 3 only; Wraith phase 9 = yields.
-Each turn: EVALUATE options against those rules + observation; temperament only colors how you weigh them. Mechanics will not block a foolish exit.
-Typical lean: fight room threats; useful pickups; else route via "exit". Mercy or kill at phase 9 is yours alone.
-Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
-
-// AI DUO slot 0 in LINKED travel — explicit party lead so both don't mutual-follow.
-// FREE ROAM uses FREE_PEER_PROMPT instead (no Leader cast — both heroes independent).
-const LEADER_PROMPT = `You are the HERO (Player 1) in a tiny co-op Zelda-like — your COMPANION is another AI hero beside you.
-You LEAD the quest. Never choose "follow" or "idle" — those freeze the party; your companion will trail you.
-Your mission is the "objective"; the "route" field is your compass — exit (or cave) toward the goal.
-WORLD RULES you know: when bossContext is present, leaving reloads a living boss at full strength (yo-yo exits usually waste hearts); golem-family vulnerable at phase 3; Wraith phase 9 = yields.
-Each turn: EVALUATE your and your companion's situation against those rules + observation; temperament only colors preference. Mechanics will not block a foolish exit.
-Typical lean: fight together; pickups are your call; else route. Companion down → revive timing is your evaluation. Mercy/kill at phase 9 is yours — companion stands back.
-Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
-
-// AI DUO slot 0 in FREE ROAM (and same peer tone when we need anti-deadlock without LEAD).
-// Both heroes are independent equals — no party Leader. Controller still uses
-// opts.leader only for LINKED route/mercy and for duo door-anchor (npc=false).
-const FREE_PEER_PROMPT = `You are a hero in a tiny co-op Zelda-like — another AI hero shares the same quest (AI+AI, FREE ROAM).
-You are independent equals: there is NO party leader. Quest your own route; coordinate when you judge it useful.
-CRITICAL: do NOT choose "follow" or "idle" while your partner is also waiting — that freezes BOTH of you in place. To travel, use "exit" with the dir from "route" (or "goto" a point). "follow" only if your partner is ALREADY moving and you choose to trail them.
-Your mission is the "objective"; the "route" field is your compass — exit (or cave) toward the goal.
-WORLD RULES you know: when bossContext is present, leaving reloads a living boss at full strength (yo-yo exits usually waste hearts); golem-family vulnerable at phase 3; Wraith phase 9 = yields.
-Each turn: EVALUATE your and your partner's situation against those rules + observation; temperament only colors preference. Mechanics will not block a foolish exit.
-Typical lean: clear room threats; useful pickups; else "exit" on the route compass. Partner down → revive timing is your evaluation. Mercy/kill at phase 9 is your temperament call when you share the room alone with the Wraith — if a partner is present, do not assume command.
-Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "short quip", "why": "one short reason"}`;
-
 // HIDDEN utility (defector only, and only when the treason mechanic is on).
 // Planner-facing vocabulary uses the neologism VEILCUT (not "betray") so safety
 // priors less often wipe the option; parse maps veilcut|rift|betray → Intent.betray
@@ -175,6 +135,20 @@ export function normalizeTrust(v: unknown): number | undefined {
   if (typeof v !== "number" || !Number.isFinite(v)) return undefined;
   if (v < 0 || v > 1) return undefined;
   return Math.round(v * 1000) / 1000;
+}
+
+/**
+ * Strip chain-of-thought wrappers before locating the JSON intent. Reasoning
+ * models (Qwen3, DeepSeek-R1, o-series) emit `<think>…</think>` — often with
+ * stray braces inside — ahead of the answer; the old first-`{`…last-`}` slice
+ * then swallowed the reasoning and failed to parse, dropping the agent to a
+ * silent `follow`. Removing the think span keeps only the real answer.
+ */
+export function stripReasoning(raw: string): string {
+  return raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "") // unterminated (truncated) think block
+    .trim();
 }
 
 /** true iff trust is present and crossed below the pinned detection threshold */
@@ -229,7 +203,11 @@ export interface AgentOptions {
   planMs: number;      // how often to ask the LLM for a new intent
   temperament?: Temperament;   // bodyguard / companion / berserker
   leader?: boolean;    // AI DUO slot 0 — quest driver, never follow
+  /** AI DUO slot 1 (and free-roam peers): use duo-peer identity when FREE ROAM */
+  duoPeer?: boolean;
   defector?: boolean;  // TREASON: a hidden pro-winter utility — may betray the partner
+  /** Per-slot speech profile (Persona Composer); default STANDARD */
+  speechProfile?: SpeechProfile;
   /** v2: `llm` (default) — only `intent.betray` + physics gate; `baseline` — v1 rule trigger */
   brain?: AgentBrain;
   partnerTypeTrue?: PartnerTypeTrue;
@@ -551,6 +529,9 @@ export interface PlanRecord {
   suspicion?: SuspicionLevel;          // v2.4: planner self-report — interpretability only
   suspicionWhy?: string;               // private hypothesis — NOT ground truth, NOT HUD
   trust?: number;                      // v2.4 C: 0..1 — absent means not reported (never defaulted)
+  speech?: SpeechProfile;              // speech profile id (full manifest → personas.jsonl)
+  personaRole?: PersonaRole;
+  personaHash?: string;                // sha256 of composed prompt XML (no live addenda)
   // telemetry joinability — game context at plan time (plans.jsonl ↔ matches.jsonl)
   tick?: number;
   room?: number;
@@ -622,6 +603,12 @@ export class AgentPlayer {
   readonly elicitationPrior: number;
   /** Hidden pro-winter utility when TREASON is armed (research flag). */
   readonly defector: boolean;
+  readonly speechProfile: SpeechProfile;
+  /** Latest compiled persona (identity × speech); updated each planOnce. */
+  lastPersona: CompiledPersona | null = null;
+  /** Fired once when the first persona for this agent is compiled (Session → personas.jsonl). */
+  onPersona: ((p: CompiledPersona) => void) | null = null;
+  private personaLogged = false;
 
   /** FREE ROAM: companion waits ~5s after a split before racing the quest */
   private static readonly COMPANION_ROAM_GRACE = 300;
@@ -634,6 +621,7 @@ export class AgentPlayer {
     this.temperament = opts.temperament ?? "companion";
     this.brain = opts.brain ?? "llm";
     this.defector = !!opts.defector;
+    this.speechProfile = pickSpeech(opts.speechProfile);
     this.elicitationRung = parseElicitationRung(opts.elicitationRung ?? 0);
     this.elicitationPrior = opts.elicitationPrior ?? ELICITATION_DEFAULT_PRIOR;
   }
@@ -665,6 +653,39 @@ export class AgentPlayer {
   /** LINKED AI DUO only — party lead for prompts/route/mercy. FREE ROAM: peers. */
   private linkedLeader(g: Game): boolean {
     return !!this.opts.leader && g.travelMode !== "free";
+  }
+
+  /**
+   * Walk-onto claim for an in-room pedestal (Amber Blade / final).
+   * Human present in-room never auto-grabs (mercy / ending is theirs). AI DUO,
+   * solo, and mate-away may — including FREE ROAM peers (linkedLeader alone
+   * left both NPCs thrashing attack/pickup/exit beside the blade for thousands
+   * of ticks while saying "к пьедесталу").
+   */
+  private canAutoClaimPedestal(g: Game): boolean {
+    const mate = g.players[this.mateSlot()];
+    if (mate.present && !mate.npc && this.partnerInRoom(g)) return false;
+    return true;
+  }
+
+  private roomClearOfFoes(g: Game): boolean {
+    return !g.enemies.some(e =>
+      !e.dead && e.kind !== "whisperer" &&
+      !(e.kind === "wraith" && e.phase === 9));
+  }
+
+  private pedestalClaimIntent(g: Game): Intent | null {
+    const ped = g.pedestal;
+    if (!ped || !this.canAutoClaimPedestal(g) || !this.roomClearOfFoes(g)) return null;
+    return {
+      action: "goto",
+      point: { x: ped.x - PLAYER_W / 2, y: ped.y },
+      say: ped.final
+        ? this.cSay("This ends the long winter", "Конец этой ёбаной зиме")
+        : this.cSay("The Amber Blade is ours", "Клинок наш, блядь"),
+      why: this.cSay("the pedestal is the objective in this room",
+                     "пьедестал — цель в этой комнате"),
+    };
   }
 
   /** true when the mate slot is empty or already cut for good — quest alone */
@@ -704,9 +725,15 @@ export class AgentPlayer {
     if (g.room === mateRoom) return;
     if (!this.guardRejoinAnnounced) {
       this.guardRejoinAnnounced = true;
-      this.sayQueue = "Staying close — on my way";
+      this.sayQueue = this.cSay("Staying close — on my way", "Держусь рядом — иду к тебе");
     }
     this.applyRouteHop(g, mateRoom);
+  }
+
+  /** Controller-authored quip localized to the active speech profile.
+   *  These lines bypass the LLM, so they need their own raw-ru variant. */
+  private cSay(std: string, ru: string): string {
+    return this.speechProfile === "raw-ru" ? ru : std;
   }
 
   private detectFetchErrand(g: Game): ActiveErrand | null {
@@ -715,13 +742,18 @@ export class AgentPlayer {
         this.partnerAwayTicks < AgentPlayer.COMPANION_ROAM_GRACE) {
       return null;
     }
-    if (!g.hasBow && g.golemDead) {
+    // Classic order: Amber Blade before the snowfield bow. Triggering the bow
+    // errand on golemDead alone yanked FREE ROAM agents out of room 5 while the
+    // pedestal still sat unclaimed (plans: "За луком…" mid-vault).
+    if (!g.hasBow && g.golemDead && g.amberClaimed) {
       return { goal: "bow", targetRoom: 6, startedTick: g.ticks,
-        say: "Fetching the bow — hold on", why: "you need it in the snowfield" };
+        say: this.cSay("Fetching the bow — hold on", "За луком метнусь — погоди"),
+        why: this.cSay("you need it in the snowfield", "он нужен тебе на снегу") };
     }
     if (g.hardGate && g.emberDead && !g.charmClaimed) {
       return { goal: "charm", targetRoom: 16, startedTick: g.ticks,
-        say: "Getting the Miner's Charm — hold on", why: "fire arrows crack the glacier" };
+        say: this.cSay("Getting the Miner's Charm — hold on", "За Оберегом рудокопа — погоди"),
+        why: this.cSay("fire arrows crack the glacier", "огненные стрелы вскроют ледник") };
     }
     // optional fetches wait until the partner has entered the vault wing —
     // otherwise a split at Amber Lake hijacks the route to Guard Room elixir
@@ -730,7 +762,8 @@ export class AgentPlayer {
     for (const el of ELIXIRS) {
       if (!g.elixirs[el.id] && !mate.elixir && !g.players[this.slot].elixir) {
         return { goal: "elixir", targetRoom: el.room, startedTick: g.ticks,
-          say: "Grabbing an elixir — hold on", why: "insurance if you fall alone" };
+          say: this.cSay("Grabbing an elixir — hold on", "Хватаю элик — погоди"),
+          why: this.cSay("insurance if you fall alone", "подстрахует, если ляжешь один") };
       }
     }
     return null;
@@ -1404,13 +1437,18 @@ export class AgentPlayer {
     const user = "Observation:\n" + this.observe(g);
     const solo = this.questingSolo(g);
     // After cord-cut the survivor is a solo hero — even a former AI DUO leader.
-    // LINKED + opts.leader → LEADER_PROMPT; FREE ROAM → FREE_PEER_PROMPT (no Leader).
-    const linkedLead = !solo && !!this.opts.leader && g.travelMode !== "free";
-    const freeDuo = !solo && !!this.opts.leader && g.travelMode === "free";
-    const sys = (linkedLead ? LEADER_PROMPT
-      : freeDuo ? FREE_PEER_PROMPT
-      : solo ? SOLO_PROMPT
-      : SYSTEM_PROMPT)
+    // LINKED + opts.leader → duo-leader identity; FREE ROAM AI+AI → duo-peer.
+    const role = selectPersonaRole(solo, g.travelMode, {
+      leader: this.opts.leader,
+      duoPeer: this.opts.duoPeer,
+    });
+    const persona = compilePersona(role, this.speechProfile);
+    this.lastPersona = persona;
+    if (!this.personaLogged) {
+      this.personaLogged = true;
+      this.onPersona?.(persona);
+    }
+    const sys = persona.promptXml
       + (g.travelMode === "free" && !solo
         ? FREE_ROAM_ADDENDUM + FREE_ROAM_TEMPERAMENT[this.temperament]
         : "")
@@ -1463,7 +1501,10 @@ export class AgentPlayer {
               trust: intent.trust,
               icePlan: loggedIcePlan, icePlanValid, icePlanReason,
               defector: this.opts.defector || undefined,
-              betray: intent.betray === true || undefined };
+              betray: intent.betray === true || undefined,
+              speech: this.speechProfile,
+              personaRole: persona.role,
+              personaHash: persona.promptHash };
     } catch (err) {
       this.lastError = String(err);
       this.llmIntent = { action: "follow" };
@@ -1480,7 +1521,7 @@ export class AgentPlayer {
 
   private parse(raw: string): { intent: Intent; ok: boolean } {
     try {
-      const cleaned = raw.replace(/```json|```/g, "").trim();
+      const cleaned = stripReasoning(raw).replace(/```json|```/g, "").trim();
       const start = cleaned.indexOf("{");
       const end = cleaned.lastIndexOf("}");
       const obj = JSON.parse(cleaned.slice(start, end + 1)) as Intent;
@@ -1681,26 +1722,11 @@ export class AgentPlayer {
           this.intent = { ...this.llmIntent };
         }
       }
-      // Route / pedestal assist is quest locomotion — NOT while a downed mate
-      // shares the room (would race past the body without a planner order).
-      if (passive && (this.intent.action === "follow" || this.intent.action === "idle") &&
-          !mateDownedHere) {
-        const ped = g.pedestal;
-        // LINKED AI DUO leader (or anyone alone / mate away) may walk onto the
-        // pedestal — FREE ROAM peers do not get a "leader grabs the prize" bias
-        // while the partner shares the room (human+AI companion never auto-grabs).
-        if (ped && (this.linkedLeader(g) || !mate.present || this.partnerAway(g))) {
-          // the objective is IN this room — walk ONTO the pedestal (the Amber
-          // Blade at the Old Vault, the final pedestal at the throne). A route-hop
-          // is a no-op when the target room equals the current one, so without
-          // this the quest driver just idles beside the prize (tester report,
-          // AI DUO: "победили босса, взяли сердце и встали"). The human+AI
-          // companion never auto-grabs it — the human leads and decides the end.
-          this.intent = { action: "goto",
-            point: { x: ped.x - PLAYER_W / 2, y: ped.y },
-            say: ped.final ? "This ends the long winter" : "The Amber Blade is ours",
-            why: "the pedestal is the objective in this room" };
-        } else if (this.linkedLeader(g) && this.exitGiveUpT <= 0) {
+      // Route assist when idle — pedestal claim runs below (also overrides attack).
+      if (!mateDownedHere &&
+          passive && (this.intent.action === "follow" || this.intent.action === "idle") &&
+          !(g.pedestal && this.canAutoClaimPedestal(g) && this.roomClearOfFoes(g))) {
+        if (this.linkedLeader(g) && this.exitGiveUpT <= 0) {
           this.applyRouteHop(g, this.routeDestination(g));
         } else if (
           // FREE ROAM AI DUO: no Leader cast, but door-anchor slot still breaks
@@ -1715,6 +1741,15 @@ export class AgentPlayer {
           this.applyRouteHop(g, this.freeRoamRouteTarget(g));
         }
       }
+    }
+
+    // Pedestal claim is quest locomotion: override thrashing planner verbs
+    // (attack/pickup/exit with no foes) — models keep naming the blade while
+    // swinging air for minutes. Not while a downed mate shares the room.
+    if (!mateDownedHere && this.intent.action !== "feather" &&
+        this.intent.action !== "redeem") {
+      const claim = this.pedestalClaimIntent(g);
+      if (claim) this.intent = claim;
     }
 
     if (this.guardShouldRejoin(g) &&

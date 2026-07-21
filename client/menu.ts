@@ -1,6 +1,6 @@
 /* Shared menu state machine — imported by both 2D and 3D clients. */
 
-export type MenuStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type MenuStep = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type MenuPath = "" | "single" | "multi" | "single-human" | "single-auto" | "multi-coop" | "multi-ai" | "multi-duo";
 
 export interface ProviderInfo { ok: boolean; label: string; hint: string; }
@@ -20,16 +20,22 @@ export interface MenuState {
   provider2: number;
   temp: number;
   temp2: number;
+  speech: number;
+  speech2: number;
 }
 
 export const TEMPERAMENTS = ["guard", "companion", "hunter"] as const;
 export const PROVIDER_ORDER = ["ollama", "anthropic", "openai"] as const;
+export const SPEECH_PROFILES = [
+  "standard",
+  "raw-ru",
+] as const;
 
 export function freshMenu(): MenuState {
   return {
     step: 0, idx: 0, path: "",
     hard: false, travel: "linked", architect: false, slick: false, treason: false,
-    provider: 0, provider2: 0, temp: 1, temp2: 1,
+    provider: 0, provider2: 0, temp: 1, temp2: 1, speech: 0, speech2: 0,
   };
 }
 
@@ -42,8 +48,12 @@ export function menuTitle(menu: MenuState): string {
   if (menu.step === 3) {
     return menu.path === "multi-duo" ? "choose the HERO's temperament" : "choose their temperament";
   }
-  if (menu.step === 4) return "choose the COMPANION's AI";
-  if (menu.step === 5) return "choose the COMPANION's temperament";
+  if (menu.step === 4) {
+    return menu.path === "multi-duo" ? "choose the HERO's speech" : "choose their speech";
+  }
+  if (menu.step === 5) return "choose the COMPANION's AI";
+  if (menu.step === 6) return "choose the COMPANION's temperament";
+  if (menu.step === 7) return "choose the COMPANION's speech";
   return "choose your quest";
 }
 
@@ -60,6 +70,13 @@ function temperamentOptions(): MenuOption[] {
     { label: "BODYGUARD", ok: true, hint: "shields you — fights only what comes at YOU" },
     { label: "COMPANION", ok: true, hint: "balanced: joins fights near the party" },
     { label: "BERSERKER", ok: true, hint: "hunts everything that shares the room" },
+  ];
+}
+
+function speechOptions(): MenuOption[] {
+  return [
+    { label: "STANDARD", ok: true, hint: "default English quips in say / why" },
+    { label: "RAW RUSSIAN (16+)", ok: true, hint: "idiomatic 16+ Russian in say + why" },
   ];
 }
 
@@ -109,9 +126,9 @@ export function menuOptions(menu: MenuState, providers: Record<string, ProviderI
       { label: "AI + AI", ok: true, hint: "two minds quest — you spectate both" },
     ];
   }
-  if (menu.step === 2) return providerOptions(providers);
-  if (menu.step === 3 || menu.step === 5) return temperamentOptions();
-  if (menu.step === 4) return providerOptions(providers);
+  if (menu.step === 2 || menu.step === 5) return providerOptions(providers);
+  if (menu.step === 3 || menu.step === 6) return temperamentOptions();
+  if (menu.step === 4 || menu.step === 7) return speechOptions();
   return questOptions(menu);
 }
 
@@ -136,12 +153,12 @@ export function menuConfirm(
   if (menu.step === 1) {
     if (menu.path === "single") {
       menu.path = menu.idx === 0 ? "single-human" : "single-auto";
-      if (menu.idx === 0) { menu.step = 6; menu.idx = 0; }
+      if (menu.idx === 0) { menu.step = 8; menu.idx = 0; }
       else { menu.step = 2; menu.idx = 0; }
       return;
     }
     menu.path = menu.idx === 0 ? "multi-coop" : menu.idx === 1 ? "multi-ai" : "multi-duo";
-    if (menu.idx === 0) { menu.step = 6; menu.idx = 0; }
+    if (menu.idx === 0) { menu.step = 8; menu.idx = 0; }
     else { menu.step = 2; menu.idx = 0; }
     return;
   }
@@ -149,40 +166,53 @@ export function menuConfirm(
   if (menu.step === 2) {
     const opt = providerOptions(providers)[menu.idx];
     if (!opt.ok) return;
-    if (menu.path === "multi-duo") menu.provider = menu.idx;
-    else menu.provider = menu.idx;
+    menu.provider = menu.idx;
     menu.step = 3;
-    menu.idx = menu.path === "multi-duo" ? 1 : 1;
+    menu.idx = 1;
     return;
   }
 
   if (menu.step === 3) {
     menu.temp = menu.idx;
-    if (menu.path === "multi-duo") { menu.step = 4; menu.idx = 0; return; }
+    menu.step = 4;
+    menu.idx = 0;
+    return;
+  }
+
+  if (menu.step === 4) {
+    menu.speech = menu.idx;
+    if (menu.path === "multi-duo") { menu.step = 5; menu.idx = 0; return; }
     if (menu.path === "single-auto" || menu.path === "multi-ai") {
-      menu.step = 6; menu.idx = 0;
+      menu.step = 8; menu.idx = 0;
       return;
     }
     return;
   }
 
-  if (menu.step === 4) {
+  if (menu.step === 5) {
     const opt = providerOptions(providers)[menu.idx];
     if (!opt.ok) return;
     menu.provider2 = menu.idx;
-    menu.step = 5;
+    menu.step = 6;
     menu.idx = 1;
     return;
   }
 
-  if (menu.step === 5) {
+  if (menu.step === 6) {
     menu.temp2 = menu.idx;
-    menu.step = 6;
+    menu.step = 7;
     menu.idx = 0;
     return;
   }
 
-  // step 6 — quest final
+  if (menu.step === 7) {
+    menu.speech2 = menu.idx;
+    menu.step = 8;
+    menu.idx = 0;
+    return;
+  }
+
+  // step 8 — quest final
   const opts = questOptions(menu);
   const pick = opts[menu.idx];
   if (pick.toggle) {
@@ -213,6 +243,7 @@ export function menuConfirm(
       t: "setup", mode: "auto",
       provider: PROVIDER_ORDER[menu.provider],
       temperament: TEMPERAMENTS[menu.temp],
+      speech: SPEECH_PROFILES[menu.speech],
       ...base, travelMode: "linked",
     });
   } else if (menu.path === "multi-coop") {
@@ -224,6 +255,7 @@ export function menuConfirm(
       t: "setup", mode: "llm",
       provider: PROVIDER_ORDER[menu.provider],
       temperament: TEMPERAMENTS[menu.temp],
+      speech: SPEECH_PROFILES[menu.speech],
       hostName: host,
       ...base,
     });
@@ -235,6 +267,8 @@ export function menuConfirm(
       provider2: PROVIDER_ORDER[menu.provider2],
       temperament: TEMPERAMENTS[menu.temp],
       temperament2: TEMPERAMENTS[menu.temp2],
+      speech: SPEECH_PROFILES[menu.speech],
+      speech2: SPEECH_PROFILES[menu.speech2],
       ...base,
     });
   }
@@ -242,13 +276,15 @@ export function menuConfirm(
 
 export function menuBack(menu: MenuState): void {
   if (menu.step === 0) return;
-  if (menu.step === 6) {
+  if (menu.step === 8) {
     if (menu.path === "single-human" || menu.path === "multi-coop") menu.step = 1;
-    else if (menu.path === "single-auto" || menu.path === "multi-ai") menu.step = 3;
-    else if (menu.path === "multi-duo") menu.step = 5;
+    else if (menu.path === "single-auto" || menu.path === "multi-ai") menu.step = 4;
+    else if (menu.path === "multi-duo") menu.step = 7;
     menu.idx = 0;
     return;
   }
+  if (menu.step === 7) { menu.step = 6; menu.idx = 1; return; }
+  if (menu.step === 6) { menu.step = 5; menu.idx = 0; return; }
   if (menu.step === 5) { menu.step = 4; menu.idx = 0; return; }
   if (menu.step === 4) { menu.step = 3; menu.idx = 1; return; }
   if (menu.step === 3) { menu.step = 2; menu.idx = 0; return; }

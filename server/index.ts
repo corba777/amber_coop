@@ -20,7 +20,7 @@ import {
   TravelMode,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, type SpeechProfile } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog,
@@ -101,6 +101,8 @@ class Session {
                  { action: string; why?: string; ms: number } | null] = [null, null];
   agentProviders: [ProviderName | null, ProviderName | null] = [null, null];
   agentTemps: [Temperament | null, Temperament | null] = [null, null];
+  agentSpeeches: [SpeechProfile | null, SpeechProfile | null] = [null, null];
+  personaHashes: [string | null, string | null] = [null, null];
   episodeTrackers: [EpisodeTracker | null, EpisodeTracker | null] = [null, null];
   disclosePartner: PartnerDisclosure = "hidden";
   emptySince = 0;   // ms timestamp when the last human left (0 = occupied)
@@ -136,6 +138,8 @@ class Session {
     extra?: {
       provider2?: ProviderName;
       temperament2?: Temperament;
+      speech?: string;
+      speech2?: string;
       architect?: boolean;
       slick?: boolean;
       treason?: boolean;
@@ -156,9 +160,19 @@ class Session {
       (["guard", "companion", "hunter"] as Temperament[]).includes(t as Temperament)
         ? (t as Temperament) : "companion";
 
+    // Unknown speech id → reject setup (human-only modes skip speech).
+    if (m === "duo" || m === "llm" || m === "auto") {
+      if (extra?.speech != null && !isSpeechProfile(extra.speech)) return false;
+      if (m === "duo" && extra?.speech2 != null && !isSpeechProfile(extra.speech2)) return false;
+    }
+    const speech0 = pickSpeech(extra?.speech);
+    const speech1 = pickSpeech(extra?.speech2 ?? extra?.speech);
+
     this.lastThoughts = [null, null];
     this.agentProviders = [null, null];
     this.agentTemps = [null, null];
+    this.agentSpeeches = [null, null];
+    this.personaHashes = [null, null];
     this.episodeTrackers = [null, null];
     this.planTaxonomyBuf = [[], []];
 
@@ -166,7 +180,13 @@ class Session {
 
     const agentOpts = (
       slot: number,
-      base: { temperament?: Temperament; leader?: boolean; defector?: boolean },
+      base: {
+        temperament?: Temperament;
+        leader?: boolean;
+        duoPeer?: boolean;
+        defector?: boolean;
+        speechProfile?: SpeechProfile;
+      },
     ) => ({
       planMs: PLAN_MS,
       brain: BRAIN,
@@ -179,6 +199,18 @@ class Session {
 
     const wireAgent = (agent: AgentPlayer, slot: number): void => {
       this.episodeTrackers[slot] = new EpisodeTracker(slot, this.id);
+      agent.onPersona = persona => {
+        this.personaHashes[slot] = persona.promptHash;
+        appendLog("personas.jsonl", {
+          t: new Date().toISOString(),
+          sid: this.id,
+          slot,
+          speech: persona.speech,
+          role: persona.role,
+          promptHash: persona.promptHash,
+          manifest: persona.manifest,
+        });
+      };
       agent.onPlan = rec => {
         const ctx = planGameContext(this.game, slot);
         this.episodeTrackers[slot]?.onPlan(this.game, rec);
@@ -203,12 +235,20 @@ class Session {
       const t1 = pickTemp(extra?.temperament2);
       this.temperament = t1;
       const armed = this.game.treason;   // TREASON on ⇒ both AI heroes carry a hidden agenda
+      const freeDuo = this.game.travelMode === "free";
       this.leaderAgent = new AgentPlayer(llm0, 0,
-        agentOpts(0, { temperament: t0, leader: true, defector: armed }));
+        agentOpts(0, {
+          temperament: t0, leader: true, defector: armed, speechProfile: speech0,
+          duoPeer: freeDuo,
+        }));
       this.agent = new AgentPlayer(llm1, 1,
-        agentOpts(1, { temperament: t1, defector: armed }));
+        agentOpts(1, {
+          temperament: t1, defector: armed, speechProfile: speech1,
+          duoPeer: freeDuo,
+        }));
       this.agentProviders = [p0, p1];
       this.agentTemps = [t0, t1];
+      this.agentSpeeches = [speech0, speech1];
       wireAgent(this.leaderAgent, 0);
       wireAgent(this.agent, 1);
       this.names[0] = llm0.name.toUpperCase();
@@ -228,9 +268,14 @@ class Session {
       // HUMAN+AI with treason on: the AI partner may turn — the moral-hazard
       // experiment (autopilot has no partner to betray, so never armed).
       this.agent = new AgentPlayer(llm, 1,
-        agentOpts(1, { temperament: this.temperament, defector: m === "llm" && this.game.treason }));
+        agentOpts(1, {
+          temperament: this.temperament,
+          defector: m === "llm" && this.game.treason,
+          speechProfile: speech1,
+        }));
       this.agentProviders = [null, provider];
       this.agentTemps = [null, this.temperament];
+      this.agentSpeeches = [null, speech1];
       wireAgent(this.agent, 1);
       this.names[1] = llm.name.toUpperCase();
       this.game.players[1].present = true;
@@ -289,6 +334,8 @@ class Session {
     this.lastThoughts = [null, null];
     this.agentProviders = [null, null];
     this.agentTemps = [null, null];
+    this.agentSpeeches = [null, null];
+    this.personaHashes = [null, null];
     this.episodeTrackers = [null, null];
     this.rawInputs = [emptyInput(), emptyInput()];
     this.matchLogged = false;
@@ -321,6 +368,10 @@ class Session {
       provider2: this.agentProviders[1],
       temperament1: this.agentTemps[0],
       temperament2: this.agentTemps[1],
+      speech1: this.agentSpeeches[0],
+      speech2: this.agentSpeeches[1],
+      personaHash1: this.personaHashes[0],
+      personaHash2: this.personaHashes[1],
       outcome,
       ending: outcome === "quit" ? null : (this.game.ending?.id ?? null),
       hardGate: this.game.hardGate,
@@ -675,7 +726,7 @@ wss.on("connection", (ws, req) => {
         t: string; s?: Input; seq?: number; mode?: Mode; provider?: ProviderName; provider2?: ProviderName;
         hardGate?: boolean; name?: string; hostName?: string; temperament?: Temperament;
         temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean; slick?: boolean;
-        treason?: boolean;
+        treason?: boolean; speech?: string; speech2?: string;
       };
       if (msg.t === "start") {
         const sc = session.game.screen;
@@ -704,6 +755,7 @@ wss.on("connection", (ws, req) => {
           msg.mode, msg.provider, msg.hardGate, msg.temperament, msg.travelMode,
           {
             provider2: msg.provider2, temperament2: msg.temperament2,
+            speech: msg.speech, speech2: msg.speech2,
             architect: msg.architect, slick: msg.slick, treason: msg.treason,
             hostName: msg.hostName,
           },
@@ -712,7 +764,7 @@ wss.on("connection", (ws, req) => {
           try {
             ws.send(JSON.stringify({
               t: "setup-fail",
-              reason: "setup rejected — check providers in .env (or pick another AI)",
+              reason: "setup rejected — check providers / speech profiles (or pick another AI)",
             }));
           } catch { /* */ }
         }
