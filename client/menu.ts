@@ -83,7 +83,7 @@ function speechOptions(): MenuOption[] {
 function questOptions(menu: MenuState): MenuOption[] {
   const opts: MenuOption[] = [
     { label: "CLASSIC QUEST", ok: true, hint: "the road you know — Emberdeep is optional" },
-    { label: "LONG QUEST", ok: true, hint: "the glacier is sealed until Emberdeep falls" },
+    { label: "LONG QUEST", ok: true, hint: "every wing sealed shut until cleared — the full winter road" },
   ];
   if (menu.path === "multi-coop" || menu.path === "multi-ai" || menu.path === "multi-duo") {
     opts.push({

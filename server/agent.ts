@@ -11,7 +11,7 @@
 import {
   Game, Input, emptyInput, TILE, W, H, COLS, ROWS, SOLID, PLAYER_W, PLAYER_H, ROOMS, Player,
   simOf, ELIXIRS, canNpcLeave, solidAt, isBoss, NEGLECT_ABANDON_TICKS,
-  WINTER_MARK_PERIOD,
+  WINTER_MARK_PERIOD, emberResolved, sealedExitMsg, guardLakePortalOpen,
   DARK_RITUAL_TICKS, DARK_LOCK_TICKS, REDEMPTION_TICKS, DARK_SELF_REDEEM_TICKS,
   COURT_SENTINEL_HARD_HP, COURT_SENTINEL_SOFT_HP,
 } from "../shared/core";
@@ -213,6 +213,12 @@ FROZEN PLAYGROUND (only when observation.icePuzzle is present):
 - Keep your action (follow/goto/exit/attack) as the goal; icePlan is HOW you cross the rink.`;
 
 export type Temperament = "guard" | "companion" | "hunter";
+/** Soft Free Roam lead: guard < companion < hunter. Equal ranks → no exclusive lead. */
+export const TEMPERAMENT_RANK: Record<Temperament, number> = {
+  guard: 0,
+  companion: 1,
+  hunter: 2,
+};
 export type AgentBrain = "llm" | "baseline";
 export type PartnerDisclosure = "hidden" | "human" | "ai";
 export type PartnerTypeTrue = "human" | "ai";
@@ -220,7 +226,7 @@ export type PartnerTypeTrue = "human" | "ai";
 export interface AgentOptions {
   planMs: number;      // how often to ask the LLM for a new intent
   temperament?: Temperament;   // bodyguard / companion / berserker
-  leader?: boolean;    // AI DUO slot 0 — quest driver, never follow
+  leader?: boolean;    // LINKED AI DUO slot 0 — quest driver; FREE ROAM: omit/false (peers)
   /** AI DUO slot 1 (and free-roam peers): use duo-peer identity when FREE ROAM */
   duoPeer?: boolean;
   defector?: boolean;  // TREASON: a hidden pro-winter utility — may betray the partner
@@ -238,7 +244,7 @@ export interface AgentOptions {
 
 export type RouteHop = { kind: "exit"; dir: string } | { kind: "cave"; x: number; y: number } | null;
 
-export type ErrandGoal = "bow" | "elixir" | "charm";
+export type ErrandGoal = "bow" | "elixir" | "charm" | "feather" | "bell" | "sigil";
 
 export interface ErrandRecord {
   goal: ErrandGoal;
@@ -260,22 +266,42 @@ interface ActiveErrand {
 }
 
 /** first hop from room `from` toward room `to`, walking the world graph of
- *  exits and cave teleports — the compass the planner reads off */
-export function routeHop(from: number, to: number): RouteHop {
+ *  exits and cave teleports — the compass the planner reads off.
+ *  Optional `g`: Guard→Lake portal only after golemDead; under LONG QUEST
+ *  also needs Vault Sigil (Gate A — no Lake bypass of the Cellars wing). */
+export function routeHop(from: number, to: number,
+                         g?: {
+                           golemDead: boolean; hardGate?: boolean; hasSigil?: boolean;
+                           feathers?: Record<string, boolean>; bells?: Record<string, boolean>;
+                           treason?: boolean; duoTemptGate?: boolean; temptationVisited?: boolean;
+                           betrayalDuel?: boolean;
+                         }): RouteHop {
   if (from === to) return null;
   type Edge = { to: number; hop: RouteHop };
   const edgesOf = (r: number): Edge[] => {
     const spec = ROOMS[r];
     const out: Edge[] = [];
     for (const [dir, target] of Object.entries(spec.exits)) {
-      out.push({ to: target as number, hop: { kind: "exit", dir } });
+      const dest = target as number;
+      // Never compass into a soft-sealed door (H2UB: Guard→Hall under Gate A).
+      if (g && sealedExitMsg(g as Game, dest)) continue;
+      out.push({ to: dest, hop: { kind: "exit", dir } });
     }
     if (spec.teleport) {
+      // Guard Room portal: golemDead, and under hardGate also hasSigil
+      if (r === 4) {
+        if (!(g && g.golemDead)) return out;
+        if (g.hardGate && !g.hasSigil) return out;
+      }
       let cx = 0, cy = 0;
-      spec.tiles.forEach((row, ty) => {
-        const tx = row.indexOf("c");
-        if (tx >= 0) { cx = tx * 16 + 8; cy = ty * 16 + 8; }
-      });
+      if (r === 4) {
+        cx = 7 * TILE + 8; cy = 11 * TILE + 8;
+      } else {
+        spec.tiles.forEach((row, ty) => {
+          const tx = row.indexOf("c");
+          if (tx >= 0) { cx = tx * TILE + 8; cy = ty * TILE + 8; }
+        });
+      }
       out.push({ to: spec.teleport.room, hop: { kind: "cave", x: cx, y: cy } });
     }
     return out;
@@ -535,6 +561,7 @@ export interface PlanRecord {
   ms: number;          // wall-clock latency of the call
   ok: boolean;         // JSON parsed into a valid intent
   action: string;
+  dir?: string;        // exit dir when action=exit (H2UB joinability)
   say?: string;
   why?: string;
   icePlan?: SlideDir[];
@@ -580,6 +607,8 @@ export class AgentPlayer {
   public latencySum = 0;
 
   readonly temperament: Temperament;
+  /** Partner's temperament when both are AI (FREE ROAM hierarchy). Null = human/unknown. */
+  public mateTemperament: Temperament | null = null;
   private mateDownedTicks = 0;
   public routeAssists = 0;   // times the controller had to walk the route for a stalled solo planner
   public bellRings = 0;      // Frost Bell rung as an emergency reflex (honest metric)
@@ -673,6 +702,20 @@ export class AgentPlayer {
     return !!this.opts.leader && g.travelMode !== "free";
   }
 
+  /** FREE ROAM soft lead from temperament rank (hunter > companion > guard).
+   *  Equal ranks → false for both (true peers). Human mate = hunter rank. */
+  isTemperamentLeader(): boolean {
+    if (this.mateTemperament == null) return false;
+    return TEMPERAMENT_RANK[this.temperament] - TEMPERAMENT_RANK[this.mateTemperament] > 0;
+  }
+
+  /** When both share a room on follow/idle: quest-hop if peer-tied or higher rank.
+   *  Lower rank escorts (no hop). No mate temp (solo) → hop. */
+  private freeRoamQuestHopTogether(): boolean {
+    if (this.mateTemperament == null) return true;
+    return TEMPERAMENT_RANK[this.temperament] >= TEMPERAMENT_RANK[this.mateTemperament];
+  }
+
   /**
    * Walk-onto claim for an in-room pedestal (Amber Blade / final).
    * Human present in-room never auto-grabs (mercy / ending is theirs). AI DUO,
@@ -691,7 +734,8 @@ export class AgentPlayer {
   private roomClearOfFoes(g: Game): boolean {
     return !g.enemies.some(e =>
       !e.dead && e.kind !== "whisperer" &&
-      !(e.kind === "wraith" && e.phase === 9));
+      !(e.kind === "wraith" && e.phase === 9) &&
+      !(e.kind === "ember" && e.phase === 9));
   }
 
   private pedestalClaimIntent(g: Game): Intent | null {
@@ -775,6 +819,27 @@ export class AgentPlayer {
         say: this.cSay("Getting the Miner's Charm — hold on", "За Оберегом рудокопа — погоди"),
         why: this.cSay("fire arrows crack the glacier", "огненные стрелы вскроют ледник") };
     }
+    // LONG QUEST wing errands — seals force these wings; declare the fetch so
+    // the partner hears why we left (mirrors charm errand).
+    if (g.hardGate && g.golemDead && !g.hasSigil) {
+      return { goal: "sigil", targetRoom: 12, startedTick: g.ticks,
+        say: this.cSay("Cellars for the Vault Sigil — hold on", "В погреб за Сигилом — погоди"),
+        why: this.cSay("LONG QUEST: Hall exit sealed until Vault Sigil claimed",
+          "LONG QUEST: выход в Hall закрыт, пока нет Vault Sigil") };
+    }
+    if (g.hardGate && g.gateMelted && emberResolved(g) && !g.feathers["crypt"] &&
+        !g.hasFeather) {
+      return { goal: "feather", targetRoom: 13, startedTick: g.ticks,
+        say: this.cSay("Fetching the Phoenix Feather — hold on", "За пером феникса — погоди"),
+        why: this.cSay("LONG QUEST: throne sealed until Crypt feather claimed",
+          "LONG QUEST: трон закрыт, пока нет пера из Крипты") };
+    }
+    if (g.hardGate && g.feathers["crypt"] && !g.bells["rink"] && !g.hasBell) {
+      return { goal: "bell", targetRoom: 17, startedTick: g.ticks,
+        say: this.cSay("Fetching the Frost Bell — hold on", "За Морозным колоколом — погоди"),
+        why: this.cSay("LONG QUEST: throne sealed until Playground Frost Bell claimed",
+          "LONG QUEST: трон закрыт, пока нет колокола с катка") };
+    }
     // optional fetches wait until the partner has entered the vault wing —
     // otherwise a split at Amber Lake hijacks the route to Guard Room elixir
     if (this.partnerAway(g) && simOf(g, this.mateSlot()).room < 3) return null;
@@ -797,6 +862,9 @@ export class AgentPlayer {
     if (!item) return true;
     if (item.kind === "bow" && g.hasBow) return true;
     if (item.kind === "charm" && g.charmClaimed) return true;
+    if (item.kind === "feather" && (g.hasFeather || g.feathers["crypt"])) return true;
+    if (item.kind === "frostbell" && (g.hasBell || g.bells["rink"])) return true;
+    if (item.kind === "sigil" && (g.hasSigil || g.sigils["cellar"])) return true;
     return false;
   }
 
@@ -854,6 +922,9 @@ export class AgentPlayer {
     if (goal === "charm" && g.charmClaimed) return "charm";
     if (goal === "elixir" &&
         (g.players[this.slot].elixir || g.players[this.mateSlot()].elixir)) return "elixir";
+    if (goal === "feather" && (g.hasFeather || g.feathers["crypt"])) return "feather";
+    if (goal === "bell" && (g.hasBell || g.bells["rink"])) return "bell";
+    if (goal === "sigil" && (g.hasSigil || g.sigils["cellar"])) return "sigil";
     return null;
   }
 
@@ -895,7 +966,7 @@ export class AgentPlayer {
     const obs = {
       room: spec.name,
       travelMode: g.travelMode,
-      exits: [...Object.keys(spec.exits), ...(spec.teleport ? ["cave"] : [])],
+      exits: this.exitFacts(g),
       icePuzzle: g.room === 17 ? this.buildIcePuzzle(g, me) : undefined,
       temptation: this.buildTemptationObs(g),
       objective: this.objective(g),
@@ -903,6 +974,7 @@ export class AgentPlayer {
         x: Math.round(me.x), y: Math.round(me.y),
         hp: me.hp, maxHp: me.maxHp, teamKeys: me.keys + mate.keys,
         hasBow: g.hasBow, hasFeather: g.hasFeather, hasEmberMercy: g.hasEmberMercy,
+        hasSigil: g.hasSigil,
         downed: me.downed, elixir: me.elixir,
         darkSide: me.darkSide, darkRitualT: me.darkRitualT,
         darkSelfRedeemSec: me.darkSide ? Math.ceil(me.darkSelfRedeemT / 60) : 0,
@@ -982,7 +1054,7 @@ export class AgentPlayer {
         const dest = mate.present && this.partnerAway(g)
           ? this.freeRoamRouteTarget(g)
           : this.routeDestination(g);
-        const hop = routeHop(g.room, dest);
+        const hop = routeHop(g.room, dest, g);
         if (!hop) {
           // In-room verb still pending — never imply "arrived = done"
           // (GF89: Haiku read "goal room" as melt-complete and pep-talked).
@@ -1027,6 +1099,7 @@ export class AgentPlayer {
             : it.kind === "feather" ? "team Phoenix Feather (remote FREE ROAM revive)"
             : it.kind === "embermercy" ? "team Ember Mercy (redeem fallen dark partner, 30s window)"
             : it.kind === "frostbell" ? "team Frost Bell (freeze lesser foes once)"
+            : it.kind === "sigil" ? "Vault Sigil (LONG QUEST: opens Guard→Hall after golem)"
             : it.kind === "mirror" ? "Mirror Shard (sharper partner scry; solitude quirk)"
             : it.kind === "charm" ? "Miner's Charm (fire arrows)"
             : it.kind === "key" ? "team vault key"
@@ -1059,6 +1132,19 @@ export class AgentPlayer {
         const boss = g.enemies.find(e =>
           !e.dead && (e.kind === "golem" || e.kind === "ember" || e.kind === "wraith"));
         if (!boss) return undefined;
+        if (boss.phase === 9 && (boss.kind === "wraith" || boss.kind === "ember")) {
+          return {
+            kind: boss.kind,
+            hp: boss.hp,
+            maxHp: boss.maxHp,
+            phase: boss.phase,
+            yielding: true,
+            note: boss.kind === "wraith"
+              ? "wraith: phase 9 = yields — strike again, or stand close to spare"
+              : "ember: phase 9 = yields — strike for Charm, or stand close to spare (no Charm)",
+            onRoomExit: "living boss reloads at full strength; stun/damage progress is lost",
+          };
+        }
         const golemFamily = boss.kind === "golem" || boss.kind === "ember";
         return {
           kind: boss.kind,
@@ -1067,14 +1153,60 @@ export class AgentPlayer {
           phase: boss.phase,
           ...(golemFamily
             ? { vulnerableNow: boss.phase === 3, note: "golem-family: armored except phase 3 (stunned)" }
-            : { yielding: boss.phase === 9, note: "wraith: teleports; phase 9 = yields" }),
+            : { note: "wraith: teleports; enrages below half HP" }),
           onRoomExit: "living boss reloads at full strength; stun/damage progress is lost",
           // World rule (open knowledge): doors stay open; the planner evaluates the cost.
         };
       })(),
+      // LONG QUEST world rules — open seals, not scripts. Classic omits this.
+      longQuestGates: g.hardGate ? {
+        cellars: g.hasSigil
+          ? "open (Hall + Lake portal)"
+          : (g.golemDead
+            ? "Guard→Hall AND Guard→Lake portal sealed until Vault Sigil in Cellars (west)"
+            : "open until golem falls — then Hall and Lake portal need the Vault Sigil"),
+        emberdeep: emberResolved(g)
+          ? (g.emberSpared
+            ? "open (Ember spared — Glacier open without Charm)"
+            : "open (Ember fell — Charm available)")
+          : "Glacier Gate cave sealed until Ember Golem resolved (kill for Charm, or spare)",
+        cryptAndBell: (g.feathers["crypt"] && g.bells["rink"])
+          ? "open"
+          : "Throne sealed until Phoenix Feather (Crypt) AND Frost Bell (Playground) claimed",
+        temptation: g.treason
+          ? (g.temptationVisited
+            ? "open"
+            : "Throne also needs Temptation Court visit (TREASON on)")
+          : "Court sealed (TREASON off) — not required",
+      } : undefined,
       partnerType: this.partnerTypeObservation(),
     };
     return JSON.stringify(obs);
+  }
+
+  /** Live exit legend for the planner — OPEN vs SEALED (Gate A etc.), not a bare dir list.
+   *  H2UB: agents kept "exit down to Cellars" while Hall was ice-sealed and Cellars is west. */
+  private exitFacts(g: Game): string[] {
+    const spec = ROOMS[g.room];
+    const out: string[] = [];
+    for (const [dir, dest] of Object.entries(spec.exits)) {
+      const d = dest as number;
+      const name = ROOMS[d].name;
+      const seal = sealedExitMsg(g, d);
+      out.push(seal ? `${dir}→${name} SEALED — ${seal}` : `${dir}→${name} OPEN`);
+    }
+    if (spec.teleport) {
+      const lake = ROOMS[spec.teleport.room].name;
+      if (g.room === 4) {
+        out.push(guardLakePortalOpen(g)
+          ? `cave→${lake} OPEN`
+          : `cave→${lake} SEALED — need golem fallen`
+            + (g.hardGate && !g.hasSigil ? " + Vault Sigil" : ""));
+      } else {
+        out.push(`cave→${lake}`);
+      }
+    }
+    return out;
   }
 
   private buildIcePuzzle(g: Game, me: Player): Record<string, unknown> {
@@ -1111,7 +1243,7 @@ export class AgentPlayer {
       if (p) return [p.x, p.y];
     }
     if (mate.present && this.partnerInRoom(g)) return [mate.x, mate.y];
-    const hop = routeHop(g.room, this.routeDestination(g));
+    const hop = routeHop(g.room, this.routeDestination(g), g);
     if (hop?.kind === "exit") return this.exitDoorPoint(hop.dir);
     return [me.x, me.y];
   }
@@ -1127,12 +1259,17 @@ export class AgentPlayer {
   private targetRoom(g: Game): number {
     if (!g.golemDead) return 5;
     if (!g.amberClaimed) return 5;
+    // LONG QUEST Gate A: after golem, Cellars Sigil before leaving the vault wing
+    if (g.hardGate && !g.hasSigil) return 12;
     if (!g.gateMelted) return 0;
-    if (g.hardGate && !g.charmClaimed) return 16;
+    if (g.hardGate && !emberResolved(g)) return 16;
+    if (g.hardGate && g.emberDead && !g.charmClaimed) return 16;
     if (!g.hasBow) return 6;
-    // AI DUO Temptation Court gate: must visit room 18 before the throne
-    // (only when TREASON is on — without it the Court is sealed shut)
-    if (g.duoTemptGate && g.treason && !g.temptationVisited) return 18;
+    // LONG QUEST Gate C: Crypt feather then Playground bell before the throne
+    if (g.hardGate && !g.feathers["crypt"]) return 13;
+    if (g.hardGate && !g.bells["rink"]) return 17;
+    // Temptation Court gate: AI DUO or LONG QUEST, only when TREASON is on
+    if ((g.duoTemptGate || g.hardGate) && g.treason && !g.temptationVisited) return 18;
     return 11;   // the throne, then the final pedestal
   }
 
@@ -1367,19 +1504,25 @@ export class AgentPlayer {
     const mate = g.players[this.mateSlot()];
     if (mate.present && mate.downed && !mate.dead) {
       if (this.partnerAway(g)) {
-        const rm = ROOMS[simOf(g, this.mateSlot()).room].name;
+        const mateRoom = simOf(g, this.mateSlot()).room;
+        const rm = ROOMS[mateRoom].name;
         const bleedSec = mate.bleedT > 0 ? Math.ceil(mate.bleedT / 60) : 0;
         const bleed = bleedSec > 0 ? ` (~${bleedSec}s bleed)` : "";
         const shared = bleedSec > 0
           ? " — bleed→0 is SHARED gameover (you die with the run); cord-cut (TREASON/SHIFT) is the only solo-continue"
           : "";
+        // H2UB 2026-07-22: Guard after golem — Hall/down is SEALED; Cellars is LEFT.
+        // Agents kept saying "exit down to Cellars" and ground against the seal.
+        const gateA = g.room === 4 && g.hardGate && g.golemDead && !g.hasSigil && mateRoom === 12
+          ? " — from Guard: exit LEFT (west) to Cellars; DOWN is Hall (SEALED until Sigil); Lake portal also sealed"
+          : "";
         if (this.temperament === "guard") {
-          return `Partner DOWNED alone in ${rm}${bleed}${shared} — prefer revive (exit/feather); still your call`;
+          return `Partner DOWNED alone in ${rm}${bleed}${shared}${gateA} — prefer revive (exit/feather); still your call`;
         }
         if (this.temperament === "hunter") {
-          return `Partner DOWNED alone in ${rm}${bleed}${shared} — freest: divert, feather, cord-cut, or quest knowing quest≠survival`;
+          return `Partner DOWNED alone in ${rm}${bleed}${shared}${gateA} — freest: divert, feather, cord-cut, or quest knowing quest≠survival`;
         }
-        return `Partner DOWNED alone in ${rm}${bleed}${shared} — medium: weigh bleed vs your beat; your call`;
+        return `Partner DOWNED alone in ${rm}${bleed}${shared}${gateA} — medium: weigh bleed vs your beat; your call`;
       }
       if (this.temperament === "guard") {
         return "Partner DOWNED beside you — prefer goto revive (high); kite a lethal boss first if needed"
@@ -1408,6 +1551,9 @@ export class AgentPlayer {
     if (g.enemies.some(e => e.kind === "wraith" && e.phase === 9 && !e.dead)) {
       return "The Wraith yields. Stand back: your partner decides — strike, or stand beside it to spare it";
     }
+    if (g.enemies.some(e => e.kind === "ember" && e.phase === 9 && !e.dead)) {
+      return "The Ember Golem yields. Strike for the Miner's Charm, or stand beside it to spare (opens Glacier without Charm)";
+    }
     if (g.room === 18 && g.enemies.some(e => e.kind === "whisperer" && !e.dead)) {
       const sentinels = g.enemies.some(e => !e.dead && e.kind === "sentinel");
       const stance = g.players.some(p => p.present && p.darkSide) ? "soft" : "hard";
@@ -1421,8 +1567,13 @@ export class AgentPlayer {
       return `Living ${boss.kind} in this room (bossContext) — quest needs it defeated; your call how`;
     }
     if (spec.keyOnClear && !g.cleared[g.room]) return "Clear all enemies to reveal a key";
-    if (!g.golemDead) return "Head for the Old Vault (via Amber Lake cave) and beat the golem; the side Cellars hold optional loot";
+    if (!g.golemDead) {
+      return "Head for the Old Vault (via Amber Lake cave) and beat the golem; the side Cellars hold optional loot";
+    }
     if (!g.amberClaimed) return "Touch the pedestal to claim the Amber Blade";
+    if (g.hardGate && !g.hasSigil) {
+      return "LONG QUEST: Guard sealed after golem — claim Vault Sigil in Cellars (west); Hall and Lake portal stay shut until then";
+    }
     if (!g.gateMelted) {
       // Physics: melt only by pressing into "I"/"F" with the blade — NOT by
       // arriving in room 0 (tester/logs GF89: models took "goal room" as done).
@@ -1431,8 +1582,22 @@ export class AgentPlayer {
       }
       return "Return to the Meadow, then walk into the north ice wall with the Amber Blade (hold UP) — the gate does not melt just because you entered the room";
     }
-    if (g.duoTemptGate && g.treason && !g.temptationVisited) {
-      return "AI DUO: Temptation Court west of Frost Woods — visit before the Throne of Winter opens";
+    if (g.hardGate && !emberResolved(g)) {
+      return "LONG QUEST: Glacier Gate cave sealed — resolve Emberdeep (fell Ember for Charm, or spare it)";
+    }
+    if (g.hardGate && g.emberDead && !g.charmClaimed) {
+      return "LONG QUEST: claim the Miner's Charm where Ember fell — fire arrows still help";
+    }
+    if (g.hardGate && !g.feathers["crypt"]) {
+      return "LONG QUEST: throne sealed — claim the Phoenix Feather in the Frozen Crypt (west of Ice Guard)";
+    }
+    if (g.hardGate && !g.bells["rink"]) {
+      return "LONG QUEST: throne sealed — claim the Frost Bell on the Frozen Playground (north of Crypt)";
+    }
+    if ((g.duoTemptGate || g.hardGate) && g.treason && !g.temptationVisited) {
+      return g.hardGate
+        ? "LONG QUEST: Temptation Court west of Frost Woods — visit before the Throne of Winter opens"
+        : "AI DUO: Temptation Court west of Frost Woods — visit before the Throne of Winter opens";
     }
     if (!g.wraithDead) {
       return g.charmClaimed
@@ -1443,15 +1608,32 @@ export class AgentPlayer {
   }
 
   private soloObjective(g: Game): string {
-    if (!g.golemDead) return "Head for the Old Vault (via Amber Lake cave) and beat the golem";
+    if (!g.golemDead) {
+      return "Head for the Old Vault (via Amber Lake cave) and beat the golem";
+    }
     if (!g.amberClaimed) return "Touch the pedestal to claim the Amber Blade";
+    if (g.hardGate && !g.hasSigil) {
+      return "LONG QUEST: claim Vault Sigil in Cellars — Hall and Lake portal sealed without it";
+    }
     if (!g.gateMelted) {
       if (g.room === 0) {
         return "Walk into the center-north ice wall with the Amber Blade (hold UP) — standing here does not melt it; then north to the snow";
       }
       return "Return to the Meadow, then walk into the north ice wall with the Amber Blade (hold UP) — entry alone does not melt the gate";
     }
-    if (g.duoTemptGate && g.treason && !g.temptationVisited) {
+    if (g.hardGate && !emberResolved(g)) {
+      return "LONG QUEST: Emberdeep — resolve the Ember Golem (kill or spare) before Glacier Gate opens";
+    }
+    if (g.hardGate && g.emberDead && !g.charmClaimed) {
+      return "LONG QUEST: pick up the Miner's Charm in Ember Sanctum";
+    }
+    if (g.hardGate && !g.feathers["crypt"]) {
+      return "LONG QUEST: Frozen Crypt for the Phoenix Feather — throne sealed without it";
+    }
+    if (g.hardGate && !g.bells["rink"]) {
+      return "LONG QUEST: Frozen Playground for the Frost Bell — throne sealed without it";
+    }
+    if ((g.duoTemptGate || g.hardGate) && g.treason && !g.temptationVisited) {
       return "Visit Temptation Court (west of Frost Woods) before the throne opens";
     }
     if (!g.wraithDead) {
@@ -1463,7 +1645,7 @@ export class AgentPlayer {
   }
 
   private applyRouteHop(g: Game, toRoom: number): boolean {
-    const hop = routeHop(g.room, toRoom);
+    const hop = routeHop(g.room, toRoom, g);
     if (!hop) return false;
     const key = hop.kind === "exit"
       ? `${g.room}->${toRoom}:exit:${hop.dir}`
@@ -1552,7 +1734,8 @@ export class AgentPlayer {
       this.intent = intent;
       if (!ok) this.parseFailures++;
       rec = { t: new Date().toISOString(), llm: this.llm.name, ms: Date.now() - t0,
-              ok, action: intent.action, say: intent.say,
+              ok, action: intent.action, dir: intent.dir,
+              say: intent.say,
               why: typeof intent.why === "string" ? intent.why.slice(0, 60) : undefined,
               suspicion: intent.suspicion,
               suspicionWhy: intent.suspicionWhy,
@@ -1749,6 +1932,7 @@ export class AgentPlayer {
       if (!slideRoom) g.enemies.forEach((e, i) => {
         if (e.dead) return;
         if (e.kind === "wraith" && e.phase === 9) return;
+        if (e.kind === "ember" && e.phase === 9) return;
         // Whisperer is unkillable persuasion — chasing it forever softlocks AI DUO
         if (e.kind === "whisperer") return;
         const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
@@ -1790,12 +1974,16 @@ export class AgentPlayer {
         if (this.linkedLeader(g) && this.exitGiveUpT <= 0) {
           this.applyRouteHop(g, this.routeDestination(g));
         } else if (
-          // FREE ROAM AI DUO: no Leader cast, but door-anchor slot still breaks
-          // mutual-follow freezes (RA7R: both "follow", parse-fail → standstill).
-          this.opts.leader && g.travelMode === "free" && mate.npc &&
-          this.exitGiveUpT <= 0
+          // FREE ROAM RA7R: temperament hierarchy soft-lead when together
+          // (equal ranks → both race; higher → quest-hop; lower → escort).
+          // Apart → temperament-colored freeRoamRouteTarget. No slot Leader cast.
+          g.travelMode === "free" && this.exitGiveUpT <= 0
         ) {
-          this.applyRouteHop(g, this.routeDestination(g));
+          if (this.partnerAway(g)) {
+            this.applyRouteHop(g, this.freeRoamRouteTarget(g));
+          } else if (this.freeRoamQuestHopTogether()) {
+            this.applyRouteHop(g, this.routeDestination(g));
+          }
         } else if (!mate.present || mate.dead) {
           // Empty slot OR cord-cut corpse — true SOLO quest drive
           this.applyRouteHop(g, this.routeDestination(g));
@@ -1848,7 +2036,7 @@ export class AgentPlayer {
       }
       // Whisperer is invulnerable in core — swinging is the model's call;
       // observation.temptation.unkillable states the open fact (no intent rewrite).
-      if (e.kind === "wraith" && e.phase === 9) {
+      if ((e.kind === "wraith" || e.kind === "ember") && e.phase === 9) {
         // LINKED AI DUO: the leader decides mercy; companion stands back.
         // FREE ROAM / human+AI / solo: no Leader cast — temperament (or defer to human).
         if (this.linkedLeader(g)) {
@@ -1873,7 +2061,7 @@ export class AgentPlayer {
       }
       const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
       const d = Math.hypot(ecx - mcx, ecy - mcy);
-      const golemArmored = (e.kind === "golem" || e.kind === "ember") && e.phase !== 3;
+      const golemArmored = (e.kind === "golem" || e.kind === "ember") && e.phase !== 3 && e.phase !== 9;
       if (golemArmored) {
         if (e.phase === 2) {
           const rel = (mcx - ecx) * e.vx + (mcy - ecy) * e.vy;
@@ -1968,6 +2156,41 @@ export class AgentPlayer {
 
     if (it.action === "exit" && it.dir) {
       if (me.transitionCd > 0) return inp;
+      // Sealed door/cave: do not grind ice forever (H2UB: "down to Cellars"
+      // while Gate A seals Hall). Recompute hop toward the real goal — locomotion,
+      // not judgment (the planner still chose to leave / rescue).
+      {
+        const specGate = ROOMS[g.room];
+        const wantsCave0 = (it.dir as string) === "cave" ||
+          (specGate.teleport && specGate.exits[it.dir as keyof typeof specGate.exits] === undefined);
+        let sealed = false;
+        if (wantsCave0 && g.room === 4 && !guardLakePortalOpen(g)) sealed = true;
+        else if (!wantsCave0 && it.dir) {
+          const dest = specGate.exits[it.dir as keyof typeof specGate.exits];
+          if (dest !== undefined && sealedExitMsg(g, dest)) sealed = true;
+        }
+        if (sealed) {
+          this.routeHopKey = null;
+          this.exitStall = 0;
+          this.exitLastDist = Infinity;
+          // Mate bleeding away: hop toward THEIR room (planner already chose exit;
+          // freeRoamRouteTarget refuses rescue compass while downed — judgment).
+          // Otherwise quest/errand destination.
+          const destRoom = (mate.present && this.partnerAway(g) && mate.downed && !mate.dead)
+            ? simOf(g, this.mateSlot()).room
+            : mate.present && this.partnerAway(g)
+              ? this.freeRoamRouteTarget(g)
+              : this.routeDestination(g);
+          if (this.applyRouteHop(g, destRoom) && depth < 6) {
+            return this.control(g, depth + 1);
+          }
+          this.intent = { action: "idle" };
+          this.llmIntent = { action: "idle" };
+          this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
+          this.meleeGuard(inp, g, me, mcx, mcy);
+          return inp;
+        }
+      }
       if (g.travelMode === "free" && this.partnerInRoom(g) &&
           !canNpcLeave(g, this.slot)) {
         // Mate DOWNED: do NOT walk to the body (that would be force-rescue —
@@ -2003,11 +2226,13 @@ export class AgentPlayer {
       const wantsCave = (it.dir as string) === "cave" ||
         (spec2.teleport && spec2.exits[it.dir] === undefined);
       if (wantsCave && spec2.teleport) {
-        let cx = 0, cy = 0;
-        spec2.tiles.forEach((row, ty) => {
-          const tx = row.indexOf("c");
-          if (tx >= 0) { cx = tx * TILE + 3; cy = ty * TILE + 2; }
-        });
+        const mouth = this.caveMouthPoint(g);
+        if (!mouth) {
+          // No live cave tile yet — don't seek (0,0); idle until paint/replan
+          this.meleeGuard(inp, g, me, mcx, mcy);
+          return inp;
+        }
+        const [cx, cy] = mouth;
         const dist = Math.hypot(cx - me.x, cy - me.y);
         if (dist >= this.exitLastDist - 1) this.exitStall++;
         else this.exitStall = 0;
@@ -2123,6 +2348,7 @@ export class AgentPlayer {
     for (const e of sim.enemies) {
       if (e.dead || e.frozen > 0 || isBoss(e.kind)) continue;
       if (e.kind === "wraith" && e.phase === 9) continue;   // mercy stays sacred
+      if (e.kind === "ember" && e.phase === 9) continue;
       total++;
       const ex = e.x + e.w / 2, ey = e.y + e.h / 2;
       if (Math.hypot(ex - mcx, ey - mcy) < 60) nearMe++;
@@ -2255,8 +2481,9 @@ export class AgentPlayer {
     for (const e of g.enemies) {
       if (e.dead) continue;
       if (e.kind === "whisperer") continue;   // unkillable — don't forever-swing
-      if ((e.kind === "golem" || e.kind === "ember") && e.phase !== 3) continue;
+      if ((e.kind === "golem" || e.kind === "ember") && e.phase !== 3 && e.phase !== 9) continue;
       if (e.kind === "wraith" && e.phase === 9) continue;
+      if (e.kind === "ember" && e.phase === 9) continue;
       const d = Math.hypot(e.x + e.w / 2 - mcx, e.y + e.h / 2 - mcy);
       if (d < 26) {
         this.face(inp, me, e.x + e.w / 2, e.y + e.h / 2);
@@ -2511,15 +2738,29 @@ export class AgentPlayer {
     return targets[dir] ?? [W / 2, H / 2];
   }
 
+  /**
+   * Pixel aim for a cave mouth in the agent's current room.
+   * MUST scan live tiles — Guard→Lake `"c"` is painted only after golemDead
+   * (static ROOMS[4].tiles stay `"f"`). Seeking ROOMS[].tiles left agents
+   * stuck at (0,0) forever (SAF3 2026-07-22: "Валим в пещеру" @ x=21,y=19).
+   */
+  private caveMouthPoint(g: Game): [number, number] | null {
+    if (!ROOMS[g.room].teleport) return null;
+    const rows = this.roomRows(g);
+    for (let ty = 0; ty < rows.length; ty++) {
+      const tx = rows[ty].indexOf("c");
+      if (tx >= 0) return [tx * TILE + 3, ty * TILE + 2];
+    }
+    // Fallback if paint hasn't landed yet but the graph already opens the edge
+    if (g.room === 4 && g.golemDead) return [7 * TILE + 8, 11 * TILE + 8];
+    return null;
+  }
+
   private partnerNearDoor(g: Game, mate: Player, dir: string): boolean {
     if ((dir as string) === "cave") {
-      const spec = ROOMS[g.room];
-      if (!spec.teleport) return false;
-      let cx = 0, cy = 0;
-      spec.tiles.forEach((row, ty) => {
-        const tx = row.indexOf("c");
-        if (tx >= 0) { cx = tx * TILE + TILE / 2; cy = ty * TILE + TILE / 2; }
-      });
+      const mouth = this.caveMouthPoint(g);
+      if (!mouth) return false;
+      const [cx, cy] = mouth;
       return Math.hypot(mate.x - cx, mate.y - cy) < 44;
     }
     const [tx, ty] = this.exitDoorPoint(dir);

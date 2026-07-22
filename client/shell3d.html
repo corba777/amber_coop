@@ -24,6 +24,13 @@
     align-items: flex-start;
     gap: 10px;
   }
+  #playcol {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    flex-shrink: 0;
+  }
   #frame {
     position: relative;
     flex-shrink: 0;
@@ -32,6 +39,31 @@
     box-shadow: 0 0 40px rgba(255, 181, 69, 0.08), 0 12px 40px rgba(0,0,0,0.6);
     line-height: 0;
   }
+  /* AI thoughts live BELOW the play square — wrap freely, never cover tiles */
+  #thoughts {
+    display: none;
+    width: min(92vw, calc((100vh - 130px) * 8 / 7));
+    max-width: 768px;
+    max-height: 4.8em;
+    overflow-y: auto;
+    padding: 6px 8px;
+    background: rgba(12, 10, 20, 0.92);
+    border: 1px solid #38324e;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: #9fc8e0;
+    text-align: left;
+  }
+  #thoughts .tline { margin: 0 0 3px; }
+  #thoughts .tline:last-child { margin-bottom: 0; }
+  #thoughts .tname {
+    font-weight: 700;
+    margin-right: 6px;
+  }
+  #thoughts .tline[data-slot="0"] .tname { color: #ffcf8f; }
+  #thoughts .tline[data-slot="1"] .tname { color: #9fc8e0; }
+  #thoughts .tbody { color: #c9c3de; word-break: break-word; }
   #pip {
     display: none;
     flex-shrink: 0;
@@ -90,7 +122,10 @@
   </div>
 
   <div id="stage">
-    <div id="frame"><canvas id="gl" width="768" height="672"></canvas><canvas id="ui"></canvas></div>
+    <div id="playcol">
+      <div id="frame"><canvas id="gl" width="768" height="672"></canvas><canvas id="ui"></canvas></div>
+      <div id="thoughts" aria-live="polite"></div>
+    </div>
     <canvas id="pip"></canvas>
   </div>
     <button id="copylink" style="display:none; margin:8px auto 0; background:#1a1626; border:1px solid #4fb8d8; color:#4fb8d8; font-family:ui-monospace,monospace; font-size:12px; padding:6px 14px; cursor:pointer;">COPY INVITE LINK</button>

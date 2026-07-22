@@ -236,9 +236,11 @@ class Session {
       this.temperament = t1;
       const armed = this.game.treason;   // TREASON on ⇒ both AI heroes carry a hidden agenda
       const freeDuo = this.game.travelMode === "free";
+      // FREE ROAM AI+AI: peers like two humans — no Leader cast, both npc=false.
+      // LINKED: slot 0 stays door-anchor quest driver (npc=false, leader).
       this.leaderAgent = new AgentPlayer(llm0, 0,
         agentOpts(0, {
-          temperament: t0, leader: true, defector: armed, speechProfile: speech0,
+          temperament: t0, leader: !freeDuo, defector: armed, speechProfile: speech0,
           duoPeer: freeDuo,
         }));
       this.agent = new AgentPlayer(llm1, 1,
@@ -256,7 +258,7 @@ class Session {
       this.game.players[0].present = true;
       this.game.players[0].npc = false;
       this.game.players[1].present = true;
-      this.game.players[1].npc = true;
+      this.game.players[1].npc = !freeDuo;
       this.game.duoTemptGate = true;   // AI DUO: Temptation Court before Wraith
       this.kickSlot1("host chose AI duo");
       this.game.screen = "title";
@@ -440,6 +442,19 @@ class Session {
 
   tick(tickCount: number): void {
     try {
+      // FREE ROAM temperament hierarchy: each agent sees the other's rank.
+      // Human partner always counts as hunter (soft-lead / peer race).
+      if (this.leaderAgent && this.agent) {
+        this.leaderAgent.mateTemperament = this.agent.temperament;
+        this.agent.mateTemperament = this.leaderAgent.temperament;
+      } else {
+        if (this.leaderAgent) this.leaderAgent.mateTemperament = null;
+        if (this.agent) {
+          const human = this.game.players[0];
+          this.agent.mateTemperament =
+            human.present && !human.npc && !human.dead ? "hunter" : null;
+        }
+      }
       if (this.leaderAgent && !this.game.players[0].dead) {
         this.game.activeSim = this.game.players[0].simIndex;
         this.leaderAgent.maybePlan(this.game, Date.now());

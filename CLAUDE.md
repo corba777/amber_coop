@@ -97,7 +97,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (848 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1017 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -178,7 +178,15 @@ melts it (mirror of the north gate; the blade thaws both meadow seals at once) �
 and off the Frozen Crypt), **Temptation Court** (room 18 — west of Frost Woods;
 pre-Architect persuasion wing: **open only with TREASON**; AI DUO hard gate
 before the Wraith also requires TREASON — [102]). LONG QUEST
-(hardGate) seals the glacier until Emberdeep is cleared. Menu (shared
+(hardGate) forces every side wing in sequence: after the golem, Vault Sigil
+(Cellars) before leaving Guard→Hall; Emberdeep **resolved** (fell Ember for
+Miner's Charm, **or spare** the yielding Ember — Glacier opens either way)
+before Glacier Gate cave; Crypt feather + Playground Frost Bell before the
+Wraith throne; with TREASON on, Temptation Court is also required before the
+throne. Classic leaves every wing optional. Guard→Lake cave portal: Classic opens after
+golemDead; LONG QUEST Gate A seals it with Hall until Vault Sigil (no Lake
+bypass of Cellars).
+Menu (shared
 `client/menu.ts`): **single or multiplayer** → party path → provider/temp
 (where needed) → **classic / long quest** last (+ SLIPPERY ICE toggle always,
 FREE ROAM + Architect toggles on multiplayer). Paths: single human; single
@@ -191,13 +199,18 @@ inertia; a blocked arrow staggers (45 ticks, still advancing). Keys are
 team-shared. Endings (endingFor, priority order): **betrayal** (a hero downed by
 their partner's own blade OR deliberately abandoned — outranks everything,
 including "solo", so a traitor questing on alone still owns the epilogue; only
-reachable with TREASON on) → solo → lone-thaw → mercy (spare the yielding wraith
-by standing close; it becomes a companion) → flawless → ember-pact → classic.
+reachable with TREASON on) → lone-thaw / abandoned → **LONG QUEST dual-mercy
+matrix** when `hardGate` (Ember×Wraith spare vs not → verdant / cinder /
+frostbound / stone — win-screen **bg color** only, no tile reskin) → Classic:
+solo → mercy (spare yielding Wraith) → flawless → ember-pact → classic.
+Ember also yields at lethal ([14b]): spare (no Charm) or strike for Charm.
 
 **Optional artifacts (all non-mandatory, additive — canon path untouched):**
 Elixir of Life (auto-revive on fall), Phoenix Feather (press **F**, one remote
 FREE-ROAM revive), Miner's Charm (fire arrows), Heart Containers
-(coop split: both present → +1 maxHp each; solo → full +2).
+(coop split: both present → +1 maxHp each; solo → full +2),
+**Vault Sigil** (Cellars token; never spent — LONG QUEST needs it after the
+golem to leave Guard→Hall).
 - **Frost Bell** (room 17, guarded by two skating sentinels; doors stay open):
   press **C** to freeze the current room's lesser foes ~3s — bosses shrug it off
   (mercy sacred), and it won't ring into an empty room (saves its one charge).
@@ -257,17 +270,21 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
 *Landed (playable v1):*
 - Menu path **AI + AI** in `client/menu.ts` — dual provider/temperament passes;
   FREE ROAM on quest screen; test [15] bundle anchors.
-- Server `mode: "duo"`: `leaderAgent` slot 0 (`leader: true`, `npc=false`) +
-  `agent` slot 1 (`npc=true`); spectator input discarded like autopilot; start
-  via ENTER / click / `{t:"start"}` (Enter handled *before* `isSpectator` in
-  both clients).
-- `LEADER_PROMPT` (LINKED AI DUO only) + controller: slot 0 leads; route assist
-  when passive even with mate in-room; companion keeps `SYSTEM_PROMPT` ([62]).
-  **FREE ROAM** (AI+AI and AI+Human): no party Leader — `FREE_PEER_PROMPT` for
-  duo slot 0 + `FREE_ROAM_ADDENDUM` "NO party leader" for both; route/mercy
-  *prompt* leader-bias is LINKED-only via `linkedLeader()`. Door-anchor still
-  route-assists in FREE ROAM on mutual-follow freeze (RA7R / [113]) — locomotion,
-  not a Leader cast. `npc=false` stays for room transitions.
+- Server `mode: "duo"`: LINKED → `leaderAgent` slot 0 (`leader: true`, `npc=false`)
+  + `agent` slot 1 (`npc=true`); **FREE ROAM** → both `npc=false`, both
+  `leader: false`, both `duoPeer` (peer cast like two humans). Spectator input
+  discarded like autopilot; start via ENTER / click / `{t:"start"}` (Enter
+  handled *before* `isSpectator` in both clients).
+- `LEADER_PROMPT` / `duo-leader` (LINKED AI DUO only) + controller: slot 0 leads;
+  route assist when passive even with mate in-room; companion keeps partner
+  identity ([62]). **FREE ROAM** (AI+AI): no slot Leader/npc cast — both
+  `duo-peer` + `FREE_ROAM_ADDENDUM`. Soft lead from temperament rank
+  (`TEMPERAMENT_RANK`: guard=0 < companion=1 < hunter=2): when ranks differ,
+  the higher quest-hops on mutual follow (RA7R / [113]); the lower escorts.
+  Equal ranks → true peers (both may race). Human+AI: human always counts as
+  `hunter` rank for the hierarchy (guard/companion AI escorts when together;
+  hunter AI peers/races). Human+AI still uses `npc` on the AI partner (leave
+  gate). LINKED room-anchor unchanged ([80]).
 - Spectator HUD: `drawDuoSpectatorHud` shows both heroes' hearts ([15] anchor);
   autopilot spectator also sees questing AI hearts.
 - **Dual thoughts** (author Artem 2026-07-12): snapshot carries
@@ -295,10 +312,12 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
   if it is a hunter. Controller fix: `opts.leader` bypasses the old
   `mate.present` defer that blocked duo leaders when the AI mate was present.
 
-*Design notes (unchanged).* **Anchor deadlock:** with two NPCs and zero humans,
+*Design notes.* **LINKED anchor deadlock:** with two NPCs and zero humans,
 leadership devolves to slot 0 — `npc=false` (may transition; LINKED drag
 carries companion), slot 1 `npc=true`. Mercy with no human → leader's
-temperament. Rescue is mutual when ordered (`goto`); no patience failsafe.
+temperament. **FREE ROAM AI+AI:** no slot cast — soft lead only when
+temperament ranks differ (else true peers); coop or compete is still the
+model's call. Rescue is mutual when ordered (`goto`); no patience failsafe.
 Architect toggle
 stored on setup (`architect` field) — bench-first stub, not wired.
 
