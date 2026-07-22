@@ -114,6 +114,7 @@ export function drawPartnerPip(
     else if (it.kind === "key") ctx.drawImage(SPR.key, px, py);
     else if (it.kind === "bow") ctx.drawImage(SPR.bow, px, py);
     else if (it.kind === "frostbell") ctx.drawImage(SPR.bell, px, py);
+    else if (it.kind === "sigil") ctx.drawImage(SPR.key, px, py);
     else if (it.kind === "mirror") ctx.drawImage(SPR.mirror, px, py);
     else ctx.drawImage(SPR.heart, px - 2, py - 2, 20, 20);
   }

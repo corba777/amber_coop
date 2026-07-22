@@ -51,3 +51,66 @@ export function drawDuoSpectatorHud(
     drawHearts(ctx, p.hp, p.maxHp, 4, yHearts, 10, 11);
   }
 }
+
+/** One agent mind line for the off-frame thought strip (not drawn on the playfield). */
+export type ThoughtLine = {
+  slot: number;
+  name: string;
+  action: string;
+  why?: string;
+};
+
+export function formatThoughtLines(s: Snapshot): ThoughtLine[] {
+  if (s.thoughts && s.thoughts.length) {
+    return s.thoughts.map(t => ({
+      slot: t.slot,
+      name: t.name,
+      action: t.action,
+      why: t.why,
+    }));
+  }
+  if (s.thought) {
+    return [{ slot: 1, name: "AI", action: s.thought.action, why: s.thought.why }];
+  }
+  return [];
+}
+
+/**
+ * Sync the DOM thought strip below `#frame` (outside the play square).
+ * Full `why` text wraps here — the in-canvas 58-char clip is retired.
+ */
+export function syncThoughtPanel(
+  el: HTMLElement | null,
+  lines: ThoughtLine[],
+  show: boolean,
+  playing: boolean,
+): void {
+  if (!el) return;
+  if (!show || !playing || lines.length === 0) {
+    el.style.display = "none";
+    el.replaceChildren();
+    delete el.dataset.key;
+    return;
+  }
+  el.style.display = "block";
+  // Rebuild only when content changes — avoid thrashing the DOM every frame.
+  const key = lines.map(l => `${l.slot}|${l.name}|${l.action}|${l.why ?? ""}`).join("\n");
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.replaceChildren();
+  for (const tl of lines) {
+    const row = document.createElement("div");
+    row.className = "tline";
+    row.dataset.slot = String(tl.slot);
+    const name = document.createElement("span");
+    name.className = "tname";
+    name.textContent = tl.name.slice(0, 16);
+    const body = document.createElement("span");
+    body.className = "tbody";
+    body.textContent = tl.why
+      ? `${tl.action} — ${tl.why}`
+      : tl.action;
+    row.append(name, body);
+    el.append(row);
+  }
+}

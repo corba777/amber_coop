@@ -365,6 +365,9 @@ export const ROOMS: RoomSpec[] = [
   {
     name: "Old Vault — Guard Room", tiles: ROOM_GUARD, exits: { down: 3, up: 5, left: 12 },
     keyOnClear: true,
+    // Lake portal: tiles painted as "c" only after golemDead (see fillActiveSimRoom).
+    // Landing south of the lake cave mouth so you don't instantly re-enter Hall.
+    teleport: { room: 2, x: 3 * TILE, y: 10 * TILE },
     enemies: [
       { kind: "slime", x: 4 * TILE, y: 5 * TILE },
       { kind: "slime", x: 11 * TILE, y: 8 * TILE },
@@ -425,7 +428,9 @@ export const ROOMS: RoomSpec[] = [
   { // 12
     name: "Old Vault — Cellars", tiles: ROOM_CELLAR, exits: { right: 4 },
     enemies: [
-      { kind: "sentinel", x: 5 * TILE, y: 4 * TILE },
+      // was (5,4) — that tile is a pillar ("W"); spawn on open floor beside it
+      // so the armor never starts wedged inside the column (tester report 2026-07-21)
+      { kind: "sentinel", x: 6 * TILE, y: 5 * TILE },
       { kind: "sentinel", x: 10 * TILE, y: 9 * TILE },
       { kind: "bat", x: 8 * TILE, y: 6 * TILE },
       { kind: "slime", x: 3 * TILE, y: 11 * TILE },
@@ -527,7 +532,7 @@ export interface Enemy {
 }
 
 export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm"
-  | "feather" | "frostbell" | "mirror" | "embermercy";
+  | "feather" | "frostbell" | "mirror" | "embermercy" | "sigil";
 export type TemptationPayoff =
   "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
@@ -553,10 +558,17 @@ export const FEATHERS: { id: string; room: number; x: number; y: number }[] = [
   { id: "crypt", room: 13, x: 3 * TILE + 8, y: 10 * TILE + 8 },
 ];
 
-/** Frost Bell: optional Frozen Playground reward, sentinel-guarded. One use —
- *  press C to freeze the current room's lesser foes (~3s). Never mandatory. */
+/** Frost Bell: Frozen Playground reward, sentinel-guarded. One use — press C
+ *  to freeze the current room's lesser foes (~3s). Optional in Classic; LONG
+ *  QUEST requires it (with the Crypt feather) before the Wraith throne. */
 export const BELLS: { id: string; room: number; x: number; y: number }[] = [
   { id: "rink", room: 17, x: 7.5 * TILE, y: 6 * TILE + 8 },
+];
+
+/** Vault Sigil: unique Cellars token (never consumed). Optional in Classic;
+ *  LONG QUEST requires it after the golem to leave Guard → Hall. */
+export const SIGILS: { id: string; room: number; x: number; y: number }[] = [
+  { id: "cellar", room: 12, x: 3 * TILE + 8, y: 8 * TILE + 8 },
 ];
 
 /** Mirror Shard: optional Amber Lake artifact that sharpens the partner scry
@@ -604,6 +616,13 @@ export interface Projectile {
   betray?: boolean;   // TREASON: a "friendly" arrow that also strikes the shooter's partner
   /** v3.4: arrow was loosed with SHIFT — counts as a duel declaration on hit */
   betrayDeclare?: boolean;
+  /** Hostile spit in Emberdeep looks like fire, not winter ice (visual only). */
+  fire?: boolean;
+}
+
+/** Emberdeep wing (Tunnel / Guard / Sanctum) — fire-themed hostile shots. */
+export function isEmberdeepRoom(room: number): boolean {
+  return room === 14 || room === 15 || room === 16;
 }
 
 export interface Player {
@@ -660,11 +679,72 @@ export interface LatchedInput extends Input {
 export const emptyInput = (): Input =>
   ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false, k: false });
 
-export interface Ending { id: string; title: string; lines: string[]; }
+export interface Ending { id: string; title: string; lines: string[]; bg?: string; }
+
+/** LONG QUEST: Emberdeep is resolved by killing OR sparing the Ember Golem. */
+export function emberResolved(g: Game): boolean {
+  return g.emberDead || g.emberSpared;
+}
+
+/**
+ * Guard → Amber Lake cave portal. Classic: opens when the golem falls.
+ * LONG QUEST Gate A: same wing lock as Hall — needs Vault Sigil first
+ * (otherwise the portal bypasses the Sigil wing entirely).
+ */
+export function guardLakePortalOpen(g: {
+  golemDead: boolean; hardGate: boolean; hasSigil: boolean;
+}): boolean {
+  if (!g.golemDead) return false;
+  if (g.hardGate && !g.hasSigil) return false;
+  return true;
+}
+
+/** Long Quest dual-mercy epilogue — Ember × Wraith (spare vs not). Win screen
+ *  bg only (no world tile reskin). Classic (`!hardGate`) never uses this. */
+function longQuestEnding(g: Game): Ending {
+  const emberMercy = g.emberSpared;
+  const wraithMercy = g.wraithSpared;
+  if (emberMercy && wraithMercy) {
+    return {
+      id: "verdant", title: "THE GREEN THAW", bg: "rgba(16,78,48,0.92)",
+      lines: [
+        "fire lowered its forge and winter lowered its storm.",
+        "the lake breathes again — spring walks the meadows green.",
+      ],
+    };
+  }
+  if (emberMercy && !wraithMercy) {
+    return {
+      id: "cinder", title: "CINDER REIGN", bg: "rgba(92,32,14,0.92)",
+      lines: [
+        "you spared the forge and felled the storm.",
+        "ash-warm dominion — winter broken, but the world remembers fire.",
+      ],
+    };
+  }
+  if (!emberMercy && wraithMercy) {
+    return {
+      id: "frostbound", title: "ETERNAL ICE", bg: "rgba(18,48,88,0.92)",
+      lines: [
+        "the forge went cold; the wraith walks beside you.",
+        "winter stays — bright, endless, and almost kind.",
+      ],
+    };
+  }
+  return {
+    id: "stone", title: "THE STONE WINTER", bg: "rgba(42,44,52,0.92)",
+    lines: [
+      "neither forge nor storm was spared.",
+      "the long road ends in gray stone — spring is a rumor, not a season.",
+    ],
+  };
+}
 
 /** Fahrenheit-style: the epilogue is read off the state of the world.
  *  Priority: solo fates → a partner left in the snow → flawless run →
- *  the fire route → the classic ending (verbatim, for the canon). */
+ *  the fire route → the classic ending (verbatim, for the canon).
+ *  LONG QUEST (`hardGate`): Ember×Wraith dual-mercy matrix outranks
+ *  classic/mercy/ember-pact (win bg colors only — no tile reskin). */
 export function endingFor(g: Game): Ending {
   // A cord-cut / soft-neglect corpse still has present=true — count living heroes.
   const living = g.players.filter(p => p.present && !p.dead);
@@ -673,36 +753,22 @@ export function endingFor(g: Game): Ending {
   if (g.temptationPayoff === "winter-ascends") {
     return { id: "winter-ascends", title: "THE CROWN OF ASH", lines: [
       "winter kept its promise — one hero stands immortal in the cold.",
-      "the throne needs no wraith; evil already won." ] };
+      "the throne needs no wraith; evil already won." ], bg: "rgba(48,12,28,0.92)" };
   }
   // TREASON ledger: betrayal ending unless the Mark was cleansed (v3.2).
   // winter-ascends (Temptation) still outranks; cleansed Mark → redeemed.
   if (g.betrayed && g.winterMarkCleansed) {
     return { id: "redeemed", title: "ASH AND MERCY", lines: [
       "you turned the blade — then burned the brand, or knelt to winter's mercy.",
-      "spring came for a traitor who chose the light again." ] };
+      "spring came for a traitor who chose the light again." ], bg: "rgba(56,36,18,0.90)" };
   }
   if (g.betrayed) {
     return { id: "betrayal", title: "THE BLADE THAT TURNED", lines: [
       "spring came — but one hero reached it over the other's blood.",
-      "the songs will name a traitor, and the winter will smile." ] };
+      "the songs will name a traitor, and the winter will smile." ], bg: "rgba(56,10,18,0.92)" };
   }
-  if (solo) {
-    if (g.wraithSpared) {
-      return { id: "mercy", title: "WINTER'S COMPANION", lines: [
-        "you lowered your blade, and the wraith lowered the storm.",
-        "the winter stays — but now it walks beside you." ] };
-    }
-    return totalDowns === 0
-      ? { id: "quiet-legend", title: "THE QUIET LEGEND", lines: [
-          "alone through vaults and snow, untouched by winter —",
-          "the bards will not believe a word of it." ] }
-      : { id: "quiet-hero", title: "THE QUIET HERO", lines: [
-          "one hero, one blade, one long road north.",
-          "spring came quietly, and so did you." ] };
-  }
-  // Downed-but-revivable partner (not a permanent corpse).
-  if (g.players.some(p => p.present && p.downed && !p.dead)) {
+  // Downed-but-revivable partner (not a permanent corpse) — before Long matrix.
+  if (!solo && g.players.some(p => p.present && p.downed && !p.dead)) {
     return { id: "lone-thaw", title: "LONE THAW", lines: [
       "you touched the pedestal as your partner lay in the snow.",
       "spring came — now carry them home through the meltwater." ] };
@@ -712,10 +778,26 @@ export function endingFor(g: Game): Ending {
       "your partner bled out alone while winter pressed in.",
       "spring will not forget who was left behind." ] };
   }
+  // LONG QUEST: four worlds from Ember × Wraith (spare vs not).
+  if (g.hardGate) return longQuestEnding(g);
+  if (solo) {
+    if (g.wraithSpared) {
+      return { id: "mercy", title: "WINTER'S COMPANION", lines: [
+        "you lowered your blade, and the wraith lowered the storm.",
+        "the winter stays — but now it walks beside you." ], bg: "rgba(18,48,88,0.88)" };
+    }
+    return totalDowns === 0
+      ? { id: "quiet-legend", title: "THE QUIET LEGEND", lines: [
+          "alone through vaults and snow, untouched by winter —",
+          "the bards will not believe a word of it." ] }
+      : { id: "quiet-hero", title: "THE QUIET HERO", lines: [
+          "one hero, one blade, one long road north.",
+          "spring came quietly, and so did you." ] };
+  }
   if (g.wraithSpared) {
     return { id: "mercy", title: "WINTER'S COMPANION", lines: [
       "you lowered your blade, and the wraith lowered the storm.",
-      "the winter stays — but now it walks beside you." ] };
+      "the winter stays — but now it walks beside you." ], bg: "rgba(18,48,88,0.88)" };
   }
   if (totalDowns === 0) {
     return { id: "flawless", title: "FLAWLESS LEGEND", lines: [
@@ -725,7 +807,7 @@ export function endingFor(g: Game): Ending {
   if (g.emberDead && g.charmClaimed) {
     return { id: "ember-pact", title: "THE EMBER PACT", lines: [
       "with the dwarven charm and arrows of living fire,",
-      "you thawed the winter from below and above alike." ] };
+      "you thawed the winter from below and above alike." ], bg: "rgba(72,28,12,0.88)" };
   }
   return { id: "classic", title: "THE LONG WINTER ENDS", lines: [
     "two heroes carried the Amber Blade north,",
@@ -773,6 +855,7 @@ export interface Game {
   hasFeather: boolean;
   hasEmberMercy: boolean;  // Ember Sanctum relic — redeem a fallen dark partner (one use)
   hasBell: boolean;        // Frost Bell carried (team, one use)
+  hasSigil: boolean;       // Vault Sigil — Cellars token; Long Quest post-golem Hall key
   hasMirror: boolean;      // Mirror Shard claimed — sharpens the partner scry window
   mirrorLost: boolean;     // the shard shattered (two heroes shared the lake) — gone forever
   containers: Record<string, boolean>;
@@ -780,15 +863,20 @@ export interface Game {
   feathers: Record<string, boolean>;
   emberMercies: Record<string, boolean>;
   bells: Record<string, boolean>;
+  sigils: Record<string, boolean>;
   mirrors: Record<string, boolean>;
   emberMercyUsed: boolean;
   wraithDead: boolean;
   emberDead: boolean;
+  /** Spared the Ember Golem (stand close while yielding) — Long Quest resolves without charm. */
+  emberSpared: boolean;
   charmClaimed: boolean;
-  hardGate: boolean;   // seal the glacier behind the charm (menu choice)
+  hardGate: boolean;   // LONG QUEST: sequential wing seals (menu choice)
   /** AI DUO only: Wraith throne sealed until Temptation Court is visited. */
   duoTemptGate: boolean;
   temptationVisited: boolean;   // any hero entered room 18
+  /** Entered Old Vault Cellars (room 12) at least once — telemetry / observation. */
+  cellarsVisited: boolean;
   temptationResolved: boolean;  // left room 18 after visit (Whisperer cannot be slain)
   temptationDeal: boolean;      // accepted the Whisperer's bargain (dark ritual)
   /** Observable fork outcome — dark-commit / winter-ascends / redeemed / refused */
@@ -892,15 +980,20 @@ function fillActiveSimRoom(g: Game, index: number): void {
     (g.travelMode === "free" && g.cleared[index]) ||
     (index === 5 && g.golemDead) ||
     (index === 11 && (g.wraithDead || g.wraithSpared)) ||
-    (index === 16 && g.emberDead) ||
+    (index === 16 && (g.emberDead || g.emberSpared)) ||
     (index === 18 && g.temptationResolved);
   if (!skipEnemies) {
-    for (const e of spec.enemies) g.enemies.push(makeEnemy(e.kind, e.x, e.y));
+    for (const e of spec.enemies) {
+      const en = makeEnemy(e.kind, e.x, e.y);
+      settleBodyPos(g, en, en.w, en.h);
+      g.enemies.push(en);
+    }
   }
   if (index === 18) {
     g.temptationVisited = true;
     applyCourtSentinelStance(g);
   }
+  if (index === 12) g.cellarsVisited = true;
   g.pedestal = null;
   if (index === 5 && g.golemDead && !g.amberClaimed) {
     g.pedestal = { x: 7.5 * TILE, y: 3 * TILE, final: false };
@@ -939,6 +1032,11 @@ function fillActiveSimRoom(g: Game, index: number): void {
       pushPickup(g, { kind: "frostbell", x: be.x, y: be.y, t: 0, cid: be.id });
     }
   }
+  for (const sg of SIGILS) {
+    if (sg.room === index && !g.sigils[sg.id] && !g.hasSigil) {
+      pushPickup(g, { kind: "sigil", x: sg.x, y: sg.y, t: 0, cid: sg.id });
+    }
+  }
   for (const mi of MIRRORS) {
     if (mi.room === index && !g.mirrors[mi.id] && !g.hasMirror && !g.mirrorLost) {
       pushPickup(g, { kind: "mirror", x: mi.x, y: mi.y, t: 0, cid: mi.id });
@@ -948,6 +1046,28 @@ function fillActiveSimRoom(g: Game, index: number): void {
     const floor = spec.tiles[1].charAt(1);
     setTile(g, 7, 0, floor);
     setTile(g, 8, 0, floor);
+  }
+  // Guard → Amber Lake portal: Classic paints after golemDead. LONG QUEST Gate A
+  // keeps it floor until Vault Sigil — same lock as Guard→Hall (no Lake bypass).
+  if (index === 4) {
+    if (guardLakePortalOpen(g)) {
+      setTile(g, 7, 11, "c");
+      setTile(g, 8, 11, "c");
+    } else {
+      setTile(g, 7, 11, "f");
+      setTile(g, 8, 11, "f");
+    }
+  }
+  // keyOnClear rooms drop a floor key once. Leaving before picking it up
+  // wiped g.pickups on the next fill — Classic rarely left after clearing,
+  // but LONG QUEST Gate A forces a Cellars detour first, soft-locking the
+  // golem door. Respawn the key when the room is cleared, the door is still
+  // locked, and nobody on the team is holding a key.
+  if (spec.keyOnClear && g.cleared[index] && !g.doors[index]) {
+    const teamKeys = g.players[0].keys + g.players[1].keys;
+    if (teamKeys === 0) {
+      pushPickup(g, { kind: "key", x: 8 * TILE, y: 7 * TILE, t: 0 });
+    }
   }
   if (index === 0 && g.gateMelted) {
     setTile(g, 7, 0, "g");
@@ -1086,9 +1206,11 @@ function roomTransition(g: Game, pi: number, index: number, px: number, py: numb
   loadRoom(g, index, px, py);
 }
 
-/** AI DUO + TREASON: Wraith throne stays shut until Temptation Court is visited. */
+/** AI DUO or LONG QUEST + TREASON: Wraith throne stays shut until Temptation
+ *  Court is visited. Classic TREASON-on (no hardGate, no duoTemptGate) keeps
+ *  the Court optional. */
 export function throneTemptSealed(g: Game): boolean {
-  return g.duoTemptGate && g.treason && !g.temptationVisited;
+  return (g.duoTemptGate || g.hardGate) && g.treason && !g.temptationVisited;
 }
 
 /** Temptation Court (room 18) is a TREASON-bargain wing — sealed when TREASON is off. */
@@ -1321,11 +1443,27 @@ function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
   if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
-/** Message if this destination is currently sealed; null if the exit is free. */
-function sealedExitMsg(g: Game, dest: number): string | null {
+/** Message if this destination is currently sealed; null if the exit is free.
+ *  LONG QUEST (`hardGate`) sequentially seals boss doors behind side wings —
+ *  Classic (`hardGate` off) leaves every check below as a no-op. */
+export function sealedExitMsg(g: Game, dest: number): string | null {
   if (g.betrayalDuel) {
     return "BETRAYAL — the exits are sealed until one hero falls";
   }
+  // Gate A: after the golem falls, Guard → Hall sealed until Vault Sigil
+  // (Cellars). Pre-golem free movement. Not elixir — Guard already has one.
+  // Lake portal uses the same Gate A lock (see guardLakePortalOpen).
+  if (dest === 3 && g.hardGate && g.golemDead && !g.hasSigil) {
+    return "The vault will not release you... a Sigil rests in the Cellars";
+  }
+  // Gate C: Ice Guard → throne sealed until Crypt feather AND Playground bell
+  if (dest === 11 && g.hardGate && !g.feathers["crypt"]) {
+    return "Winter seals the throne... the Phoenix Feather rests in the Frozen Crypt";
+  }
+  if (dest === 11 && g.hardGate && !g.bells["rink"]) {
+    return "Winter seals the throne... the Frost Bell waits on the Frozen Playground";
+  }
+  // Gate D: throne also needs Temptation Court when TREASON + (duo|long)
   if (dest === 11 && throneTemptSealed(g)) {
     return "Winter seals the throne... a whisper waits west of Frost Woods";
   }
@@ -1363,11 +1501,13 @@ export function newGame(): Game {
     players: [newPlayer(0), newPlayer(1)] as [Player, Player],
     cleared: {}, doors: {},
     golemDead: false, amberClaimed: false, gateMelted: false,
-    hasBow: false, hasFeather: false, hasEmberMercy: false, hasBell: false, hasMirror: false, mirrorLost: false,
-    containers: {}, elixirs: {}, feathers: {}, emberMercies: {}, bells: {}, mirrors: {},
+    hasBow: false, hasFeather: false, hasEmberMercy: false, hasBell: false, hasSigil: false,
+    hasMirror: false, mirrorLost: false,
+    containers: {}, elixirs: {}, feathers: {}, emberMercies: {}, bells: {}, sigils: {}, mirrors: {},
     emberMercyUsed: false,
-    wraithDead: false, emberDead: false, charmClaimed: false, hardGate: false,
-    duoTemptGate: false, temptationVisited: false, temptationResolved: false,
+    wraithDead: false, emberDead: false, emberSpared: false, charmClaimed: false, hardGate: false,
+    duoTemptGate: false, temptationVisited: false, cellarsVisited: false,
+    temptationResolved: false,
     temptationDeal: false, temptationPayoff: null,
     slick: false, treason: false, betrayed: false, betrayalCause: null,
     winterMarkCleansed: false,
@@ -1486,6 +1626,30 @@ export function moveBody(g: Game, b: { x: number; y: number }, w: number, h: num
     const edge = dy > 0 ? ny + h : ny;
     if (!solidAt(g, b.x + 1, edge) && !solidAt(g, b.x + w - 1, edge) &&
         !solidAt(g, b.x + w / 2, edge)) b.y = ny;
+  }
+}
+
+/** true when the body's centre sits inside a solid tile — once there, moveBody
+ *  cannot escape (every leading-edge probe is also solid), so callers must nudge. */
+export function bodyWedged(g: Game, x: number, y: number, w: number, h: number): boolean {
+  return solidAt(g, x + w / 2, y + h / 2);
+}
+
+/** nudge a wedged body onto the nearest open floor (same spiral as loot settle) */
+export function settleBodyPos(g: Game, b: { x: number; y: number }, w: number, h: number): void {
+  if (!bodyWedged(g, b.x, b.y, w, h)) return;
+  const ox = b.x, oy = b.y;
+  for (let ring = 1; ring <= 10; ring++) {
+    for (let ty = -ring; ty <= ring; ty++) {
+      for (let tx = -ring; tx <= ring; tx++) {
+        if (Math.abs(tx) !== ring && Math.abs(ty) !== ring) continue;
+        const nx = ox + tx * 4, ny = oy + ty * 4;
+        if (!bodyWedged(g, nx, ny, w, h)) {
+          b.x = nx; b.y = ny;
+          return;
+        }
+      }
+    }
   }
 }
 
@@ -2032,6 +2196,18 @@ function damageEnemy(g: Game, e: Enemy, dmg: number, fx: number, fy: number, by?
       burst(g, ecx, ecy, "#dff5ff", 14);
       return;
     }
+    if (e.kind === "ember" && e.phase !== 9 && !g.emberSpared && !g.emberDead) {
+      // lethal blow withheld: Ember yields — spare (no charm) or strike for the Charm
+      e.hp = 1;
+      e.phase = 9;
+      e.vx = 0; e.vy = 0;
+      e.spareP = 0;
+      g.message = "The Ember Golem yields... strike again for the Charm, or stand close to spare it";
+      g.messageT = 300;
+      sfx(g, "teleport");
+      burst(g, ecx, ecy, "#ffb545", 14);
+      return;
+    }
     killEnemy(g, e);
   } else if (e.kind === "wraith" && e.phase !== 9 && Math.random() < 0.4) {
     wraithTeleport(g, e);
@@ -2058,6 +2234,8 @@ function shoot(g: Game, x: number, y: number, vx: number, vy: number,
                betrayDeclare?: boolean): void {
   g.projectiles.push({
     x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray, betrayDeclare,
+    // Emberdeep hostiles spit cinders; winter rooms keep ice shards (canon look).
+    fire: !friendly && isEmberdeepRoom(g.room) ? true : undefined,
   });
 }
 
@@ -2088,6 +2266,9 @@ function nearestPlayer(g: Game, x: number, y: number): { p: Player; pi: number; 
 function updateEnemy(g: Game, e: Enemy): void {
   e.t++;
   if (e.hurt > 0) e.hurt--;
+  // if a spawn or knockback left the body inside a pillar, moveBody cannot
+  // walk out — settle onto open floor first (Cellars sentinel bug, 2026-07-21)
+  settleBodyPos(g, e, e.w, e.h);
   if (Math.abs(e.kx) > 0.05 || Math.abs(e.ky) > 0.05) {
     moveBody(g, e, e.w, e.h, e.kx, e.ky);
     e.kx *= 0.85; e.ky *= 0.85;
@@ -2191,6 +2372,34 @@ function updateEnemy(g: Game, e: Enemy): void {
     if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
       g.message = "Winter whispers: turn on your partner — and I grant you immortality";
       g.messageT = 220;
+    }
+  } else if (e.kind === "ember" && e.phase === 9) {
+    // yielding: the forge holds its breath
+    e.x += Math.cos(e.t * 0.04) * 0.1;
+    e.y += Math.sin(e.t * 0.05) * 0.08;
+    let touched = false;
+    for (const p of g.players) {
+      if (!p.present || p.downed) continue;
+      if (overlap(p.x - 6, p.y - 6, PLAYER_W + 12, PLAYER_H + 12, e.x, e.y, e.w, e.h)) {
+        touched = true;
+      }
+    }
+    if (touched) {
+      e.spareP++;
+      if (e.spareP >= 75) {
+        e.dead = true;
+        g.emberSpared = true;
+        // Mercy gift: Ember Mercy relic still drops (not the Charm — that is the kill prize)
+        if (!g.hasEmberMercy && !g.emberMercies["sanctum"]) {
+          pushPickup(g, { kind: "embermercy", x: 5 * TILE + 8, y: 8 * TILE, t: 0, cid: "sanctum" });
+        }
+        g.message = "The forge cools. You spared the Ember — Glacier opens without the Charm";
+        g.messageT = 280;
+        burst(g, e.x + e.w / 2, e.y + e.h / 2, "#ffb545", 18);
+        sfx(g, "revive");
+      }
+    } else if (e.spareP > 0) {
+      e.spareP--;
     }
   } else if (e.kind === "ember") {
     // ember golem: a faster cousin — spits fire while winding up, shorter stun
@@ -2299,7 +2508,9 @@ function updateEnemy(g: Game, e: Enemy): void {
 
   // contact damage (not while a golem is stunned & glowing; whisperer never harms;
   // v3.4 sealed duel: Judge shield — mobs cannot hurt heroes mid-arena)
-  const harmless = (golemLike(e.kind) && e.phase === 3) || (e.kind === "wraith" && e.phase === 9)
+  const harmless = (golemLike(e.kind) && e.phase === 3)
+    || (e.kind === "wraith" && e.phase === 9)
+    || (e.kind === "ember" && e.phase === 9)
     || e.kind === "whisperer" || g.betrayalDuel;
   if (!e.dead && !harmless) {
     const si = g.activeSim ?? 0;
@@ -2504,6 +2715,9 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
     if (p.vx !== 0 || p.vy !== 0) moveBody(g, p, PLAYER_W, PLAYER_H, p.vx, p.vy);
   }
+  // knockback / rare corner-cut can leave a hero centre inside a pillar —
+  // moveBody cannot escape from there, so nudge onto open floor first
+  settleBodyPos(g, p, PLAYER_W, PLAYER_H);
   if (Math.abs(p.kx) > 0.05 || Math.abs(p.ky) > 0.05) {
     moveBody(g, p, PLAYER_W, PLAYER_H, p.kx, p.ky);
     p.kx *= 0.8; p.ky *= 0.8;
@@ -2519,7 +2733,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     const dmg = g.amberClaimed ? 2 : 1;
     for (const e of g.enemies) {
       if (e.dead || e.hurt > 0) continue;
-      if (golemLike(e.kind) && e.phase !== 3) {
+      if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
         if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
           e.hurt = 20; sfx(g, "clang");
           burst(g, box.x + box.w / 2, box.y + box.h / 2, "#cfd2e0", 4);
@@ -2615,6 +2829,12 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
         g.hasBell = true;
         g.bells[it.cid ?? "?"] = true;
         g.message = "Frost Bell! Press C to freeze the room's foes (one use)";
+        g.messageT = 220;
+        sfx(g, "secret");
+      } else if (it.kind === "sigil") {
+        g.hasSigil = true;
+        g.sigils[it.cid ?? "?"] = true;
+        g.message = "Vault Sigil! The Cellars mark is yours — the vault may release you";
         g.messageT = 220;
         sfx(g, "secret");
       } else if (it.kind === "mirror") {
@@ -2728,9 +2948,18 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       return;
     }
     if (leaveBlocked) return;
-    if (g.room === 8 && g.hardGate && !g.charmClaimed) {
+    // LONG QUEST Gate A: Guard→Lake portal sealed with Hall until Vault Sigil
+    if (g.room === 4 && g.hardGate && g.golemDead && !g.hasSigil) {
       if (g.messageT === 0) {
-        g.message = "Dwarven wards seal this cave... their charm lies in the burning deep";
+        g.message = "The vault seals every way out... a Sigil rests in the Cellars";
+        g.messageT = 180;
+      }
+      p.y -= 2; // nudge off south cave row
+      return;
+    }
+    if (g.room === 8 && g.hardGate && !emberResolved(g)) {
+      if (g.messageT === 0) {
+        g.message = "Dwarven wards seal this cave... Emberdeep waits — spare or fell the forge";
         g.messageT = 180;
       }
       // nudge back off the tile so the message can re-fire
@@ -2842,7 +3071,7 @@ function tickSimPhysics(g: Game): void {
       for (const e of g.enemies) {
         if (e.dead || e.hurt > 0) continue;
         if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
-          if (golemLike(e.kind) && e.phase !== 3) {
+          if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
             e.hurt = 12; sfx(g, "clang");
           } else if (e.kind === "sentinel" &&
                      sentinelBlocks(e, pr.x - pr.vx * 8, pr.y - pr.vy * 8)) {
@@ -3043,7 +3272,7 @@ export interface PartnerView {
              hurt: number; phase: number; t: number; dead: boolean; spareP: number;
              stagger: number; frozen: number }[];
   pickups: { kind: PickupKind; x: number; y: number }[];
-  projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
+  projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean; fire?: boolean }[];
   companion: { x: number; y: number; t: number } | null;
 }
 
@@ -3068,10 +3297,10 @@ export interface Snapshot {
              stagger: number; frozen: number }[];
   companion: { x: number; y: number; t: number } | null;
   pickups: { kind: PickupKind; x: number; y: number }[];
-  projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean }[];
+  projectiles: { x: number; y: number; vx: number; vy: number; friendly: boolean; fire?: boolean }[];
   pedestal: { x: number; y: number; final: boolean } | null;
   hasBow: boolean; amberClaimed: boolean; charm: boolean; hasFeather: boolean;
-  hasEmberMercy: boolean; hasBell: boolean; hasMirror: boolean;
+  hasEmberMercy: boolean; hasBell: boolean; hasSigil: boolean; hasMirror: boolean;
   message: string; messageT: number;
   shake: number; ticks: number; fade: number;
   events: GameEvent[];
@@ -3135,6 +3364,7 @@ function partnerViewFor(g: Game, viewerSlot: number, viewerSimIdx: number): Part
     pickups: sim.pickups.filter(it => it.t >= 0).map(it => ({ kind: it.kind, x: it.x, y: it.y })),
     projectiles: sim.projectiles.map(pr => ({
       x: pr.x, y: pr.y, vx: pr.vx, vy: pr.vy, friendly: pr.friendly,
+      ...(pr.fire ? { fire: true } : {}),
     })),
     // the spared wraith belongs to exactly one sim — show it only if it lives
     // in the PARTNER's room, else it doubles into both the main view and the PiP
@@ -3178,10 +3408,11 @@ export function toSnapshot(g: Game, names: [string, string],
     pickups: sim.pickups.filter(it => it.t >= 0).map(it => ({ kind: it.kind, x: it.x, y: it.y })),
     projectiles: sim.projectiles.map(pr => ({
       x: pr.x, y: pr.y, vx: pr.vx, vy: pr.vy, friendly: pr.friendly,
+      ...(pr.fire ? { fire: true } : {}),
     })),
     pedestal: sim.pedestal,
     hasBow: g.hasBow, amberClaimed: g.amberClaimed, charm: g.charmClaimed, hasFeather: g.hasFeather,
-    hasEmberMercy: g.hasEmberMercy, hasBell: g.hasBell, hasMirror: g.hasMirror,
+    hasEmberMercy: g.hasEmberMercy, hasBell: g.hasBell, hasSigil: g.hasSigil, hasMirror: g.hasMirror,
     slick: g.slick,
     treason: g.treason,
     betrayalDuel: g.betrayalDuel,

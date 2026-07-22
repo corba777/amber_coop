@@ -584,6 +584,116 @@ function freshPlay(): Game {
   ok(!inp.a && !inp.b, "the agent does not strike a yielding foe");
 }
 
+// ------------------------------------------------- 14b. Ember yield / spare + Long dual-mercy endings
+{
+  console.log("[14b] Ember Golem yields: spare or strike; Long Quest four worlds");
+  const core = await import("../shared/core");
+
+  // A) lethal blow → yield (phase 9), not death
+  const g = freshPlay();
+  core.loadRoom(g, 16, 7 * TILE, 10 * TILE);
+  g.screen = "play"; g.fade = 0;
+  const em = g.enemies.find(e => e.kind === "ember")!;
+  ok(!!em, "ember on the sanctum");
+  em.hp = 1;
+  em.phase = 3; // golem-family: only vulnerable while stunned
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  g.players[0].x = em.x - 12; g.players[0].y = em.y + 10;
+  const stab = { ...emptyInput(), a: true, r: true };
+  for (let i = 0; i < 60 && em.phase !== 9; i++) {
+    em.phase = 3; // keep stun window open while we search for the hit
+    step(g, i % 14 < 3 ? stab : emptyInput(), emptyInput(), prev);
+  }
+  ok(em.phase === 9 && !em.dead && em.hp === 1 && !g.emberDead,
+     "lethal hit → Ember yields");
+  const hpBefore = g.players[0].hp;
+  g.players[0].x = em.x + 2; g.players[0].y = em.y + 2;
+  g.players[0].invuln = 0;
+  for (let i = 0; i < 20; i++) step(g, emptyInput(), emptyInput(), prev);
+  ok(g.players[0].hp === hpBefore, "yielding Ember does no harm");
+
+  // B) mercy: stand beside it — no Charm, Glacier resolves
+  for (let i = 0; i < 120 && !g.emberSpared; i++) {
+    g.players[0].x = em.x + 2; g.players[0].y = em.y + 2;
+    step(g, emptyInput(), emptyInput(), prev);
+  }
+  ok(g.emberSpared && em.dead && !g.emberDead && !g.charmClaimed,
+     "mercy: Ember spared, no Charm, not emberDead");
+  ok(core.emberResolved(g), "emberResolved after spare");
+
+  // C) strike again → classic kill + Charm
+  const g2 = freshPlay();
+  core.loadRoom(g2, 16, 7 * TILE, 10 * TILE);
+  g2.screen = "play"; g2.fade = 0;
+  const em2 = g2.enemies.find(e => e.kind === "ember")!;
+  em2.hp = 1;
+  em2.phase = 3;
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  g2.players[0].x = em2.x - 12; g2.players[0].y = em2.y + 10;
+  for (let i = 0; i < 60 && em2.phase !== 9; i++) {
+    em2.phase = 3;
+    step(g2, i % 14 < 3 ? { ...emptyInput(), a: true, r: true } : emptyInput(), emptyInput(), prev2);
+  }
+  ok(em2.phase === 9, "yields again");
+  for (let i = 0; i < 120 && !em2.dead; i++) {
+    g2.players[0].x = em2.x - 12; g2.players[0].y = em2.y + 10;
+    step(g2, i % 14 < 3 ? { ...emptyInput(), a: true, r: true } : emptyInput(), emptyInput(), prev2);
+  }
+  ok(em2.dead && g2.emberDead && !g2.emberSpared, "second strike: Ember killed");
+  ok(g2.pickups.some(p => p.kind === "charm"), "Charm drops on kill");
+
+  // D) Long Quest dual-mercy ending matrix (win bg colors; Classic untouched)
+  const mk = (mut: (g: Game) => void): { id: string; bg?: string } => {
+    const gx = freshPlay();
+    gx.hardGate = true;
+    gx.stats[0].downs = 1; // avoid accidental flawless if matrix ever regresses
+    mut(gx);
+    return core.endingFor(gx);
+  };
+  ok(mk(g => { g.emberSpared = true; g.wraithSpared = true; }).id === "verdant",
+     "Long: both spared → verdant");
+  ok(!!mk(g => { g.emberSpared = true; g.wraithSpared = true; }).bg,
+     "Long: verdant carries win bg");
+  ok(mk(g => { g.emberSpared = true; g.wraithDead = true; }).id === "cinder",
+     "Long: Ember spare only → cinder");
+  ok(mk(g => { g.emberDead = true; g.wraithSpared = true; }).id === "frostbound",
+     "Long: Wraith spare only → frostbound");
+  ok(mk(g => { g.emberDead = true; g.wraithDead = true; g.charmClaimed = true; }).id === "stone",
+     "Long: neither spared → stone (not ember-pact)");
+  // Classic still uses mercy / ember-pact
+  ok(mk(g => { g.hardGate = false; g.wraithSpared = true; }).id === "mercy",
+     "Classic: Wraith spare still mercy");
+  const classicFire = freshPlay();
+  classicFire.stats[0].downs = 1;
+  classicFire.emberDead = true; classicFire.charmClaimed = true;
+  ok(core.endingFor(classicFire).id === "ember-pact", "Classic: ember-pact preserved");
+
+  // Emberdeep hostiles spit fire cinders; winter rooms keep ice shards
+  const gFire = freshPlay();
+  core.loadRoom(gFire, 16, 7 * TILE, 10 * TILE);
+  gFire.screen = "play"; gFire.fade = 0;
+  gFire.projectiles = [];
+  const emF = gFire.enemies.find(e => e.kind === "ember")!;
+  emF.phase = 1; emF.t = 13; // next tick → 14 → spit
+  const prevF: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gFire, emptyInput(), emptyInput(), prevF);
+  ok(gFire.projectiles.some(p => !p.friendly && p.fire === true),
+     "Ember Sanctum: hostile spit is fire");
+  const snapF = core.toSnapshot(gFire, NAMES, 0, false);
+  ok(snapF.projectiles.some(p => p.fire === true),
+     "snapshot carries fire flag for Emberdeep spit");
+  const gIce = freshPlay();
+  core.loadRoom(gIce, 11, 7 * TILE, 11 * TILE);
+  gIce.screen = "play"; gIce.fade = 0;
+  gIce.projectiles = [];
+  const wrF = gIce.enemies[0];
+  wrF.t = 84; // next tick → 85 → ice fan
+  step(gIce, emptyInput(), emptyInput(), prevF);
+  ok(gIce.projectiles.some(p => !p.friendly) &&
+     !gIce.projectiles.some(p => p.fire),
+     "Throne: wraith shards stay ice (no fire flag)");
+}
+
 // ------------------------------------------------- 15. menu wiring sanity
 {
   console.log("[15] built bundles: quest choice reaches every mode (both clients)");
@@ -652,6 +762,10 @@ function freshPlay(): Game {
     ok(src.includes("drawDuoSpectatorHud") && src.includes("SOLO"),
        `${file}: AI duo spectator shows both hearts, then SOLO after bond-cut`);
     ok(src.includes('id="pip"'), `${file}: partner scry mirror lives outside the game frame`);
+    ok(src.includes('id="thoughts"') && src.includes("syncThoughtPanel"),
+       `${file}: AI thought strip lives outside the game frame`);
+    ok(src.includes("formatThoughtLines"),
+       `${file}: thought strip uses shared formatThoughtLines`);
     ok(src.includes("[x] FREE ROAM") || src.includes("FREE ROAM"),
        `${file}: free roam travel toggle on quest screen`);
     ok(src.includes("DEFEAT OR BE DEFEATED") && src.includes("betrayalDuel"),
@@ -1471,9 +1585,9 @@ function freshPlay(): Game {
   }
   ok(g.room === 3, "the agent walked into the cave mouth and teleported");
 
-  // the observation advertises the cave among the exits
+  // the observation advertises the cave among the exits (OPEN/SEALED legend)
   const obs = agent.observe(g2ForObs());
-  ok(obs.includes('"cave"'), "exits list includes the cave");
+  ok(/cave→/.test(obs), "exits list includes the cave");
 
   // a stalled solo planner gets route-assisted — and it is counted
   const g3 = freshPlay();
@@ -2479,36 +2593,132 @@ function freshPlay(): Game {
 }
 
 // ------------------------------------------------- 113. FREE ROAM AI DUO: mutual follow ≠ freeze
-// Author Artem 2026-07-14 — RA7R: no Leader cast left both on "follow" and stuck.
-// Door-anchor slot still route-assists (locomotion), without LINKED Leader prompt.
+// Author Artem 2026-07-14 — RA7R: both on "follow" must not standstill.
+// 2026-07-22: peer cast (no slot Leader); temperament hierarchy soft-lead.
 {
   console.log("[113] FREE ROAM AI DUO: mutual follow does not freeze the party");
-  const { AgentPlayer } = await import("../server/agent");
+  const { AgentPlayer, TEMPERAMENT_RANK } = await import("../server/agent");
   const { mock } = await import("../server/llm");
-  const g = freshPlay();
-  g.screen = "play"; g.fade = 0;
-  g.travelMode = "free";
-  g.players[0].npc = false;
-  g.players[1].npc = true;
-  g.enemies = [];
-  const a0 = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true, temperament: "hunter" });
-  const a1 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
-  type Mut = { intent: { action: string } };
-  (a0 as unknown as Mut).intent = { action: "follow" };
-  (a1 as unknown as Mut).intent = { action: "follow" };
-  const x0 = g.players[0].x;
-  const prev: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 240; i++) {
-    step(g, a0.control(g), a1.control(g), prev);
+  type Mut = {
+    intent: { action: string };
+    opts: { leader?: boolean };
+    mateTemperament: string | null;
+  };
+
+  // Equal hunters — true peers, both quest-hop (race / co-travel)
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.travelMode = "free";
+    g.players[0].npc = false;
+    g.players[1].npc = false;
+    g.enemies = [];
+    const a0 = new AgentPlayer(mock(), 0, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    const a1 = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    a0.mateTemperament = "hunter";
+    a1.mateTemperament = "hunter";
+    ok(!(a0 as unknown as Mut).opts.leader && !(a1 as unknown as Mut).opts.leader,
+       "FREE ROAM peers: neither agent carries slot Leader cast");
+    ok(!a0.isTemperamentLeader() && !a1.isTemperamentLeader(),
+       "equal ranks → no exclusive temperament lead");
+    (a0 as unknown as Mut).intent = { action: "follow" };
+    (a1 as unknown as Mut).intent = { action: "follow" };
+    const x0 = g.players[0].x;
+    const x1 = g.players[1].x;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 240; i++) {
+      step(g, a0.control(g), a1.control(g), prev);
+    }
+    const moved0 = Math.abs(g.players[0].x - x0) > 8 || g.room !== 0
+      || (a0 as unknown as Mut).intent.action === "exit";
+    const moved1 = Math.abs(g.players[1].x - x1) > 8 || g.room !== 0
+      || (a1 as unknown as Mut).intent.action === "exit";
+    ok(moved0, "equal hunters: slot 0 routes when both choose follow");
+    ok(moved1, "equal hunters: slot 1 also routes — peer race");
   }
-  const moved = Math.abs(g.players[0].x - x0) > 8 || g.room !== 0
-    || (a0 as unknown as Mut).intent.action === "exit";
-  ok(moved, "FREE ROAM door-anchor still routes when both choose follow");
+
+  // Hunter + guard — hunter soft-leads, guard escorts
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.travelMode = "free";
+    g.players[0].npc = false;
+    g.players[1].npc = false;
+    g.enemies = [];
+    const hunt = new AgentPlayer(mock(), 0, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    const guard = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "guard", duoPeer: true,
+    });
+    hunt.mateTemperament = "guard";
+    guard.mateTemperament = "hunter";
+    ok(TEMPERAMENT_RANK.hunter > TEMPERAMENT_RANK.guard, "rank: hunter > guard");
+    ok(hunt.isTemperamentLeader() && !guard.isTemperamentLeader(),
+       "higher temperament is soft lead when ranks differ");
+    (hunt as unknown as Mut).intent = { action: "follow" };
+    (guard as unknown as Mut).intent = { action: "follow" };
+    hunt.control(g);
+    guard.control(g);
+    ok((hunt as unknown as Mut).intent.action === "exit",
+       "temperament lead (hunter) quest-hops on mutual follow");
+    ok((guard as unknown as Mut).intent.action === "follow" ||
+         (guard as unknown as Mut).intent.action === "idle",
+       "lower temperament (guard) escorts — no quest hop");
+  }
+
+  // Human+AI: human always counts as hunter rank
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.travelMode = "free";
+    g.players[0].npc = false; // human
+    g.players[1].npc = true;
+    g.enemies = [];
+    const guardAI = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "guard",
+    });
+    guardAI.mateTemperament = "hunter"; // Session wires human → hunter
+    ok(!guardAI.isTemperamentLeader(),
+       "human=hunter: guard AI is not temperament lead");
+    (guardAI as unknown as Mut).intent = { action: "follow" };
+    guardAI.control(g);
+    ok((guardAI as unknown as Mut).intent.action === "follow" ||
+         (guardAI as unknown as Mut).intent.action === "idle",
+       "human=hunter: guard AI escorts — no quest hop");
+
+    const huntAI = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter",
+    });
+    huntAI.mateTemperament = "hunter";
+    ok(!huntAI.isTemperamentLeader(),
+       "human=hunter + AI hunter: equal ranks, no exclusive lead");
+    (huntAI as unknown as Mut).intent = { action: "follow" };
+    huntAI.control(g);
+    ok((huntAI as unknown as Mut).intent.action === "exit",
+       "human=hunter + AI hunter: peer race — AI may quest-hop");
+  }
+
   const agentSrc = (await import("node:fs")).readFileSync("server/agent.ts", "utf8");
-  ok(/RA7R|mutual-follow freezes/i.test(agentSrc),
-     "FREE ROAM mutual-follow break is documented in controller");
+  ok(/temperament hierarchy soft-lead/i.test(agentSrc),
+     "FREE ROAM RA7R documents temperament soft-lead");
   ok(/action "exit" with that dir/i.test(agentSrc),
      "FREE_ROAM_ADDENDUM: say≠motion — use exit, not follow-narration");
+
+  // Session boot: freeDuo → both npc=false, leader only when LINKED
+  const indexSrc = (await import("node:fs")).readFileSync("server/index.ts", "utf8");
+  ok(/leader: !freeDuo/.test(indexSrc),
+     "FREE ROAM duo boot: slot 0 leader only when LINKED");
+  ok(/npc = !freeDuo/.test(indexSrc),
+     "FREE ROAM duo boot: both heroes npc=false (peer cast)");
+  ok(/mateTemperament/i.test(indexSrc),
+     "Session wires mateTemperament for FREE ROAM hierarchy");
+  ok(/Human partner always counts as hunter/i.test(indexSrc),
+     "Session: human partner always counts as hunter rank");
 }
 
 // ------------------------------------------------- 63. wedged loot settles and can be collected
@@ -2539,6 +2749,57 @@ function freshPlay(): Game {
   }
   ok(!g.pickups.some(p => p.t >= 0), "hero collects the heart when standing beside it");
   ok(g.players[0].hp === 6, "the heart actually healed");
+}
+
+// ------------------------------------------------- 115. sentinel never wedged in a Cellars pillar
+// (tester report 2026-07-21: sentinel stuck inside a column — spawn was on "W")
+{
+  console.log("[115] Cellars sentinel spawns off pillars; wedged bodies unstick");
+  const core = await import("../shared/core");
+  const { bodyWedged, settleBodyPos, SOLID, tileAt, makeEnemy } = core;
+
+  const g = freshPlay();
+  core.loadRoom(g, 12, 7 * TILE, 8 * TILE);
+  g.screen = "play"; g.fade = 0;
+  const sentinels = g.enemies.filter(e => e.kind === "sentinel" && !e.dead);
+  ok(sentinels.length === 2, "Cellars still fields two sentinels");
+  for (const e of sentinels) {
+    ok(!bodyWedged(g, e.x, e.y, e.w, e.h),
+       `sentinel at (${Math.round(e.x)},${Math.round(e.y)}) is not inside a pillar`);
+    const tx = Math.floor((e.x + e.w / 2) / TILE);
+    const ty = Math.floor((e.y + e.h / 2) / TILE);
+    ok(!SOLID.has(tileAt(g, tx, ty)),
+       `sentinel centre tile (${tx},${ty})=${tileAt(g, tx, ty)} is walkable`);
+  }
+
+  // legacy bad spawn (5,4) was solid — settleBodyPos must eject a wedged body
+  const stuck = makeEnemy("sentinel", 5 * TILE, 4 * TILE);
+  ok(bodyWedged(g, stuck.x, stuck.y, stuck.w, stuck.h),
+     "the old (5,4) spawn would place a sentinel inside the pillar");
+  settleBodyPos(g, stuck, stuck.w, stuck.h);
+  ok(!bodyWedged(g, stuck.x, stuck.y, stuck.w, stuck.h),
+     "settleBodyPos nudges the wedged sentinel onto open floor");
+
+  // physics tick also unsticks a hero jammed into a pillar
+  g.players[0].x = 5 * TILE + 2;
+  g.players[0].y = 4 * TILE + 2;
+  ok(bodyWedged(g, g.players[0].x, g.players[0].y, PLAYER_W, PLAYER_H),
+     "hero planted on the pillar is wedged");
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(!bodyWedged(g, g.players[0].x, g.players[0].y, PLAYER_W, PLAYER_H),
+     "one physics tick ejects the wedged hero");
+
+  // every room's stock enemies spawn off solids (canon + wings)
+  for (let ri = 0; ri < core.ROOMS.length; ri++) {
+    const gr = freshPlay();
+    core.loadRoom(gr, ri, 7 * TILE, 8 * TILE);
+    for (const e of gr.enemies) {
+      if (e.dead) continue;
+      ok(!bodyWedged(gr, e.x, e.y, e.w, e.h),
+         `room ${ri} ${core.ROOMS[ri].name}: ${e.kind} not wedged at spawn`);
+    }
+  }
 }
 
 // ------------------------------------------------- 64. doorway stall — hunter yields instead of camping
@@ -5202,6 +5463,429 @@ function freshPlay(): Game {
   }
   ok(gEdge.room === 7 && gEdge.temptationResolved,
      "leaving Temptation Court after visit marks temptationResolved");
+}
+
+{
+  // LONG QUEST gate chain (author Artem 2026-07-21): hardGate sequentially
+  // seals every side wing before each boss. Classic (hardGate off) stays
+  // byte-identical — every sealedExitMsg check below must return null.
+  console.log("[108] LONG QUEST: sequential wing gates before each boss");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  type TargetRoomAgent = { targetRoom(g: Game): number };
+
+  // --- Classic: every new seal is a no-op ---
+  const gClassic = freshPlay();
+  gClassic.hardGate = false;
+  gClassic.golemDead = true;
+  ok(core.sealedExitMsg(gClassic, 5) === null, "Classic: golem door open");
+  ok(core.sealedExitMsg(gClassic, 3) === null, "Classic: Hall exit open after golem without Sigil");
+  ok(core.sealedExitMsg(gClassic, 11) === null, "Classic: throne open without feather/bell");
+  ok(!core.throneTemptSealed(gClassic), "Classic: no temptation throne seal");
+
+  // --- Gate A: AFTER golem, Guard→Hall needs Vault Sigil (not elixir) ---
+  const gA = freshPlay();
+  gA.hardGate = true;
+  ok(core.sealedExitMsg(gA, 5) === null, "Gate A: golem door open before fight");
+  ok(core.sealedExitMsg(gA, 3) === null, "Gate A: Hall open while golem still lives");
+  gA.golemDead = true;
+  ok(!!core.sealedExitMsg(gA, 3), "Gate A: Hall sealed after golem without Sigil");
+  ok(/Sigil|Cellars/i.test(core.sealedExitMsg(gA, 3)!), "Gate A: message names Sigil/Cellars");
+  ok(!/elixir|draught/i.test(core.sealedExitMsg(gA, 3)!),
+     "Gate A: does not confuse with Guard Room's vault elixir");
+  gA.elixirs["vault"] = true;
+  gA.elixirs["cellar"] = true;
+  gA.cellarsVisited = true;
+  ok(!!core.sealedExitMsg(gA, 3), "Gate A: elixir / visit alone does not lift the seal");
+  gA.hasSigil = true;
+  ok(core.sealedExitMsg(gA, 3) === null, "Gate A: Hall opens after Vault Sigil");
+
+  // Walk-in: after golem, hardGate blocks 4→3 until Sigil; Cellars stays open
+  const gAwalk = freshPlay();
+  gAwalk.hardGate = true;
+  gAwalk.golemDead = true;
+  gAwalk.amberClaimed = true;
+  core.loadRoom(gAwalk, 4, 7.5 * TILE, 8 * TILE); // mid-room, not on portal row 11
+  gAwalk.screen = "play"; gAwalk.fade = 0; gAwalk.enemies = [];
+  gAwalk.players[0].present = true;
+  gAwalk.players[1].present = false; // solo walker — avoid mate sitting on the Lake portal
+  gAwalk.players[0].x = 7.5 * TILE; gAwalk.players[0].y = H - PLAYER_H - 4;
+  gAwalk.players[0].transitionCd = 0;
+  const prevA: [Input, Input] = [emptyInput(), emptyInput()];
+  const downA = { ...emptyInput(), d: true };
+  ok(!!core.sealedExitMsg(gAwalk, 3), "Gate A: sealedExitMsg blocks Hall before walk");
+  for (let i = 0; i < 40; i++) step(gAwalk, downA, emptyInput(), prevA);
+  ok(gAwalk.room === 4, "Gate A: cannot leave to Hall without Vault Sigil");
+  // west to Cellars still works
+  core.loadRoom(gAwalk, 4, 4, 6.5 * TILE);
+  gAwalk.fade = 0; gAwalk.enemies = [];
+  gAwalk.players[1].present = false;
+  gAwalk.players[0].x = 4; gAwalk.players[0].y = 6.5 * TILE;
+  gAwalk.players[0].transitionCd = 0;
+  const leftA = { ...emptyInput(), l: true };
+  for (let i = 0; i < 40 && gAwalk.room === 4; i++) step(gAwalk, leftA, emptyInput(), prevA);
+  ok(gAwalk.room === 12, "Gate A: Cellars exit stays open after golem");
+  ok(gAwalk.cellarsVisited, "entering Cellars sets cellarsVisited");
+  ok(gAwalk.pickups.some(p => p.kind === "sigil" && p.t >= 0), "Vault Sigil spawns in Cellars");
+  // claim sigil and return — Hall opens
+  gAwalk.hasSigil = true;
+  gAwalk.sigils["cellar"] = true;
+  core.loadRoom(gAwalk, 4, 7.5 * TILE, 8 * TILE);
+  gAwalk.fade = 0; gAwalk.enemies = [];
+  gAwalk.players[1].present = false;
+  gAwalk.players[0].x = 7.5 * TILE; gAwalk.players[0].y = H - PLAYER_H - 4;
+  gAwalk.players[0].transitionCd = 0;
+  for (let i = 0; i < 40 && gAwalk.room === 4; i++) step(gAwalk, downA, emptyInput(), prevA);
+  ok(gAwalk.room === 3, "Gate A: after Sigil, Hall exit opens");
+
+  // Guard→Lake portal: Classic opens after golem; LONG QUEST Gate A needs Sigil too
+  const gPortal = freshPlay();
+  gPortal.players[1].present = false;
+  core.loadRoom(gPortal, 4, 7.5 * TILE, 8 * TILE);
+  ok(core.tileAt(gPortal, 7, 11) === "f" && core.tileAt(gPortal, 8, 11) === "f",
+     "portal: no cave tiles before golemDead");
+  gPortal.golemDead = true;
+  gPortal.hardGate = false;
+  core.loadRoom(gPortal, 4, 7.5 * TILE, 8 * TILE);
+  gPortal.screen = "play"; gPortal.fade = 0; gPortal.enemies = [];
+  gPortal.players[1].present = false;
+  ok(core.guardLakePortalOpen(gPortal), "portal: Classic open after golem");
+  ok(core.tileAt(gPortal, 7, 11) === "c" && core.tileAt(gPortal, 8, 11) === "c",
+     "portal: cave tiles painted after golemDead (Classic)");
+  gPortal.players[0].present = true;
+  gPortal.players[0].x = 7.5 * TILE; gPortal.players[0].y = 11 * TILE + 2;
+  gPortal.players[0].transitionCd = 0;
+  const prevP: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 15 && gPortal.room === 4; i++) step(gPortal, emptyInput(), emptyInput(), prevP);
+  ok(gPortal.room === 2, "portal: standing on cave after golem lands in Amber Lake");
+
+  // LONG QUEST: portal stays shut with Hall until Vault Sigil (no Lake bypass)
+  const gPortalL = freshPlay();
+  gPortalL.hardGate = true;
+  gPortalL.golemDead = true;
+  gPortalL.hasSigil = false;
+  core.loadRoom(gPortalL, 4, 7.5 * TILE, 8 * TILE);
+  ok(!core.guardLakePortalOpen(gPortalL), "portal: Long Quest sealed without Sigil");
+  ok(core.tileAt(gPortalL, 7, 11) === "f", "portal: Long Quest no cave paint without Sigil");
+  gPortalL.screen = "play"; gPortalL.fade = 0; gPortalL.enemies = [];
+  gPortalL.players[1].present = false;
+  gPortalL.players[0].present = true;
+  gPortalL.players[0].x = 7.5 * TILE; gPortalL.players[0].y = 11 * TILE + 2;
+  gPortalL.players[0].transitionCd = 0;
+  // Force a cave tile and prove teleport still rejects (belt-and-suspenders)
+  core.setTile(gPortalL, 7, 11, "c");
+  core.setTile(gPortalL, 8, 11, "c");
+  const prevPL: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 15 && gPortalL.room === 4; i++) step(gPortalL, emptyInput(), emptyInput(), prevPL);
+  ok(gPortalL.room === 4, "portal: Long Quest teleport blocked without Sigil");
+  gPortalL.hasSigil = true;
+  core.loadRoom(gPortalL, 4, 7.5 * TILE, 8 * TILE);
+  ok(core.guardLakePortalOpen(gPortalL) && core.tileAt(gPortalL, 7, 11) === "c",
+     "portal: Long Quest opens after Vault Sigil");
+  gPortalL.screen = "play"; gPortalL.fade = 0; gPortalL.enemies = [];
+  gPortalL.players[1].present = false;
+  gPortalL.players[0].x = 7.5 * TILE; gPortalL.players[0].y = 11 * TILE + 2;
+  gPortalL.players[0].transitionCd = 0;
+  for (let i = 0; i < 15 && gPortalL.room === 4; i++) step(gPortalL, emptyInput(), emptyInput(), prevPL);
+  ok(gPortalL.room === 2, "portal: Long Quest + Sigil reaches Amber Lake");
+
+  // Classic also gets the portal after golem (Hall never sealed)
+  const gPortalC = freshPlay();
+  gPortalC.hardGate = false;
+  gPortalC.golemDead = true;
+  core.loadRoom(gPortalC, 4, 8 * TILE, 8 * TILE);
+  ok(core.tileAt(gPortalC, 7, 11) === "c", "portal: Classic also paints cave after golem");
+  ok(core.sealedExitMsg(gPortalC, 3) === null, "Classic: Hall open after golem without Sigil");
+
+  // routeHop: Long Quest must not offer Lake cave until Sigil (agents won't seek it)
+  {
+    const { routeHop } = await import("../server/agent");
+    const sealed = { golemDead: true, hardGate: true, hasSigil: false };
+    const open = { golemDead: true, hardGate: true, hasSigil: true };
+    const hopSealed = routeHop(4, 2, sealed);
+    ok(hopSealed === null,
+       "routeHop: Long without Sigil — no path Guard→Lake (Hall+portal sealed)");
+    const hopCellars = routeHop(4, 12, sealed);
+    ok(hopCellars?.kind === "exit" && hopCellars.dir === "left",
+       "routeHop: Long without Sigil — Guard→Cellars still left");
+    const hopOpen = routeHop(4, 2, open);
+    ok(hopOpen?.kind === "cave", "routeHop: Long + Sigil — cave hop Guard→Lake");
+  }
+
+  // SAF3 regression: agent exit→cave must aim LIVE portal tiles, not (0,0)
+  // (static ROOM_GUARD has "f" where the portal is painted after golemDead).
+  {
+    type MutAgent = {
+      intent: { action: string; dir?: string };
+      llmIntent: { action: string; dir?: string };
+      control(g: Game): Input;
+    };
+    const gCave = freshPlay();
+    gCave.hardGate = false;
+    gCave.golemDead = true;
+    gCave.amberClaimed = true;
+    gCave.travelMode = "free";
+    core.loadRoom(gCave, 4, 8 * TILE, 5 * TILE);
+    gCave.screen = "play"; gCave.fade = 0; gCave.enemies = [];
+    // Solo AI in Guard (human absent) — leave permission is open
+    gCave.players[0].present = false;
+    gCave.players[1].present = true;
+    gCave.players[1].npc = true;
+    gCave.players[1].x = 8 * TILE;
+    gCave.players[1].y = 5 * TILE;
+    gCave.players[1].transitionCd = 0;
+    ok(core.tileAt(gCave, 7, 11) === "c", "portal: live cave tile for agent seek test");
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" }) as unknown as MutAgent;
+    agent.intent = { action: "exit", dir: "cave" };
+    agent.llmIntent = { action: "exit", dir: "cave" };
+    const y0 = gCave.players[1].y;
+    const prevC: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 90 && gCave.room === 4; i++) {
+      step(gCave, emptyInput(), agent.control(gCave), prevC);
+    }
+    ok(gCave.players[1].y > y0 + 20 || gCave.room === 2,
+       "portal: cave exit seeks live mouth (south), not (0,0)");
+    for (let i = 0; i < 150 && gCave.room === 4; i++) {
+      step(gCave, emptyInput(), agent.control(gCave), prevC);
+    }
+    ok(gCave.room === 2, "portal: agent exit→cave reaches Amber Lake after golem (SAF3)");
+  }
+
+  // H2UB 2026-07-22: after golem, Long Quest seals Hall+portal. Slot 0 reached
+  // Cellars and bled out; slot 1 in Guard kept "exit down" (= Hall, sealed)
+  // instead of LEFT (= Cellars). Controller must not grind ice — reroute west.
+  {
+    type MutAgent = {
+      intent: { action: string; dir?: string };
+      llmIntent: { action: string; dir?: string };
+      control(g: Game): Input;
+      observe(g: Game): string;
+    };
+    const gH = freshPlay();
+    gH.hardGate = true;
+    gH.golemDead = true;
+    gH.amberClaimed = true;
+    gH.hasSigil = false;
+    gH.travelMode = "free";
+    gH.screen = "play";
+    gH.fade = 0;
+    gH.sims.push(core.newRoomSim());
+    // mate (slot 0) bleeds alone in Cellars
+    gH.sims[0].room = 12;
+    gH.sims[0].tiles[12] = ROOMS[12].tiles.map(r => r);
+    gH.sims[0].enemies = [];
+    gH.players[0].simIndex = 0;
+    gH.players[0].present = true;
+    gH.players[0].x = 6 * TILE;
+    gH.players[0].y = 6 * TILE;
+    gH.players[0].downed = true;
+    gH.players[0].hp = 0;
+    gH.players[0].bleedT = 1200;
+    // rescuer (slot 1) in Guard — wrong LLM door is "down"
+    gH.sims[1].room = 4;
+    gH.sims[1].tiles[4] = ROOMS[4].tiles.map(r => r);
+    gH.sims[1].enemies = [];
+    gH.players[1].simIndex = 1;
+    gH.players[1].present = true;
+    gH.players[1].npc = true;
+    gH.players[1].x = 8 * TILE;
+    gH.players[1].y = 8 * TILE;
+    gH.players[1].transitionCd = 0;
+    gH.activeSim = 1;
+
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter",
+    }) as unknown as MutAgent;
+    agent.intent = { action: "exit", dir: "down" };
+    agent.llmIntent = { action: "exit", dir: "down" };
+
+    const obs = agent.observe(gH);
+    ok(/down→.*SEALED/i.test(obs), "H2UB: observation marks Hall (down) sealed");
+    ok(/left→.*Cellars.*OPEN/i.test(obs), "H2UB: observation marks Cellars (left) open");
+    ok(/exit LEFT/i.test(obs), "H2UB: away-downed note names LEFT not down");
+
+    agent.control(gH);
+    ok(agent.intent.action === "exit" && agent.intent.dir === "left",
+       "H2UB: sealed exit down reroutes west to Cellars");
+
+    const prevH: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 220 && core.simOf(gH, 1).room === 4; i++) {
+      gH.activeSim = 1;
+      step(gH, emptyInput(), agent.control(gH), prevH);
+    }
+    ok(core.simOf(gH, 1).room === 12,
+       "H2UB: rescuer reaches Cellars via left (not stuck on Hall seal)");
+  }
+
+  // Softlock fix: leave the Guard Room key on the floor, take the Cellars
+  // detour, return — the key must respawn (pickups are wiped on room fill).
+  const gKey = freshPlay();
+  gKey.hardGate = true;
+  core.loadRoom(gKey, 4, 8 * TILE, 8 * TILE);
+  gKey.screen = "play"; gKey.fade = 0;
+  gKey.enemies = [];
+  gKey.cleared[4] = true;
+  gKey.doors[4] = false;
+  gKey.players[0].keys = 0;
+  gKey.players[1].keys = 0;
+  gKey.pickups = [{ kind: "key", x: 8 * TILE, y: 7 * TILE, t: 0 }];
+  ok(gKey.pickups.some(p => p.kind === "key" && p.t >= 0), "key sits on the Guard Room floor");
+  core.loadRoom(gKey, 12, 8 * TILE, 8 * TILE); // Cellars detour — wipes pickups
+  ok(gKey.cellarsVisited, "Cellars detour marks visited");
+  core.loadRoom(gKey, 4, 8 * TILE, 8 * TILE); // return
+  ok(gKey.pickups.some(p => p.kind === "key" && p.t >= 0),
+     "LONG QUEST: floor key respawns after Cellars detour (no softlock)");
+  ok(gKey.players[0].keys + gKey.players[1].keys === 0, "respawned key is on the floor, not in inventory");
+  // held key: do NOT duplicate
+  gKey.pickups = [];
+  gKey.players[0].keys = 1;
+  core.loadRoom(gKey, 12, 8 * TILE, 8 * TILE);
+  core.loadRoom(gKey, 4, 8 * TILE, 8 * TILE);
+  ok(!gKey.pickups.some(p => p.kind === "key"),
+     "no duplicate floor key when a hero already carries one");
+  // unlocked door: no key needed
+  gKey.players[0].keys = 0;
+  gKey.doors[4] = true;
+  core.loadRoom(gKey, 4, 8 * TILE, 8 * TILE);
+  ok(!gKey.pickups.some(p => p.kind === "key"),
+     "no key respawn once the boss door is already unlocked");
+
+  // --- Gate B: Glacier cave sealed until Ember resolved (kill OR spare) ---
+  const gB = freshPlay();
+  gB.hardGate = true;
+  core.loadRoom(gB, 8, 8 * TILE, 3 * TILE);
+  gB.screen = "play"; gB.fade = 0; gB.enemies = [];
+  gB.players[0].x = 8 * TILE + 2; gB.players[0].y = 1 * TILE + 2;
+  const prevB: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 10; i++) step(gB, emptyInput(), emptyInput(), prevB);
+  ok(gB.room === 8, "Gate B: Glacier cave still sealed without Ember resolved");
+  // Spare path opens without Miner's Charm (author Artem 2026-07-21 dual mercy)
+  gB.emberSpared = true;
+  gB.players[0].x = 8 * TILE + 2; gB.players[0].y = 1 * TILE + 2;
+  gB.players[0].transitionCd = 0;
+  for (let i = 0; i < 10 && gB.room === 8; i++) step(gB, emptyInput(), emptyInput(), prevB);
+  ok(gB.room === 9, "Gate B: Ember spare opens Glacier cave (no Charm needed)");
+  // Kill path also opens (emberDead) even before Charm pickup
+  const gBk = freshPlay();
+  gBk.hardGate = true;
+  core.loadRoom(gBk, 8, 8 * TILE, 3 * TILE);
+  gBk.screen = "play"; gBk.fade = 0; gBk.enemies = [];
+  gBk.emberDead = true;
+  gBk.players[0].x = 8 * TILE + 2; gBk.players[0].y = 1 * TILE + 2;
+  const prevBk: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 10 && gBk.room === 8; i++) step(gBk, emptyInput(), emptyInput(), prevBk);
+  ok(gBk.room === 9, "Gate B: Ember kill opens Glacier cave");
+  ok(core.emberResolved(gBk) && core.emberResolved(gB), "emberResolved: dead or spared");
+
+  // --- Gate C: throne needs Crypt feather AND Playground bell ---
+  const gC = freshPlay();
+  gC.hardGate = true;
+  ok(!!core.sealedExitMsg(gC, 11) && /Phoenix Feather|Crypt/i.test(core.sealedExitMsg(gC, 11)!),
+     "Gate C: throne sealed without Crypt feather");
+  gC.feathers["crypt"] = true;
+  ok(!!core.sealedExitMsg(gC, 11) && /Frost Bell|Playground/i.test(core.sealedExitMsg(gC, 11)!),
+     "Gate C: throne sealed without Frost Bell after feather");
+  gC.bells["rink"] = true;
+  ok(core.sealedExitMsg(gC, 11) === null, "Gate C: throne opens after feather + bell");
+
+  // Walk-in Gate C
+  const gCwalk = freshPlay();
+  gCwalk.hardGate = true;
+  gCwalk.feathers["crypt"] = true; // still missing bell
+  core.loadRoom(gCwalk, 10, 7.5 * TILE, 2 * TILE);
+  gCwalk.screen = "play"; gCwalk.fade = 0; gCwalk.enemies = [];
+  gCwalk.players[0].present = true;
+  gCwalk.players[0].keys = 1;
+  gCwalk.players[0].x = 7.5 * TILE; gCwalk.players[0].y = 1 * TILE + 2;
+  const prevC: [Input, Input] = [emptyInput(), emptyInput()];
+  const upC = { ...emptyInput(), u: true };
+  for (let i = 0; i < 15 && !gCwalk.doors[10]; i++) step(gCwalk, upC, emptyInput(), prevC);
+  for (let i = 0; i < 40; i++) step(gCwalk, upC, emptyInput(), prevC);
+  ok(gCwalk.room === 10, "Gate C: cannot enter throne without Frost Bell");
+  gCwalk.bells["rink"] = true;
+  for (let i = 0; i < 40 && gCwalk.room === 10; i++) step(gCwalk, upC, emptyInput(), prevC);
+  ok(gCwalk.room === 11, "Gate C: after feather+bell, throne opens");
+
+  // --- Gate D: hardGate + TREASON requires Temptation Court ---
+  const gD = freshPlay();
+  gD.hardGate = true;
+  gD.treason = true;
+  gD.feathers["crypt"] = true;
+  gD.bells["rink"] = true;
+  gD.temptationVisited = false;
+  ok(core.throneTemptSealed(gD), "Gate D: hardGate+TREASON seals throne until Court");
+  ok(!!core.sealedExitMsg(gD, 11) && /whisper/i.test(core.sealedExitMsg(gD, 11)!),
+     "Gate D: sealedExitMsg names the whisper west of Frost Woods");
+  gD.temptationVisited = true;
+  ok(!core.throneTemptSealed(gD) && core.sealedExitMsg(gD, 11) === null,
+     "Gate D: Court visit lifts the throne seal");
+
+  // hardGate without TREASON: Court not required (after feather+bell)
+  const gDnoT = freshPlay();
+  gDnoT.hardGate = true;
+  gDnoT.treason = false;
+  gDnoT.feathers["crypt"] = true;
+  gDnoT.bells["rink"] = true;
+  ok(!core.throneTemptSealed(gDnoT), "Gate D: hardGate alone does not require Court");
+  ok(core.sealedExitMsg(gDnoT, 11) === null, "Gate D: throne free after wings when TREASON off");
+
+  // --- AI routing: targetRoom threads the wings ---
+  const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
+  const tr = (g: Game) => (agent as unknown as TargetRoomAgent).targetRoom(g);
+
+  const gR = freshPlay();
+  gR.hardGate = true;
+  ok(tr(gR) === 5, "targetRoom: golem directly before fight (no Cellars hop)");
+  gR.golemDead = true; gR.amberClaimed = true;
+  ok(tr(gR) === 12, "targetRoom: Cellars for Sigil after golem under hardGate");
+  gR.hasSigil = true; gR.gateMelted = true;
+  ok(tr(gR) === 16, "targetRoom: Emberdeep before Ember resolved");
+  gR.emberSpared = true; gR.hasBow = true;
+  ok(tr(gR) === 13, "targetRoom: Crypt after Ember spare (no Charm)");
+  gR.emberSpared = false; gR.emberDead = true; gR.charmClaimed = false;
+  ok(tr(gR) === 16, "targetRoom: still Emberdeep to grab Charm after kill");
+  gR.charmClaimed = true;
+  ok(tr(gR) === 13, "targetRoom: Crypt before throne");
+  gR.feathers["crypt"] = true;
+  ok(tr(gR) === 17, "targetRoom: Playground after Crypt feather");
+  gR.bells["rink"] = true;
+  ok(tr(gR) === 11, "targetRoom: throne after all wings (TREASON off)");
+  gR.treason = true;
+  ok(tr(gR) === 18, "targetRoom: Temptation Court when hardGate+TREASON");
+  gR.temptationVisited = true;
+  ok(tr(gR) === 11, "targetRoom: throne after Court visit");
+
+  // Classic targetRoom never diverts to Cellars/Crypt/Playground
+  const gR0 = freshPlay();
+  gR0.hardGate = false;
+  ok(tr(gR0) === 5, "Classic targetRoom: golem directly (no Cellars hop)");
+  gR0.golemDead = true; gR0.amberClaimed = true; gR0.gateMelted = true;
+  gR0.hasBow = true;
+  ok(tr(gR0) === 11, "Classic targetRoom: throne without Crypt/Playground hops");
+
+  // Observation surfaces longQuestGates world rules
+  const gObs = freshPlay();
+  gObs.hardGate = true;
+  gObs.golemDead = true;
+  gObs.amberClaimed = true;
+  core.loadRoom(gObs, 4, 8 * TILE, 8 * TILE);
+  gObs.enemies = [];
+  gObs.cleared[4] = true;
+  const obs = JSON.parse(agent.observe(gObs)) as {
+    longQuestGates?: { cellars: string; cryptAndBell: string };
+    objective: string;
+  };
+  ok(!!obs.longQuestGates && /Sigil|sealed/i.test(obs.longQuestGates.cellars),
+     "observation: longQuestGates names the post-golem Sigil seal");
+  ok(/LONG QUEST|Sigil|Cellars/i.test(obs.objective),
+     "objective steers toward Vault Sigil under hardGate after golem");
+
+  // Menu hint updated
+  const { readFileSync } = await import("node:fs");
+  const menuSrc = readFileSync("client/menu.ts", "utf8");
+  ok(/every wing sealed shut until cleared/.test(menuSrc),
+     "LONG QUEST menu hint describes the full wing chain");
 }
 
 {

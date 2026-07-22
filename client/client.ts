@@ -10,7 +10,7 @@ import {
   BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
-import { drawDuoSpectatorHud, drawHearts } from "./hud";
+import { drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel } from "./hud";
 import { wrapText } from "./textutil";
 import { Pred, freshPred, stepPred, reconcile, recordInput } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor, actx } from "./audio";
@@ -423,6 +423,7 @@ if (pipCanvas) {
   pipCtx = pipCanvas.getContext("2d");
   if (pipCtx) pipCtx.imageSmoothingEnabled = false;
 }
+const thoughtsEl = document.getElementById("thoughts");
 
 function drawPartnerMirror(s: Snapshot): void {
   if (!pipCanvas || !pipCtx) return;
@@ -671,6 +672,8 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 }
 
 function drawUI(s: Snapshot): void {
+  // Off-frame thought strip — sync before any early return so BETRAYED still updates it
+  syncThoughtPanel(thoughtsEl, formatThoughtLines(s), showThought, s.screen === "play");
   const me = s.players[mySlot];
   // TREASON: your own partner cut the cord. You are dead, but the run goes on
   // without you — a spectator to your betrayer's quest.
@@ -753,6 +756,7 @@ function drawUI(s: Snapshot): void {
     [!!s.hasFeather, SPR.elixir],
     [!!s.hasEmberMercy, SPR.charm],
     [!!s.hasBell, SPR.bell],
+    [!!s.hasSigil, SPR.key],
     [!!s.hasMirror, SPR.mirror],
   ];
   let artX = W - 18 - keys * 12;
@@ -783,24 +787,6 @@ function drawUI(s: Snapshot): void {
     ctx.fillText(rl, W - 5, 9);
     ctx.textAlign = "left";
   }
-  const thoughtLines = s.thoughts && s.thoughts.length
-    ? s.thoughts.map(t => ({ slot: t.slot,
-        text: `${t.name.slice(0, 12)}: ${t.action}${t.why ? " \u2014 " + t.why : ""}`.slice(0, 60) }))
-    : s.thought
-      ? [{ slot: 1, text: `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58) }]
-      : [];
-  if (thoughtLines.length && showThought && s.screen === "play") {
-    ctx.font = "7px monospace";
-    const n = thoughtLines.length;
-    thoughtLines.forEach((tl, i) => {
-      const y = H - 13 - (n - 1 - i) * 11;   // stack upward, newest layout order
-      const tw = ctx.measureText(tl.text).width;
-      ctx.fillStyle = "rgba(8,6,16,0.72)";
-      ctx.fillRect(2, y, tw + 6, 11);
-      ctx.fillStyle = tl.slot === 0 ? "#ffcf8f" : "#9fc8e0";   // leader gold, companion blue
-      ctx.fillText(tl.text, 5, y + 8);
-    });
-  }
   if (s.messageT > 0 && s.message) {
     ctx.globalAlpha = Math.min(1, s.messageT / 30);
     ctx.font = "8px monospace";
@@ -822,6 +808,7 @@ function render(): void {
   ctx.fillStyle = "#0d0c14";
   ctx.fillRect(0, 0, W, H);
   if (!snap) {
+    syncThoughtPanel(thoughtsEl, [], showThought, false);
     centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
       disconnected ? "#e8384f" : "#9a93b8"]], 110);
     if (disconnected) {
@@ -879,6 +866,12 @@ function render(): void {
       ctx.save();
       ctx.shadowColor = "#bff0ff"; ctx.shadowBlur = 7;
       ctx.drawImage(SPR.bell, px, py);
+      ctx.restore();
+    }
+    else if (it.kind === "sigil") {
+      ctx.save();
+      ctx.shadowColor = "#ffd257"; ctx.shadowBlur = 6;
+      ctx.drawImage(SPR.key, px, py);
       ctx.restore();
     }
     else if (it.kind === "mirror") {
@@ -999,11 +992,12 @@ function render(): void {
       ctx.fillStyle = s.charm ? "#ffd257" : "#dfe3ee";
       ctx.fillRect(pr.x + nx * 3 - 1, pr.y + ny * 3 - 1, 2, 2);
     } else {
+      const fire = !!pr.fire;
       ctx.save();
       ctx.translate(pr.x, pr.y);
       ctx.rotate(Math.atan2(pr.vy, pr.vx) + Math.PI / 4);
-      ctx.fillStyle = "#9fe8ff"; ctx.fillRect(-3, -3, 6, 6);
-      ctx.fillStyle = "#dff5ff"; ctx.fillRect(-1.5, -1.5, 3, 3);
+      ctx.fillStyle = fire ? "#ff7a3d" : "#9fe8ff"; ctx.fillRect(-3, -3, 6, 6);
+      ctx.fillStyle = fire ? "#ffd257" : "#dff5ff"; ctx.fillRect(-1.5, -1.5, 3, 3);
       ctx.restore();
     }
   }
@@ -1159,14 +1153,14 @@ function render(): void {
     }
 
   } else if (s.screen === "win") {
-    ctx.fillStyle = "rgba(6,14,24,0.85)";
-    ctx.fillRect(0, 0, W, H);
     {
       const end = s.ending ?? {
         title: "THE LONG WINTER ENDS",
         lines: ["two heroes carried the Amber Blade north,",
                 "and spring followed in their footsteps."],
       };
+      ctx.fillStyle = end.bg ?? "rgba(6,14,24,0.85)";
+      ctx.fillRect(0, 0, W, H);
       const lines: [string, number, string][] = [[end.title, 13, "#dff5ff"]];
       for (const ln of end.lines) lines.push([ln, 8, "#9fc8e0"]);
       lines.push(["press ENTER to play again", 8, "#6f688c"]);

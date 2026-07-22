@@ -46,7 +46,10 @@ browser P2 ──ws──┘        │
   (ping meter included).
 - **Party paths** — single human · human + AI · AI DUO (two models, you
   spectate) · AI AUTOPILOT (one model quests alone). Menu toggles: CLASSIC /
-  LONG QUEST, FREE ROAM, SLIPPERY ICE, TREASON, and a stub for THE ARCHITECT.
+  LONG QUEST (after golem: Vault Sigil from Cellars; Emberdeep resolved —
+  kill or spare the Ember; Crypt + Playground; Temptation Court too when
+  TREASON is on), FREE ROAM, SLIPPERY
+  ICE, TREASON, and a stub for THE ARCHITECT.
 - **An LLM teammate** — Anthropic / OpenAI / Ollama (fully local, no keys)
   behind one interface, plus a deterministic `mock` for tests. Pick a
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
@@ -55,10 +58,10 @@ browser P2 ──ws──┘        │
   profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both public `say`
   and private `why`; JSON actions stay English. AI+AI picks speech
   independently per hero.
-- **Thought panel** — the agent's plan and one-line `why` run at the bottom
-  (`AI: pickup — At 2/6 HP, grabbing the container is survival`). AI DUO
-  stacks both minds. Toggle with `T`. Every plan is logged — a small
-  interpretability corpus grows as you play.
+- **Thought panel** — the agent's plan and `why` sit in a strip **below** the
+  play square (wraps; never covers tiles). AI DUO stacks both minds. Toggle
+  with `T`. Every plan is logged — a small interpretability corpus grows as
+  you play.
 - **FREE ROAM + partner scry** — heroes can split rooms; a pixel PiP mirror
   (always 2D) shows where your partner is. Same-room touch-revive; alone-down
   bleed-out if help never comes.
@@ -83,8 +86,9 @@ browser P2 ──ws──┘        │
   the `winter-ascends` ending—or refuse, self-redeem with Ember Mercy, or be
   defeated and redeemed by a partner.
 - **Many endings** — betrayal, redeemed, winter-ascends, solo, lone-thaw,
-  mercy (spare the yielding Wraith by standing close), flawless, ember-pact,
-  classic, abandoned…
+  mercy (spare the yielding Wraith), Long Quest dual-mercy worlds (verdant /
+  cinder / frostbound / stone from Ember×Wraith spare choices — tinted win
+  screen), flawless, ember-pact, classic, abandoned…
 - **Frozen Playground** — optional commit-slide ice puzzle wing (reach it
   after the Amber Blade melts the Frozen Falls, or via the Crypt). Agents
   skate too; the planner may propose an `icePlan`.

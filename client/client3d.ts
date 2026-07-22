@@ -13,7 +13,7 @@ import {
   Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
-import { drawDuoSpectatorHud, drawHearts } from "./hud";
+import { drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel } from "./hud";
 import { wrapText } from "./textutil";
 import { Pred, freshPred, stepPred, reconcile, recordInput } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor } from "./audio";
@@ -415,6 +415,7 @@ if (pipCanvas) {
   pipCtx = pipCanvas.getContext("2d");
   if (pipCtx) pipCtx.imageSmoothingEnabled = false;
 }
+const thoughtsEl = document.getElementById("thoughts");
 
 function drawPartnerMirror(s: Snapshot): void {
   if (!pipCanvas || !pipCtx) return;
@@ -862,6 +863,8 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 }
 
 function drawHud(s: Snapshot): void {
+  // Off-frame thought strip — sync before any early return so BETRAYED still updates it
+  syncThoughtPanel(thoughtsEl, formatThoughtLines(s), showThought, s.screen === "play");
   const me = s.players[mySlot];
   // TREASON: your own partner cut the cord — dead, but the run goes on without you.
   if (s.screen === "play" && me.dead && !isSpectator(s)) {
@@ -942,6 +945,7 @@ function drawHud(s: Snapshot): void {
     [!!s.hasFeather, SPR.elixir],
     [!!s.hasEmberMercy, SPR.charm],
     [!!s.hasBell, SPR.bell],
+    [!!s.hasSigil, SPR.key],
     [!!s.hasMirror, SPR.mirror],
   ];
   let artX3d = W - 18 - keys * 12;
@@ -971,24 +975,6 @@ function drawHud(s: Snapshot): void {
     uictx.textAlign = "right";
     uictx.fillText(rl, W - 5, 9);
     uictx.textAlign = "left";
-  }
-  const thoughtLines = s.thoughts && s.thoughts.length
-    ? s.thoughts.map(t => ({ slot: t.slot,
-        text: `${t.name.slice(0, 12)}: ${t.action}${t.why ? " \u2014 " + t.why : ""}`.slice(0, 60) }))
-    : s.thought
-      ? [{ slot: 1, text: `AI: ${s.thought.action}${s.thought.why ? " \u2014 " + s.thought.why : ""}`.slice(0, 58) }]
-      : [];
-  if (thoughtLines.length && showThought && s.screen === "play") {
-    uictx.font = "7px monospace";
-    const n = thoughtLines.length;
-    thoughtLines.forEach((tl, i) => {
-      const y = H - 13 - (n - 1 - i) * 11;
-      const tw = uictx.measureText(tl.text).width;
-      uictx.fillStyle = "rgba(8,6,16,0.72)";
-      uictx.fillRect(2, y, tw + 6, 11);
-      uictx.fillStyle = tl.slot === 0 ? "#ffcf8f" : "#9fc8e0";
-      uictx.fillText(tl.text, 5, y + 8);
-    });
   }
   if (s.messageT > 0 && s.message) {
     uictx.globalAlpha = Math.min(1, s.messageT / 30);
@@ -1123,14 +1109,14 @@ function drawScreens(s: Snapshot): void {
     }
 
   } else if (s.screen === "win") {
-    uictx.fillStyle = "rgba(6,14,24,0.85)";
-    uictx.fillRect(0, 0, W, H);
     {
       const end = s.ending ?? {
         title: "THE LONG WINTER ENDS",
         lines: ["two heroes carried the Amber Blade north,",
                 "and spring followed in their footsteps."],
       };
+      uictx.fillStyle = end.bg ?? "rgba(6,14,24,0.85)";
+      uictx.fillRect(0, 0, W, H);
       const lines: [string, number, string][] = [[end.title, 13, "#dff5ff"]];
       for (const ln of end.lines) lines.push([ln, 8, "#9fc8e0"]);
       lines.push(["press ENTER to play again", 8, "#6f688c"]);
@@ -1159,6 +1145,7 @@ function render(): void {
   requestAnimationFrame(render);
   uictx.clearRect(0, 0, W, H);
   if (!snap) {
+    syncThoughtPanel(thoughtsEl, [], showThought, false);
     uictx.fillStyle = "#0d0c14"; uictx.fillRect(0, 0, W, H);
     centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
       disconnected ? "#e8384f" : "#9a93b8"]], 110);
@@ -1334,6 +1321,7 @@ function render(): void {
       it.kind === "elixir" ? pickupTex.elixir :
       it.kind === "charm" ? pickupTex.charm :
       it.kind === "frostbell" ? pickupTex.frostbell :
+      it.kind === "sigil" ? pickupTex.key :
       it.kind === "mirror" ? pickupTex.mirror : pickupTex.heart;
     const sc = it.kind === "container" ? 1.15 : 0.7;
     bb.mesh.scale.set(sc, sc, 1);
@@ -1364,6 +1352,7 @@ function render(): void {
       m.rotation.y = -Math.atan2(pr.vy, pr.vx);
     } else if (!pr.friendly && si < shardPool.length) {
       const m = shardPool[si++];
+      (m.material as THREE.MeshBasicMaterial).color.set(pr.fire ? 0xff7a3d : 0x9fe8ff);
       m.visible = true;
       m.position.set(pr.x / TILE, 0.5, pr.y / TILE);
       m.rotation.y = now * 0.01;
