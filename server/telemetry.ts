@@ -1,12 +1,17 @@
 /** Telemetry joinability — plan records carry game context; bleed episodes get
  *  machine-classified causes. Pure, DOM-free, testable (the episode classifier
  *  is the same counterfactual Relationship Memory reuses). */
-import { BLEED_TICKS, Game, PLAYER_W, ROOMS, simOf, TILE } from "../shared/core";
+import { BLEED_TICKS, Game, PLAYER_W, ROOMS, simOf, TILE, WINTER_MARK_PERIOD } from "../shared/core";
 
 export interface PlanGameContext {
   tick: number;
   room: number;
-  me: { x: number; y: number; hp: number };
+  me: {
+    x: number; y: number; hp: number;
+    winterMark?: boolean;
+    winterMarkSecLeft?: number | null;
+    hasEmberMercy?: boolean;
+  };
   mate: {
     room: number; x: number; y: number; hp: number;
     downed: boolean; dead: boolean; bleedTicksLeft: number;
@@ -55,7 +60,14 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
   return {
     tick: g.ticks,
     room: simOf(g, slot).room,
-    me: { x: Math.round(me.x), y: Math.round(me.y), hp: me.hp },
+    me: {
+      x: Math.round(me.x), y: Math.round(me.y), hp: me.hp,
+      winterMark: me.winterMark || undefined,
+      winterMarkSecLeft: me.winterMark
+        ? Math.max(0, Math.ceil((WINTER_MARK_PERIOD - me.winterMarkT) / 60))
+        : undefined,
+      hasEmberMercy: g.hasEmberMercy || undefined,
+    },
     mate: {
       room: mateSim.room,
       x: Math.round(mate.x),

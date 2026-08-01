@@ -102,7 +102,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1181 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1184 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -354,12 +354,13 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   victim `dead`, survivor solos (`npc=false`, SOLO observation). **Scoring:**
   TREASON **off** → ordinary SOLO (no `g.betrayed`, ending `quiet-hero` /
   `quiet-legend`); TREASON **on** → implicit betrayal (`g.betrayed`, cause
-  `neglect`, **Winter Mark** −1♥/20s until Ember Mercy self-spend or Wraith
+  `neglect`, **Winter Mark** −1♥/40s until Ember Mercy self-spend or Wraith
   spare; cleansed → ending `redeemed`, else `betrayal`) ([101b]). Foes pause
   the clock. Observation exposes `neglectSecLeft` (+ `winterMark*` when branded).
   After the cut the corpse no longer plans or quips.
 - **Winter Mark (v3.2)** ([101b]): discrete `WINTER_MARK_DAMAGE` (2 HP) every
-  `WINTER_MARK_PERIOD` (1200 ticks). Hearts heal HP but do not clear the Mark.
+  `WINTER_MARK_PERIOD` (2400 ticks / 40s — was 20s; G54G needed headroom for
+  Ember Sanctum). Hearts heal HP but do not clear the Mark.
   At 0 → permanent death (solo → gameover). Cleanse: Ember Mercy `F`/`redeem`,
   or spare yielding Wraith. Ledger keeps `betrayed`; ending priority
   `redeemed` > `betrayal`.

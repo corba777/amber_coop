@@ -227,6 +227,36 @@ export function openaiRestrictedParams(model: string): boolean {
   return /^(o[0-9]|gpt-5|gpt-6)/i.test(model);
 }
 
+/**
+ * Claude Sonnet 5 / Opus 5 / Opus 4.7+ reject non-default `temperature` /
+ * `top_p` / `top_k` (HTTP 400). Sonnet 5 also turns adaptive thinking ON by
+ * default — that burns `max_tokens` on CoT before any JSON, so the planner
+ * truncates mid-intent (same silent-follow failure mode as OpenAI above).
+ * Haiku 4.5 and earlier Sonnets still take temperature=0.6.
+ */
+export function anthropicRestrictedSampling(model: string): boolean {
+  return /claude-(sonnet-5|opus-5|opus-4-[7-9]|fable-5)\b/i.test(model);
+}
+
+/** Pure body builder — tested; used by the Anthropic provider. */
+export function anthropicMessagesBody(
+  model: string, system: string, user: string,
+): Record<string, unknown> {
+  const restricted = anthropicRestrictedSampling(model);
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: restricted ? LLM_PLAN_MAX_TOKENS_REASONING : LLM_PLAN_MAX_TOKENS,
+    system,
+    messages: [{ role: "user", content: user }],
+  };
+  if (restricted) {
+    body.thinking = { type: "disabled" };
+  } else {
+    body.temperature = 0.6;
+  }
+  return body;
+}
+
 function openai(cfg: LLMConfig): LLM {
   const restricted = openaiRestrictedParams(cfg.openaiModel);
   return {
@@ -262,13 +292,8 @@ function anthropic(cfg: LLMConfig): LLM {
       const data = await postWithRetry("https://api.anthropic.com/v1/messages", {
         "x-api-key": cfg.anthropicKey,
         "anthropic-version": "2023-06-01",
-      }, {
-        model: cfg.anthropicModel,
-        max_tokens: LLM_PLAN_MAX_TOKENS,
-        temperature: 0.6,
-        system,
-        messages: [{ role: "user", content: user }],
-      }, cfg.timeoutMs) as { content?: { type: string; text?: string }[] };
+      }, anthropicMessagesBody(cfg.anthropicModel, system, user),
+        cfg.timeoutMs) as { content?: { type: string; text?: string }[] };
       return (data.content ?? [])
         .filter(b => b.type === "text")
         .map(b => b.text ?? "")

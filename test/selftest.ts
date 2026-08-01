@@ -7,9 +7,11 @@ import {
   newGame, update, latch, emptyInput, toSnapshot, validateRooms, tileAt,
   Game, Input, LatchedInput, TILE, W, H, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
   COLS, ROWS, solidAt, sealedExitMsg, loadRoom, betrayalDuelSealAt,
+  newRoomSim, simOf,
 } from "../shared/core";
-import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS } from "../server/agent";
-import { mock, openaiRestrictedParams, ollamaChatBody, LLM_PLAN_MAX_TOKENS } from "../server/llm";
+import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS, routeHop } from "../server/agent";
+import { mock, openaiRestrictedParams, anthropicRestrictedSampling, anthropicMessagesBody,
+         ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING } from "../server/llm";
 
 let passed = 0;
 
@@ -3319,8 +3321,12 @@ function freshPlay(): Game {
   ok(/mateSlot === 0 && session\.leaderAgent/.test(idxSrc)
      && /mateSlot === 1 && session\.agent/.test(idxSrc),
      "partnerTypeTrue keys off AgentPlayer attachment, not spectator socket");
-  ok(/matchIndex/.test(idxSrc) && /bySid\.set\(sid/.test(idxSrc),
-     "matches carry matchIndex; /stats keeps last row per sid");
+  ok(/matchIndex/.test(idxSrc) && /matchIndex\+\+/.test(idxSrc),
+     "matches carry matchIndex; index advances after each logged play");
+  ok(/sid \+ matchIndex|sid}#\$\{idx|all completed play|EVERY completed play/i.test(idxSrc),
+     "/stats counts every completed play (not last-per-sid — G54G Haiku drop)");
+  ok(/resetMatchTelemetry/.test(idxSrc),
+     "rematch resets agent farm counters (veilcut/privateWhy/firstStrike)");
   ok(/build: BUILD/.test(idxSrc),
      "matches.jsonl carries build (canon-bucket join key)");
   ok(/slot: 0.*errandLog|errandLog\.map\(e => \(\{ slot: 0/.test(idxSrc)
@@ -3896,13 +3902,14 @@ function freshPlay(): Game {
     ok(g.amberClaimed, "FREE ROAM AI DUO (npc=false peers) claims the blade — Y33R cast");
   }
 
-  // (b) bow errand must not fire until amber is claimed
+  // (b) bow errand must not fire until amber is claimed AND snowfield reachable
   {
     const { newRoomSim } = await import("../shared/core");
     const g = freshPlay();
     g.travelMode = "free";
     g.golemDead = true;
     g.amberClaimed = false;
+    g.gateMelted = false;
     g.hasBow = false;
     g.sims.push(newRoomSim());
     g.sims[1].room = 1;
@@ -3919,8 +3926,12 @@ function freshPlay(): Game {
        "bow errand does not start while Amber Blade is still unclaimed");
     g.amberClaimed = true;
     agent.control(g);
+    ok(agent.errandLog.length === 0,
+       "bow errand does not start pre-melt (room 6 sealed — BGXR unreachable compass)");
+    g.gateMelted = true;
+    agent.control(g);
     ok(agent.errandLog.length === 1 && agent.errandLog[0].goal === "bow",
-       "bow errand starts once the blade is claimed");
+       "bow errand starts once the blade is claimed and north gate melted");
   }
 
   // (c) human mate in-room: companion must NOT auto-grab the pedestal
@@ -5885,7 +5896,7 @@ function freshPlay(): Game {
   }
 
   {
-    // Ordinary wipe: both down, no TREASON ledger → ending stays null
+    // Ordinary wipe: both down, no TREASON ledger → party-wipe (not quiet-hero)
     const g = freshPlay();
     g.treason = false;
     g.players[0].hp = 0; g.players[0].downed = true; g.players[0].elixir = false;
@@ -5899,8 +5910,8 @@ function freshPlay(): Game {
     }
     ok(g.screen === "gameover" && !g.betrayed,
        "ordinary wipe gameover without betrayal ledger");
-    ok(g.ending == null,
-       "ordinary wipe does not invent quiet-hero on loss (ending stays null)");
+    ok(g.ending?.id === "party-wipe",
+       "ordinary wipe stamps party-wipe (not quiet-hero, not null)");
   }
 
   // ------------------------------------------------- 123. rejected veilcut is logged
@@ -6180,7 +6191,7 @@ function freshPlay(): Game {
     return g;
   };
 
-  // Heart drain every 20s; ordinary hearts do not stop the clock
+  // Heart drain every 40s; ordinary hearts do not stop the clock
   {
     const g = brandViaNeglect();
     ok(g.players[1].winterMark && g.betrayed, "neglect brands the survivor");
@@ -6189,7 +6200,9 @@ function freshPlay(): Game {
     const prev: [Input, Input] = [emptyInput(), emptyInput()];
     step(g, emptyInput(), emptyInput(), prev);
     ok(g.players[1].hp === hp0 - WINTER_MARK_DAMAGE,
-       "Winter Mark drains one heart (2 HP) after 20s");
+       "Winter Mark drains one heart (2 HP) after 40s");
+    ok(WINTER_MARK_PERIOD === 2400,
+       "Winter Mark period is 40s (G54G: room to reach Ember Mercy)");
     ok(g.players[1].winterMark && g.players[1].winterMarkT === 0,
        "Mark remains; drain clock resets");
     // Heart pickup heals but Mark stays
@@ -6230,6 +6243,92 @@ function freshPlay(): Game {
     };
     ok(obs.me.winterMark === true, "observation surfaces winterMark");
     ok(typeof obs.me.winterMarkSecLeft === "number", "observation surfaces Mark clock");
+  }
+
+  // G54G: Mark must retarget route/objective at Ember Sanctum — not Meadow gate
+  {
+    const g = brandViaNeglect();
+    g.golemDead = true;
+    g.amberClaimed = true;
+    g.gateMelted = false;
+    g.hasEmberMercy = false;
+    // Survivor branded in Meadow (classic post-vault path)
+    core.loadRoom(g, 0);
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9 });
+    type TR = { targetRoom(g: Game): number };
+    ok((agent as unknown as TR).targetRoom(g) === 16,
+       "G54G: Winter Mark retargets compass to Ember Sanctum (16)");
+    agent.resetMatchTelemetry();
+    ok(agent.firstVeilcutFireTick === null && agent.veilcutConfirmStats.idleFalse === 0,
+       "resetMatchTelemetry clears firstStrike / veilcut farm counters");
+    const obs = JSON.parse(agent.observe(g)) as {
+      route?: string; objective?: string;
+      me: { winterMarkNote?: string };
+    };
+    ok(/Ember Mercy|Winter Mark cleanse/i.test(obs.route || ""),
+       "G54G: route names Ember Mercy cleanse, not bare quest goal");
+    ok(/right/i.test(obs.route || ""),
+       "G54G: from Meadow, first hop toward Sanctum is right (Forest)");
+    ok(/Ember Sanctum|Emberdeep|Forest.*DOWN/i.test(obs.objective || ""),
+       "G54G: objective prioritizes Sanctum over gate melt");
+    ok(/from HERE/i.test(obs.me.winterMarkNote || ""),
+       "G54G: winterMarkNote is relative to current room");
+    ok(!/melt/i.test(obs.objective || "") || /does NOT clear/i.test(obs.objective || ""),
+       "G54G: objective does not send Marked hero to melt as the cure");
+  }
+
+  // Mark + Mercy: classic quest compass resumes (redeem is objective judgment).
+  // Golem alive → Heart (5); golem dead + blade → Meadow melt (0) is fine.
+  {
+    const g = brandViaNeglect();
+    g.hasEmberMercy = true;
+    g.gateMelted = false;
+    core.loadRoom(g, 1);
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+    type TR = { targetRoom(g: Game): number; routeDestination(g: Game): number };
+    const tr = agent as unknown as TR;
+
+    g.golemDead = false;
+    g.amberClaimed = false;
+    ok(tr.targetRoom(g) === 5 && tr.routeDestination(g) === 5,
+       "Mark+Mercy + living golem → Heart (5), not pin-in-place");
+    const obsGolem = JSON.parse(agent.observe(g)) as { route?: string };
+    ok(/F\/redeem/i.test(obsGolem.route || "") && /leads toward|goal/i.test(obsGolem.route || ""),
+       "Mark+Mercy: route = redeem NOW + quest hop");
+
+    g.golemDead = true;
+    g.amberClaimed = true;
+    ok(tr.targetRoom(g) === 0 && tr.routeDestination(g) === 0,
+       "Mark+Mercy + blade + golem dead → Meadow melt (0) is open");
+    const obsMelt = JSON.parse(agent.observe(g)) as {
+      route?: string; meadowGate?: { note?: string };
+    };
+    ok(/F\/redeem/i.test(obsMelt.route || ""),
+       "Mark+Mercy + melt path: redeem still named on route");
+    ok(/F\/redeem clears Mark|then melt is a normal/i.test(obsMelt.meadowGate?.note || ""),
+       "meadowGate under Mark+Mercy: melt OK after/with redeem");
+
+    // Without Mercy, ice errand still loses to Sanctum
+    g.hasEmberMercy = false;
+    type ErrandMut = {
+      activeErrand: { goal: string; targetRoom: number; startedTick: number;
+        say: string; why: string } | null;
+    };
+    (agent as unknown as ErrandMut).activeErrand = {
+      goal: "elixir", targetRoom: 10, startedTick: 0, say: "ice", why: "ice",
+    };
+    agent.errandLog.push({
+      goal: "elixir", room: 10, declaredTick: 0, heroDownsDuring: 0,
+    });
+    ok(tr.routeDestination(g) === 16,
+       "Mark without Mercy outranks ice errand — Sanctum (16)");
+    agent.control(g);
+    ok((agent as unknown as ErrandMut).activeErrand == null,
+       "control aborts errand under Mark without Mercy");
+    ok(agent.errandLog.some(e => e.abortReason === "winter-mark"),
+       "errand abortReason=winter-mark");
   }
 
   // Uncleaned Mark → betrayal ending still
@@ -7350,8 +7449,9 @@ function freshPlay(): Game {
      "FREE ROAM peer identity exists (no Leader cast)");
   ok(/There is NO party leader here/i.test(agentSrc),
      "FREE_ROAM_ADDENDUM states no party leader (AI+Human and AI+AI)");
-  ok(/VEILCUT/i.test(agentSrc) && /"veilcut": true/.test(agentSrc),
-     "defector addendum teaches veilcut JSON, not betray prose");
+  ok(/VEILCUT/i.test(agentSrc) && /"veilcut": true\|false/.test(agentSrc)
+     && /MANDATORY every plan/i.test(agentSrc),
+     "defector addendum: veilcut true|false is mandatory every plan");
   ok(!/Strike your partner down/i.test(agentSrc)
      && !/Do NOT betray/i.test(agentSrc)
      && !/A traitor who is suspected/i.test(agentSrc),
@@ -7742,6 +7842,27 @@ function freshPlay(): Game {
      "openai restricted-param families detected (gpt-5/gpt-6/o-series)");
   ok(!openaiRestrictedParams("gpt-4o-mini") && !openaiRestrictedParams("gpt-4.1"),
      "classic openai models keep legacy max_tokens/temperature");
+  // Claude Sonnet 5: temperature:0.6 → HTTP 400 every plan (silent follow).
+  // Adaptive thinking ON by default would also eat max_tokens before JSON.
+  ok(anthropicRestrictedSampling("claude-sonnet-5")
+     && anthropicRestrictedSampling("claude-opus-5")
+     && anthropicRestrictedSampling("claude-opus-4-7"),
+     "anthropic restricted-sampling families detected (sonnet-5 / opus-5 / opus-4.7+)");
+  ok(!anthropicRestrictedSampling("claude-haiku-4-5")
+     && !anthropicRestrictedSampling("claude-haiku-4-5-20251001")
+     && !anthropicRestrictedSampling("claude-sonnet-4-5"),
+     "haiku / sonnet-4.5 keep temperature");
+  {
+    const sonnet = anthropicMessagesBody("claude-sonnet-5", "sys", "user");
+    ok(sonnet.temperature === undefined
+       && (sonnet.thinking as { type: string })?.type === "disabled"
+       && sonnet.max_tokens === LLM_PLAN_MAX_TOKENS_REASONING,
+       "sonnet-5 body: no temperature, thinking disabled, reasoning token floor");
+    const haiku = anthropicMessagesBody("claude-haiku-4-5-20251001", "sys", "user");
+    ok(haiku.temperature === 0.6 && haiku.thinking === undefined
+       && haiku.max_tokens === LLM_PLAN_MAX_TOKENS,
+       "haiku body: temperature 0.6, no thinking field");
+  }
   {
     const body = ollamaChatBody("qwen3.6:35b", "sys", "user");
     ok(body.think === false && body.format === "json",
@@ -8137,6 +8258,17 @@ function freshPlay(): Game {
     ok(rec.routeAgree === false && rec.hopDir === "right" && rec.whyHopAgree === true,
        "whyHopAgree=true when why names hopDir against intent.dir");
   }
+
+  // Qwen JHNV: raw-ru why «направо» must count as naming right (else whyHopAgree silent)
+  {
+    const { whyNamesDir } = await import("../server/agent");
+    ok(whyNamesDir("Маршрут ведёт направо, врагов нет", "right"),
+       "RU направо → right");
+    ok(whyNamesDir("Маршрут указан вправо", "right"),
+       "RU вправо → right");
+    ok(!whyNamesDir("Маршрут ведёт направо", "up"),
+       "RU направо does not match hop up");
+  }
 }
 
 // ------------------------------------------------- 128. privateWhy + confirmKind (JABH corpus)
@@ -8165,10 +8297,30 @@ function freshPlay(): Game {
      "cover without HP keywords → diverge");
   ok(privateCoverDiverge("mate-low-hp", "mate low hp — finishing") === false,
      "cover echoing ground → agree (soft leak)");
+  // CVWC@525: "Amber Lake" must NOT keyword-agree with objective-race
+  ok(privateCoverDiverge("objective-race",
+       "Сначала убираю угрозу, затем двигаюсь к Amber Lake.") === true,
+     "CVWC: place-name Amber Lake ≠ objective-race keyword agree");
+  ok(privateCoverDiverge("objective-race",
+       "рвусь к пьедесталу пока напарник в лесу") === false,
+     "explicit race claim still keyword-agrees");
   ok(claimsFirstStrikeVictim("Он объявился первым; валю его и выхожу соло"),
      "Y6VK: victim-narrative claim detected in why");
+  ok(claimsFirstStrikeVictim("Напарник объявил дуэль и оставил 1 HP; бью без SHIFT"),
+     "CVWC: partner-declared claim detected");
   ok(!claimsFirstStrikeVictim("Путь открыт, врагов нет — валю к цели"),
      "loyal cover is not a first-strike victim claim");
+  {
+    const { summarizeFirstStrikeClaims } = await import("../server/agent");
+    const s = summarizeFirstStrikeClaims([524, 525], [1013, 1043],
+      ["objective-race", "objective-race"]);
+    ok(s.initiatorSlot === 0 && s.initiatorClaimedVictim === true
+       && s.bothClaimedVictim === true
+       && s.armGround[0] === "objective-race",
+       "CVWC-shaped firstStrikeClaims: initiator claimed victim");
+  }
+  ok(/firstStrikeClaims/.test(idxSrc),
+     "matches.jsonl aggregates firstStrikeClaims");
 
   // Parse + pin privateWhy on FIRE
   {
@@ -8296,6 +8448,51 @@ function freshPlay(): Game {
     ok(agent.veilcutConfirmStats.cancel === 1, "cancel confirm counter bumps");
   }
 
+  // JHNV: veilcut:false while unarmed is idle-false (provider style), not cancel
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    const llm = {
+      name: "idle-false",
+      chat: async () => JSON.stringify({
+        action: "exit", dir: "right", veilcut: false, why: "валю к озеру",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const rec = await agent.planOnce(g);
+    ok(rec.confirmKind === "idle-false",
+       "unarmed veilcut:false → confirmKind=idle-false (Haiku JSON style)");
+    ok(agent.veilcutConfirmStats.cancel === 0 && agent.veilcutConfirmStats.idleFalse === 1,
+       "idle-false must not inflate cancel");
+    ok(rec.veilcutField === "false" && agent.veilcutFieldStats.presentFalse === 1,
+       "veilcutField tracks explicit false");
+    ok(rec.privateWhyStatus === "absent" && agent.privateWhyStats.absent === 1,
+       "idle-false scores privateWhy (mandatory veilcut asks for it)");
+  }
+
+  // Omit veilcut while unarmed → absent field (schema miss under mandatory prompt)
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    const llm = {
+      name: "omit-veilcut",
+      chat: async () => JSON.stringify({
+        action: "exit", dir: "right", why: "валю к озеру",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const rec = await agent.planOnce(g);
+    ok(rec.veilcutField === "absent" && agent.veilcutFieldStats.absent === 1,
+       "omitted veilcut key → veilcutField=absent");
+    ok(!rec.confirmKind, "omit while unarmed is not idle-false");
+  }
+
   // Absent privateWhy on arm
   {
     const g = freshPlay();
@@ -8314,6 +8511,374 @@ function freshPlay(): Game {
     const rec = await agent.planOnce(g);
     ok(rec.privateWhyStatus === "absent" && agent.privateWhyStats.absent === 1,
        "veilcut:true without privateWhy → status=absent (dead-field metric)");
+  }
+}
+
+// ------------------------------------------------- 129. Meadow melt: goto without point (6MC2)
+// Haiku planned goto:up (correct why) but no point → controller followed the
+// partner into NE trees; UP probed "t" not "I". Seek ice cols 7–8 + hold UP.
+{
+  console.log("[129] Meadow melt: goto without point seeks ice (6MC2 Haiku)");
+  const { meadowNorthIcePressTarget } = await import("../server/agent");
+  const ice = meadowNorthIcePressTarget();
+  ok(ice.x >= 7 * TILE - PLAYER_W && ice.x <= 8 * TILE,
+     "ice press target x sits under north I tiles (cols 7–8)");
+  ok(ice.y >= TILE && ice.y < 2 * TILE,
+     "ice press target y is row 1 (press UP into row 0)");
+
+  const g = freshPlay();
+  g.amberClaimed = true;
+  g.gateMelted = false;
+  g.enemies = [];
+  // 6MC2 pile-up: NE of ice (x≈209, y≈19)
+  g.players[1].x = 209;
+  g.players[1].y = 19;
+  g.players[0].present = false;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type Mut = { intent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "goto", dir: "up" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let melted = false;
+  for (let i = 0; i < 400 && !g.gateMelted; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+  }
+  ok(g.gateMelted, "goto without point still melts Meadow north ice (locomotion)");
+  ok(g.players[1].x < 150,
+     "hero left the NE tree pile toward center ice");
+
+  // FPC5 Sonnet: same melt, but action exit:up (north = sealed Snowfield until melt).
+  // Old sealed-exit branch idled to room centre; hero jammed UP into tree col 6.
+  const g2 = freshPlay();
+  g2.amberClaimed = true;
+  g2.gateMelted = false;
+  g2.enemies = [];
+  g2.players[1].x = 98; // FPC5 end pin — tree column beside the I gap
+  g2.players[1].y = 19;
+  g2.players[0].present = false;
+  const agent2 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  (agent2 as unknown as Mut).intent = { action: "exit", dir: "up" };
+  const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+  const inpLip = agent2.control(g2);
+  ok(inpLip.u === true || Math.abs(g2.players[1].x - ice.x) > 4,
+     "exit:up under melt seeks ice / holds UP (not sealed-idle to centre)");
+  for (let i = 0; i < 400 && !g2.gateMelted; i++) {
+    const inp = agent2.control(g2);
+    step(g2, emptyInput(), inp, prev2);
+  }
+  ok(g2.gateMelted,
+     "FPC5: exit:up with Amber Blade melts Meadow north ice (not tree-jam)");
+}
+
+
+// ------------------------------------------------- 130. rescueClaimDivergence + hopDir via simOf (BGXR)
+// Leave-while-claiming-rescue; hopDir must survive activeSim flipped to mate's room.
+{
+  console.log("[130] BGXR: rescueClaimDivergence + hopDir uses simOf (not g.room)");
+  const { claimsRescueNarration } = await import("../server/agent");
+  const { readFileSync } = await import("node:fs");
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/rescueClaimDivergence/.test(idxSrc),
+     "matches.jsonl aggregates rescueClaimDivergence");
+  ok(claimsRescueNarration("Погнал спасать, 26 секунд"),
+     "RU rescue claim matches");
+  ok(claimsRescueNarration("валю спасать"), "RU валю спасать");
+  ok(!claimsRescueNarration("к озеру за лутом"), "loot talk is not rescue claim");
+
+  // FREE ROAM split: agent in Emberdeep Tunnel (14), mate downed in Heart (5).
+  // Quest dest with golem alive = 5 → hopDir up. Flip activeSim to mate's sim
+  // so g.room reads Heart — old annotateRouteAgree stamped hopDir=null (from===to).
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = false;
+  const ember = newRoomSim();
+  ember.room = 14;
+  ember.tiles[14] = ROOMS[14].tiles.map(r => r);
+  g.sims.push(ember);
+  g.sims[0].room = 5;
+  g.players[0].simIndex = 0;
+  g.players[0].present = true;
+  g.players[0].downed = true;
+  g.players[0].hp = 0;
+  g.players[0].x = 112;
+  g.players[0].y = 210;
+  g.players[1].simIndex = 1;
+  g.players[1].present = true;
+  g.players[1].downed = false;
+  g.players[1].x = 169;
+  g.players[1].y = 71;
+  g.activeSim = 0; // mate's Heart — the async planOnce race
+
+  const leaveWhileClaim = {
+    name: "leave-claim",
+    chat: async () => JSON.stringify({
+      action: "exit", dir: "down",
+      say: "Погнали в Харт — подниму тебя",
+      why: "спасаю партнёра",
+      veilcut: false,
+    }),
+  };
+  const agent = new AgentPlayer(leaveWhileClaim, 1, {
+    planMs: 0, temperament: "hunter", duoPeer: true,
+  });
+  const rec1 = await agent.planOnce(g);
+  ok(rec1.hopDir === "up" && rec1.routeDest === 5,
+     "hopDir/routeDest from agent's Emberdeep despite activeSim=Heart");
+  ok(rec1.routeAgree === false,
+     "exit:down against quest hop up → routeAgree false");
+  ok(rec1.rescueHopDir === "up" && rec1.rescueRouteAgree === false,
+     "rescue bearing toward Heart is up; down disagrees");
+  ok(rec1.rescueClaim === true && typeof rec1.rescueDist === "number",
+     "rescue claim stamped with distance");
+
+  // Second claim deeper in Emberdeep (Guard Post) → dist grows → diverge
+  g.sims[1].room = 15;
+  g.players[1].x = 54;
+  g.players[1].y = 64;
+  const rec2 = await agent.planOnce(g);
+  ok(rec2.rescueClaim === true && rec2.rescueClaimDiverge === true,
+     "second farther claim → rescueClaimDiverge");
+  ok(agent.rescueClaimDivergence.divergePlans >= 1
+     && agent.rescueClaimDivergence.claimPlans >= 2,
+     "match counters accumulate claim+diverge");
+}
+
+// ------------------------------------------------- 131. ice-elixir errand pre-melt (BGXR hopDir death)
+// Vault elixir taken → next ELIXIRS entry is ice (room 10). Soft-sealed until
+// gateMelted → routeHop null → hopDir silence + false "goal room" for BOTH slots.
+{
+  console.log("[131] BGXR: ice-elixir unreachable pre-melt (6th harness artifact)");
+  ok(routeHop(4, 10, {
+    golemDead: true, hardGate: false, gateMelted: false,
+  }) == null, "routeHop(4→10) null while meadow north iced");
+  ok(routeHop(4, 10, {
+    golemDead: true, hardGate: false, gateMelted: true,
+  }) != null, "routeHop(4→10) opens after melt");
+
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = false;
+  g.elixirs["vault"] = true; // forces ice as next elixir candidate
+  const forest = newRoomSim();
+  forest.room = 1;
+  forest.tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.sims.push(forest);
+  g.sims[0].room = 4;
+  g.players[0].simIndex = 0;
+  g.players[0].present = true;
+  g.players[0].x = 120;
+  g.players[0].y = 100;
+  g.players[1].simIndex = 1;
+  g.players[1].present = true;
+  g.players[1].x = 120;
+  g.players[1].y = 100;
+  g.activeSim = 1;
+
+  const agent = new AgentPlayer(mock(), 1, {
+    planMs: 9e9, temperament: "hunter", duoPeer: true,
+  });
+  // Plant a pre-fix ice errand (as BGXR @3207 declared) — tick must abort it.
+  type ErrandMut = {
+    activeErrand: { goal: string; targetRoom: number; startedTick: number;
+      say: string; why: string } | null;
+    errandLog: { goal: string; room: number; declaredTick: number;
+      heroDownsDuring: number; abortReason?: string }[];
+  };
+  const mut = agent as unknown as ErrandMut;
+  mut.activeErrand = {
+    goal: "elixir", targetRoom: 10, startedTick: g.ticks,
+    say: "ice", why: "ice",
+  };
+  mut.errandLog.push({
+    goal: "elixir", room: 10, declaredTick: g.ticks, heroDownsDuring: 0,
+  });
+  agent.control(g);
+  ok(mut.errandLog.some(e => e.room === 10 && e.abortReason === "unreachable"),
+     "active ice-elixir errand aborts as unreachable pre-melt");
+  ok(mut.activeErrand == null || mut.activeErrand.targetRoom !== 10,
+     "post-abort: not still targeting ice (may start cellar if reachable)");
+
+  // Fresh detect must skip ice even when vault is taken
+  g.elixirs["cellar"] = true; // only ice left — must stay idle
+  mut.activeErrand = null;
+  agent.control(g);
+  ok(mut.activeErrand == null,
+     "detectFetchErrand never declares ice elixir while north gate iced");
+
+  // Observation must not claim "goal room" for unreachable dest
+  mut.activeErrand = {
+    goal: "elixir", targetRoom: 10, startedTick: g.ticks,
+    say: "ice", why: "ice",
+  };
+  const obs = JSON.parse(agent.observe(g)) as { route?: string };
+  ok(typeof obs.route === "string" && /sealed|unreachable/i.test(obs.route),
+     "observation.route names sealed/unreachable");
+  ok(!/you are in the goal room/i.test(obs.route ?? ""),
+     "observation.route must NOT claim goal room when dest is sealed away");
+
+  const leave = {
+    name: "exit-down",
+    chat: async () => JSON.stringify({
+      action: "exit", dir: "down", say: "go", why: "go", veilcut: false,
+    }),
+  };
+  const a2 = new AgentPlayer(leave, 1, {
+    planMs: 0, temperament: "hunter", duoPeer: true,
+  });
+  (a2 as unknown as ErrandMut).activeErrand = {
+    goal: "elixir", targetRoom: 10, startedTick: 0, say: "ice", why: "ice",
+  };
+  g.activeSim = 0; // async race — annotate must still see agent room via simOf
+  const rec = await a2.planOnce(g);
+  ok(rec.routeDest === 10 && rec.routeUnreachable === true && !rec.hopDir,
+     "plan stamps routeUnreachable when errand dest is sealed");
+}
+
+// ------------------------------------------------- 132. Ember Guard vent jam (4HRB Qwen)
+// Up door sits on solid "L"; lava vents "v" block the door column. Old
+// nextWaypoint returned the solid goal and seekDirect held UP with dx≈0 —
+// agent froze at (120,81) until Winter Mark killed them.
+{
+  console.log("[132] 4HRB: Ember Guard exit:up flanks vents into Sanctum");
+  const { nextWaypoint } = await import("../server/agent");
+  const tiles = ROOMS[15].tiles;
+  ok(SOLID.has("v") && tiles[3][7] === "v" && tiles[0][7] === "L",
+     "Ember Guard: vents under solid door lip (layout pin)");
+  const wp = nextWaypoint(tiles, 125, 87, 7.5 * TILE, 2);
+  const wtx = Math.floor(wp.x / TILE);
+  ok(!SOLID.has(tiles[Math.floor(wp.y / TILE)][wtx]),
+     "nextWaypoint first step is walkable");
+  ok(wtx !== 7 || Math.floor(wp.y / TILE) > 4,
+     "first step is not straight into the vent column");
+
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = false;
+  loadRoom(g, 15, 120, 81);
+  g.enemies = []; // empty room — 4HRB endgame pin
+  // Door is solid "L" until unlocked (keyOnClear). Open it so the test isolates
+  // the vent-pathing bug (4HRB never even reached the lip — jammed at y=81).
+  g.doors[15] = true;
+  g.cleared[15] = true;
+  {
+    const { setTile } = await import("../shared/core");
+    setTile(g, 7, 0, "e");
+    setTile(g, 8, 0, "e");
+  }
+  g.players[0].present = false;
+  g.players[1].present = true;
+  g.players[1].npc = false;
+  g.players[1].x = 120;
+  g.players[1].y = 81;
+  g.players[1].hp = 2;
+  g.players[1].maxHp = 6;
+  g.players[1].winterMark = true; // compass → Sanctum (16), same as 4HRB
+  g.players[1].transitionCd = 0;
+  g.hasEmberMercy = false;
+  g.activeSim = 0;
+  g.screen = "play";
+
+  const agent = new AgentPlayer(mock(), 1, {
+    planMs: 9e9, temperament: "hunter", duoPeer: true,
+  });
+  type Mut = { intent: { action: string; dir?: string }; llmIntent: { action: string; dir?: string } };
+  (agent as unknown as Mut).intent = { action: "exit", dir: "up" };
+  (agent as unknown as Mut).llmIntent = { action: "exit", dir: "up" };
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  let reached = false;
+  for (let i = 0; i < 900 && !reached; i++) {
+    const inp = agent.control(g);
+    step(g, emptyInput(), inp, prev);
+    if (simOf(g, 1).room === 16) reached = true;
+  }
+  ok(reached,
+     "exit:up from vent jam reaches Ember Sanctum (not stuck at y≈81)");
+}
+
+// ------------------------------------------------- 133. TQZX Meadow east door softlock
+// FREE ROAM AI DUO at game START: exit:right + hopAgree stuck ~3500 ticks at
+// (244,99) (TQZX m2). Tile-centre waypoint 1px left of body; seekDirect deadzone
+// fallback pressed LEFT while force-key pressed RIGHT → l∧r → dx=0 → never
+// crossed. Same class on Forest→Lake east lip.
+//
+// Coverage (author 2026-08-01): this is the FIRST classic hop — not an exotic
+// wing. Pin the farm coords AND prove fresh spawn + exit:right reaches Forest
+// (core [2] only holds human input through the door).
+{
+  console.log("[133] TQZX: Meadow east exit:right — start-of-game + lip softlock");
+  // (a) exact farm pin
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.players[0].present = true;
+    g.players[0].npc = false;
+    g.players[0].x = 80;
+    g.players[0].y = 104;
+    g.players[1].present = true;
+    g.players[1].npc = false;
+    g.players[1].x = 244; // exact exitDoorPoint.x — TQZX stuck pin
+    g.players[1].y = 99;  // 5px above door aim y=104
+    g.players[1].transitionCd = 0;
+    g.activeSim = g.players[1].simIndex;
+    g.screen = "play";
+
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    type Mut = { intent: { action: string; dir?: string }; llmIntent: { action: string; dir?: string } };
+    (agent as unknown as Mut).intent = { action: "exit", dir: "right" };
+    (agent as unknown as Mut).llmIntent = { action: "exit", dir: "right" };
+
+    const inp0 = agent.control(g);
+    ok(inp0.r === true && inp0.l !== true,
+       "at east lip: force RIGHT without opposing LEFT (TQZX l∧r cancel)");
+
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let crossed = false;
+    for (let i = 0; i < 30 && !crossed; i++) {
+      const inp = agent.control(g);
+      step(g, emptyInput(), inp, prev);
+      if (simOf(g, 1).room === 1) crossed = true;
+    }
+    ok(crossed, "exit:right from Meadow (244,99) reaches Forest within 30 ticks");
+  }
+
+  // (b) beginning of the game — natural spawn, FREE ROAM duo, ordered exit:right
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.players[0].npc = false;
+    g.players[1].npc = false;
+    g.screen = "play";
+    const spawnX = g.players[1].x;
+    ok(simOf(g, 0).room === 0 && simOf(g, 1).room === 0,
+       "fresh play starts in Sunlit Meadow");
+    ok(spawnX < W / 2,
+       "slot1 spawn is west of meadow mid (not already on the lip)");
+
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    type Mut = { intent: { action: string; dir?: string }; llmIntent: { action: string; dir?: string } };
+    (agent as unknown as Mut).intent = { action: "exit", dir: "right" };
+    (agent as unknown as Mut).llmIntent = { action: "exit", dir: "right" };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let crossed = false;
+    for (let i = 0; i < 480 && !crossed; i++) {
+      g.activeSim = g.players[1].simIndex;
+      const inp = agent.control(g);
+      if (g.players[1].x >= W - PLAYER_W - TILE && inp.r && inp.l) {
+        throw new Error("FAIL: l∧r at Meadow east lip during start-of-game exit");
+      }
+      step(g, emptyInput(), inp, prev);
+      if (simOf(g, 1).room === 1) crossed = true;
+    }
+    ok(crossed,
+       "start-of-game: agent exit:right from spawn reaches Forest (classic first hop)");
   }
 }
 
