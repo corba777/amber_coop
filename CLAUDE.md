@@ -68,13 +68,15 @@ server/index.ts     multi-session WebSocket server. Session class per room code
                     win / loss / quit — Esc/refresh/disconnect mid-play still
                     writes a line so tester sessions stay attributable).
 server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
-                    ({action, target, dir, point, icePlan?, say, why}). Controller: 60 Hz
+                    ({action, target, dir, point, icePlan?, say, why,
+                    veilcut?, privateWhy?}). Controller: 60 Hz
                     reflex layer (auto-engage by temperament incl. during pickup
                     errands, survival pickups, waypointing via nextWaypoint on roomRows(g) — current room only, never
                     g.tiles[] — route compass via routeHop, attackStall flank
                     when stuck; rescue/feather are planner orders (not force-failsafe);
                     Frozen Playground: LLM icePlan queue +
-                    nextSlideWaypoint fallback). llmIntent preserved across reflex fights;
+                    nextSlideWaypoint fallback; TREASON: veilcut latch +
+                    confirm/review before SHIFT). llmIntent preserved across reflex fights;
                     restored after kill via resumeIntent. Prompts: SYSTEM_PROMPT
                     (partner), SOLO_PROMPT (autopilot), LEADER_PROMPT (AI DUO
                     slot 0 — quest driver, never follow).
@@ -100,7 +102,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1134 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1181 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -623,7 +625,16 @@ mirroring planner/controller: the **planner** gets a hidden `BETRAYAL_ADDENDUM`
 (secret winter-side aim; keep the public `why` cover — never confess) and
 may set planner JSON **`"veilcut": true`** (neologism — maps to internal
 `Intent.betray` for telemetry/controller; soft aliases `rift`/`betray` still
-parse). The **controller** carries a deterministic
+parse). **Explicit latch (FZ5X / 947M, [127]):** arm opens a planner-cycle
+window (`VEILCUT_ARM_PLANS`, default 3, paused while downed); omit = keep;
+`veilcut:false` = cancel; post-revive **review** and shot-open **confirm**
+before SHIFT; outcomes `discharged` / `cancelled` / `expired` /
+`discharged-without-review` (must stay 0). **`privateWhy` ([128]):** closed
+`ground` + short `note` on arm/confirm/cancel beats — plans.jsonl only, never
+HUD; `privateWhyStatus` / `privateCoverDiverge` / `confirmKind` /
+`dischargeOnOmit` / `privateWhyRetained` (pin ≠ absent). See
+[`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
+The **controller** carries a deterministic
 rational-defection trigger (`shouldBetray`: strike only when SAFE — no foe
 threatening it — and DECISIVE — a weak partner or the final prize on the table)
 so the mock harness and RL-free evals produce betrayals without a live LLM.
@@ -632,7 +643,8 @@ so the mock harness and RL-free evals produce betrayals without a live LLM.
 under partial observation. **Never leaked to the spectator HUD** (only
 {action, why} ride the snapshot); the raw `betray` + `defector` markers live in
 plans.jsonl, the interpretability corpus. matches.jsonl gains
-`treason`/`betrayed`/`betrayalDmg`/`betrayalDowns`/`betrayalStrikes`; `/stats`
+`treason`/`betrayed`/`betrayalDmg`/`betrayalDowns`/`betrayalStrikes` /
+`veilcutConfirms` / `privateWhyStats`; `/stats`
 adds betrayal columns (only once treason has drawn blood). Guarded by [86]
 (deterministic trigger, loyal-never, mechanic-gate, threat-hold) and [87]
 (claim-vs-truth logging).
@@ -946,8 +958,10 @@ Betrayal v3 design lock (**v3.1–v3.6 landed**):
 Evaluation protocols live under
 [`docs/research/evaluation.md`](docs/research/evaluation.md).
 
-Harness-forensics result note (2026-07-31 — anomalies as instrumentation):
+Harness-forensics + veilcut latch / `privateWhy` instrument (FZ5X→Y6VK/ZG7S):
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
+Post-FZ5X latch and structured `privateWhy` are **canon-bucket boundaries** —
+report `parseFailRate` beside betrayal numbers for that bucket.
 
 Experiment definitions live under
 [`docs/research/experiment_catalog.md`](docs/research/experiment_catalog.md).

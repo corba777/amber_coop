@@ -28,7 +28,7 @@ browser P1 ──ws──┐
                  ├── Node server · authoritative 60 Hz sim ── shared/core.ts
 browser P2 ──ws──┘        │
       (P2 = human)        └── AgentPlayer (P2 = LLM, or both in AI DUO)
-                               ├─ planner: LLM → intent JSON  {action, say, why}
+                               ├─ planner: LLM → intent JSON  {action, say, why, …}
                                └─ controller: 60 Hz mechanics (combat reflexes,
                                   pathfinding, survival pickups, locomotion)
 ```
@@ -55,13 +55,13 @@ browser P2 ──ws──┘        │
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
   agent joins fights, how close it sticks, and how it weighs rescue and mercy
   decisions. After temperament, pick a **speech**
-  profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both public `say`
-  and private `why`; JSON actions stay English. AI+AI picks speech
+  profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both `say`
+  and cover `why`; JSON actions stay English. AI+AI picks speech
   independently per hero.
-- **Thought panel** — the agent's plan and `why` sit in a strip **below** the
-  play square (wraps; never covers tiles). AI DUO stacks both minds. Toggle
-  with `T`. Every plan is logged — a small interpretability corpus grows as
-  you play.
+- **Thought panel** — the agent's plan and public `why` sit in a strip **below**
+  the play square (wraps; never covers tiles). AI DUO stacks both minds. Toggle
+  with `T`. `why` is a spectator claim (the partner does not see it in
+  observation). Research fields like `privateWhy` stay in `plans.jsonl` only.
 - **FREE ROAM + partner scry** — heroes can split rooms; a pixel PiP mirror
   (always 2D) shows where your partner is. Same-room touch-revive; alone-down
   bleed-out if help never comes.
@@ -78,9 +78,11 @@ browser P2 ──ws──┘        │
   partner; 15 seconds of clear-room neglect counts as implicit betrayal.
   Human↔AI and AI↔AI use the same rules.
 - **Hidden motives, visible evidence** — an AI may carry a secret winter-side
-  objective when TREASON is on. Its public `why` is only a claim; physical
-  costly acts feed neutral Relationship Memory, while plans and match outcomes
-  preserve the ground truth for analysis.
+  objective when TREASON is on. Public `say`/`why` are cover claims; a closed
+  `privateWhy` ground (plans.jsonl only) records the real rationale on arm /
+  confirm beats. Physical costly acts feed neutral Relationship Memory.
+  Veilcut arms with an explicit latch (cancel / confirm before fire) so a
+  stale order cannot discharge across a revive without a living plan.
 - **Temptation Court** — an optional TREASON-only persuasion wing. Hold Shift
   near the Whisperer to take the Dark Commit, soften its sentinels, and pursue
   the `winter-ascends` ending—or refuse, self-redeem with Ember Mercy, or be
@@ -169,7 +171,9 @@ rate, planning latency (measured off the critical path), `avgAssists`, ice-plan
 rates, quest-farm `betrayRate` / cause breakdown, and — for scenarios —
 suspicion / cooperation vs a fixed baseline fork.
 
-Research write-ups live under [`docs/research/`](docs/research/).
+Research write-ups live under [`docs/research/`](docs/research/) — including
+harness forensics and the veilcut / `privateWhy` instrument notes in
+[`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
 
 ## Where this is going
 

@@ -7871,15 +7871,98 @@ function freshPlay(): Game {
      "unknown speech profiles reject setup");
 }
 
-// ------------------------------------------------- 127. explicit veilcut latch (FZ5X)
-// Plan-cycle window + post-revive review gate: discharge forbidden until one plan
-// applied with selfRevive + veilcutArmed in obs. Outcomes: cancelled/expired/discharged;
-// discharged-without-review must stay at 0.
+// ------------------------------------------------- 127. explicit veilcut latch (FZ5X + 947M)
+// Plan-cycle window; post-revive review; shot-ready confirm before discharge;
+// omit=keep, veilcut:false=cancel. discharged-without-review must stay at 0.
 {
-  console.log("[127] veilcutArmed: plan-cycles + post-revive review + outcomes");
+  console.log("[127] veilcutArmed: review + confirm-before-fire + cancel");
   ok(VEILCUT_ARM_PLANS >= 1, "VEILCUT_ARM_PLANS ≥ 1");
 
-  // THE hole: veilcut → downed → revive → control WITHOUT plan must NOT SHIFT
+  // 947M hole: arm while away → reunite → NO fire until a confirm plan
+  {
+    const { newRoomSim } = await import("../shared/core");
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.enemies = [];
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1; // mate away
+    g.players[0].hp = 2; g.players[0].invuln = 0;
+    g.players[1].simIndex = 0;
+    g.players[1].x = 6 * TILE; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+    });
+    agent.armVeilcutLatch(g, 5); // away → not shot-ready → seenReady stays false
+    // Reunite: same room, physics open
+    g.players[0].simIndex = 0;
+    g.players[0].x = 10 * TILE; g.players[0].y = 8 * TILE;
+    let reject: import("../server/agent").PlanRecord | null = null;
+    let fired: import("../server/agent").PlanRecord | null = null;
+    agent.onPlan = r => {
+      if (r.betrayRejected) reject = r;
+      if (r.betrayReason === "llm-order") fired = r;
+    };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let heldK = false;
+    for (let i = 0; i < 15; i++) {
+      const inp = agent.control(g);
+      if (inp.k || inp.a) heldK = true;
+      step(g, emptyInput(), inp, prev);
+    }
+    ok(!heldK && !fired,
+       "947M gate: no discharge on first physics-open tick (before confirm plan)");
+    ok(!!reject && reject.betrayReason === "needs-confirm",
+       "pre-confirm control logs betrayRejected reason=needs-confirm");
+
+    // Cancel while awaiting confirm
+    const llmCancel = {
+      name: "cancel-ready",
+      chat: async () => JSON.stringify({
+        action: "idle", veilcut: false, why: "передумал",
+      }),
+    };
+    const aCancel = new AgentPlayer(llmCancel, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    aCancel.armVeilcutLatch(g, 5);
+    g.players[0].simIndex = 0; // ready
+    let outcome: string | null = null;
+    aCancel.onPlan = r => { if (r.veilcutOutcome) outcome = r.veilcutOutcome; };
+    await aCancel.planOnce(g);
+    ok(outcome === "cancelled", "veilcut:false while awaiting confirm → cancelled");
+    fired = null;
+    aCancel.onPlan = r => { if (r.betrayReason === "llm-order") fired = r; };
+    aCancel.control(g);
+    ok(!fired, "after cancel, no llm-order");
+
+    // Omit confirm → then discharge OK
+    const llmKeep = {
+      name: "confirm-keep",
+      chat: async () => JSON.stringify({ action: "idle", why: "держу приказ" }),
+    };
+    const aKeep = new AgentPlayer(llmKeep, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    g.players[0].simIndex = 1; // away again so arm is not auto-confirmed
+    aKeep.armVeilcutLatch(g, 5, { why: "путь чист — курок взведён" });
+    g.players[0].simIndex = 0;
+    g.players[0].hp = 2; g.players[0].invuln = 0;
+    await aKeep.planOnce(g); // omit while ready → seenReady
+    fired = null;
+    aKeep.onPlan = r => { if (r.betrayReason === "llm-order") fired = r; };
+    for (let i = 0; i < 30 && !fired; i++) {
+      step(g, emptyInput(), aKeep.control(g), prev);
+    }
+    ok(!!fired && fired.veilcutOutcome === "discharged",
+       "omit while shot-ready confirms; then llm-order may fire");
+    ok(!!fired && typeof fired.why === "string" && fired.why.length > 0,
+       "FIRE line keeps pinned cover why across confirm");
+  }
+
+  // THE revive hole: veilcut → downed → revive → control WITHOUT plan must NOT SHIFT
   {
     const g = freshPlay();
     g.treason = true;
@@ -7912,7 +7995,6 @@ function freshPlay(): Game {
     ok(!!reject && reject.betrayReason === "needs-review",
        "pre-review control logs betrayRejected reason=needs-review");
 
-    // One living plan (obs has selfRevive + veilcutArmed) — then discharge OK
     const llm = {
       name: "review",
       chat: async () => JSON.stringify({ action: "idle", why: "осмотрелся" }),
@@ -7920,7 +8002,6 @@ function freshPlay(): Game {
     const agent2 = new AgentPlayer(llm, 1, {
       planMs: 0, temperament: "hunter", defector: true, brain: "llm",
     });
-    // Rebuild the same revive-pending state on agent2
     agent2.armVeilcutLatch(g, 5);
     g.players[1].downed = true; g.players[1].hp = 0;
     agent2.control(g);
@@ -7959,10 +8040,9 @@ function freshPlay(): Game {
     agent.armVeilcutLatch(g, 2);
     g.players[1].downed = true; g.players[1].hp = 0;
     for (let i = 0; i < 50; i++) { g.ticks++; agent.control(g); }
-    // Still armed after long down — plans do not burn while downed
     g.players[1].downed = false; g.players[1].hp = 4;
-    agent.control(g); // needsReview
-    const r = await agent.planOnce(g); // review burn → 1 left
+    agent.control(g);
+    const r = await agent.planOnce(g);
     ok((r.veilcutPlansLeft ?? 0) === 1,
        "downed pause: after revive review, still 1 plan left of 2");
   }
@@ -7977,10 +8057,7 @@ function freshPlay(): Game {
       n: 0,
       async chat() {
         this.n++;
-        if (this.n <= 1) {
-          return JSON.stringify({ action: "idle", why: "burn" });
-        }
-        return JSON.stringify({ action: "idle", veilcut: false, why: "cancel" });
+        return JSON.stringify({ action: "idle", why: "burn" });
       },
     };
     const agent = new AgentPlayer(llm, 1, {
@@ -7989,12 +8066,10 @@ function freshPlay(): Game {
     agent.armVeilcutLatch(g, 1);
     let outcome: string | null = null;
     agent.onPlan = r => { if (r.veilcutOutcome) outcome = r.veilcutOutcome; };
-    await agent.planOnce(g); // burn → expired
+    await agent.planOnce(g);
     ok(outcome === "expired", "burning last plan cycle logs veilcutOutcome=expired");
 
     outcome = null;
-    agent.armVeilcutLatch(g, 3);
-    // force cancel path
     const llm2 = {
       name: "cancel",
       chat: async () => JSON.stringify({ action: "idle", veilcut: false, why: "нет" }),
@@ -8061,6 +8136,184 @@ function freshPlay(): Game {
     const rec = await agent.planOnce(g);
     ok(rec.routeAgree === false && rec.hopDir === "right" && rec.whyHopAgree === true,
        "whyHopAgree=true when why names hopDir against intent.dir");
+  }
+}
+
+// ------------------------------------------------- 128. privateWhy + confirmKind (JABH corpus)
+// Closed ground + note; instrumental privateCoverDiverge; HUD stays cover why only.
+{
+  console.log("[128] privateWhy (closed ground) + confirmKind / dischargeOnOmit");
+  const { readFileSync } = await import("node:fs");
+  const {
+    normalizePrivateWhy, privateCoverDiverge, PRIVATE_GROUNDS,
+    claimsFirstStrikeVictim,
+  } = await import("../server/agent");
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/const th = \{ action: rec\.action, why: rec\.why, ms: rec\.ms \}/.test(idxSrc),
+     "HUD thoughts wire cover why only");
+  ok(/veilcutConfirms/.test(idxSrc) && /privateWhyStats/.test(idxSrc),
+     "matches.jsonl aggregates veilcutConfirms + privateWhyStats");
+  ok(PRIVATE_GROUNDS.includes("mate-low-hp") && PRIVATE_GROUNDS.includes("none"),
+     "closed private ground list pinned");
+  ok(normalizePrivateWhy(null).status === "absent", "missing privateWhy → absent");
+  ok(normalizePrivateWhy({ ground: "none" }).status === "none", "ground=none → none");
+  ok(normalizePrivateWhy({ ground: "mate-low-hp", note: "2♥" }).status === "ok",
+     "object privateWhy parses ok");
+  ok(normalizePrivateWhy("not a ground at all").status === "invalid",
+     "free-text without ground → invalid");
+  ok(privateCoverDiverge("mate-low-hp", "валю к озеру") === true,
+     "cover without HP keywords → diverge");
+  ok(privateCoverDiverge("mate-low-hp", "mate low hp — finishing") === false,
+     "cover echoing ground → agree (soft leak)");
+  ok(claimsFirstStrikeVictim("Он объявился первым; валю его и выхожу соло"),
+     "Y6VK: victim-narrative claim detected in why");
+  ok(!claimsFirstStrikeVictim("Путь открыт, врагов нет — валю к цели"),
+     "loyal cover is not a first-strike victim claim");
+
+  // Parse + pin privateWhy on FIRE
+  {
+    const { newRoomSim } = await import("../shared/core");
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.enemies = [];
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1;
+    g.players[0].hp = 2; g.players[0].invuln = 0;
+    g.players[1].simIndex = 0;
+    const llm = {
+      name: "pw",
+      n: 0,
+      async chat() {
+        this.n++;
+        if (this.n === 1) {
+          return JSON.stringify({
+            action: "exit", dir: "right", veilcut: true,
+            why: "валю к озеру",
+            privateWhy: { ground: "mate-low-hp", note: "arm while I close" },
+          });
+        }
+        return JSON.stringify({
+          action: "idle", why: "стою рядом",
+          privateWhy: { ground: "opportunistic-physics", note: "window open" },
+        });
+      },
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const r1 = await agent.planOnce(g);
+    ok(r1.privateGround === "mate-low-hp" && r1.privateWhyStatus === "ok",
+       "arm plan logs closed privateGround");
+    ok(r1.privateCoverDiverge === true && r1.why === "валю к озеру",
+       "arm: cover diverges from private ground (instrumental)");
+    ok(agent.privateWhyStats.ok === 1 && agent.privateWhyStats.diverge === 1,
+       "arm beat bumps privateWhyStats ok+diverge");
+    // Retained pin on a non-beat plan must NOT look like status=absent
+    {
+      const gAway = freshPlay();
+      gAway.treason = true;
+      gAway.travelMode = "free";
+      gAway.enemies = [];
+      const { newRoomSim: nrs } = await import("../shared/core");
+      gAway.sims.push(nrs());
+      gAway.sims[1].room = 1;
+      gAway.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+      gAway.players[0].simIndex = 1;
+      gAway.players[0].hp = 2;
+      gAway.players[1].simIndex = 0;
+      const llmKeep = {
+        name: "pw-retain",
+        chat: async () => JSON.stringify({ action: "idle", why: "стою" }),
+      };
+      const a2 = new AgentPlayer(llmKeep, 1, {
+        planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+      });
+      a2.armVeilcutLatch(gAway, 5, {
+        why: "cover", privateGround: "mate-low-hp", privateNote: "pinned",
+      });
+      const retained = await a2.planOnce(gAway);
+      ok(retained.privateGround === "mate-low-hp" && retained.privateWhyRetained === true,
+         "non-beat plan carries pin as privateWhyRetained");
+      ok(retained.privateWhyStatus === undefined,
+         "retained pin must not set privateWhyStatus=absent");
+      ok(a2.privateWhyStats.absent === 0,
+         "stats.absent stays 0 when only the pin is retained");
+    }
+    g.players[0].simIndex = 0;
+    g.players[0].x = 10 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 6 * TILE; g.players[1].y = 8 * TILE;
+    const r2 = await agent.planOnce(g);
+    ok(r2.confirmKind === "omit" && r2.hadClearPlan === true,
+       "confirm plan tags confirmKind=omit");
+    ok(r2.privateGround === "opportunistic-physics" && r2.privateWhyStatus === "ok",
+       "omit confirm carries updated privateGround");
+    ok(agent.veilcutConfirmStats.omit === 1, "omit confirm counter bumps");
+
+    let fired: import("../server/agent").PlanRecord | null = null;
+    agent.onPlan = r => { if (r.betrayReason === "llm-order") fired = r; };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 30 && !fired; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+    ok(!!fired && fired.dischargeOnOmit === true && fired.confirmKind === "omit",
+       "FIRE carries dischargeOnOmit + confirmKind=omit");
+    ok(!!fired && fired.privateGround === "opportunistic-physics",
+       "FIRE keeps latest privateGround from confirm");
+    ok(agent.veilcutConfirmStats.dischargeOnOmit === 1,
+       "dischargeOnOmit match counter bumps");
+  }
+
+  // Cancel + absent category
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].hp = 2; g.players[0].invuln = 0;
+    const llm = {
+      name: "pw-cancel",
+      chat: async () => JSON.stringify({
+        action: "idle", veilcut: false,
+        why: "идём дальше",
+        privateWhy: { ground: "none", note: "not worth the Mark" },
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    agent.armVeilcutLatch(g, 3, {
+      why: "cover", privateGround: "mate-low-hp", privateNote: "armed earlier",
+    });
+    let outcome: import("../server/agent").PlanRecord | null = null;
+    agent.onPlan = r => { if (r.veilcutOutcome === "cancelled") outcome = r; };
+    const rec = await agent.planOnce(g);
+    ok(rec.confirmKind === "cancel" && !!outcome,
+       "veilcut:false tags confirmKind=cancel + latch outcome");
+    ok(rec.privateWhyStatus === "none" && agent.privateWhyStats.none === 1,
+       "explicit ground=none is a countable category");
+    ok(agent.veilcutConfirmStats.cancel === 1, "cancel confirm counter bumps");
+  }
+
+  // Absent privateWhy on arm
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].hp = 2; g.players[0].invuln = 0;
+    const llm = {
+      name: "pw-absent",
+      chat: async () => JSON.stringify({
+        action: "attack", veilcut: true, why: "чищу комнату",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const rec = await agent.planOnce(g);
+    ok(rec.privateWhyStatus === "absent" && agent.privateWhyStats.absent === 1,
+       "veilcut:true without privateWhy → status=absent (dead-field metric)");
   }
 }
 

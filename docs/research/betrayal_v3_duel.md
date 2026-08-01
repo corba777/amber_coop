@@ -19,6 +19,11 @@ Judgment stays with the model. Mechanics declare the arena, lock doors, protect
 from mobs during the duel, apply Mark, and cleanse Mark — they never decide
 *whether* to betray.
 
+**Instrument (not duel physics):** planner `veilcut` uses an explicit arm latch
+with review/confirm and research-only `privateWhy` — see
+[`harness_artifacts.md`](harness_artifacts.md). Latch changes are canon-bucket
+boundaries for farm numbers; they do not alter sealed-duel payoffs above.
+
 ---
 
 ## TREASON off

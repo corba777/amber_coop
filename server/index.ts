@@ -227,7 +227,12 @@ class Session {
         this.episodeTrackers[slot]?.onPlan(this.game, rec);
         this.planTaxonomyBuf[slot].push({
           betray: rec.betray, say: rec.say, why: rec.why, ok: rec.ok,
+          privateWhy: rec.privateWhy,
+          privateGround: rec.privateGround,
+          privateWhyStatus: rec.privateWhyStatus,
+          privateCoverDiverge: rec.privateCoverDiverge,
         });
+        // HUD / thoughts: cover why only — privateWhy stays plans.jsonl (like suspicionWhy).
         const th = { action: rec.action, why: rec.why, ms: rec.ms };
         this.lastThoughts[slot] = th;
         if (slot === 1) this.lastThought = th;
@@ -425,6 +430,30 @@ class Session {
       betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
+      veilcutConfirms: (() => {
+        const a = this.agent?.veilcutConfirmStats;
+        const b = this.leaderAgent?.veilcutConfirmStats;
+        if (!a && !b) return null;
+        return {
+          omit: (a?.omit ?? 0) + (b?.omit ?? 0),
+          reaffirm: (a?.reaffirm ?? 0) + (b?.reaffirm ?? 0),
+          cancel: (a?.cancel ?? 0) + (b?.cancel ?? 0),
+          dischargeOnOmit: (a?.dischargeOnOmit ?? 0) + (b?.dischargeOnOmit ?? 0),
+        };
+      })(),
+      privateWhyStats: (() => {
+        const a = this.agent?.privateWhyStats;
+        const b = this.leaderAgent?.privateWhyStats;
+        if (!a && !b) return null;
+        return {
+          ok: (a?.ok ?? 0) + (b?.ok ?? 0),
+          absent: (a?.absent ?? 0) + (b?.absent ?? 0),
+          none: (a?.none ?? 0) + (b?.none ?? 0),
+          invalid: (a?.invalid ?? 0) + (b?.invalid ?? 0),
+          diverge: (a?.diverge ?? 0) + (b?.diverge ?? 0),
+          agree: (a?.agree ?? 0) + (b?.agree ?? 0),
+        };
+      })(),
       icePlans: this.agent ? this.agent.icePlanStats : null,
       // Both AI slots (duo) — tag slot + sort by declare tick (H3BW: unattributable merge).
       errands: [

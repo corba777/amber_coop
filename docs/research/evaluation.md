@@ -494,6 +494,12 @@ Soft/hard ice-seal parity: selftest [126]. Key-door (`L`) invariant still open.
 `routeAgree` measures residual map-lies only after soft/hard parity holds, and
 only inside one canon bucket.
 
+**Canon buckets since 2026-08-01 (instrument cuts):** report betrayal /
+`dischargeOnOmit` / `privateWhy*` / first-strike claim rates only inside one
+of: (a) pre-FZ5X latch, (b) latch without structured `privateWhy`, (c) latch +
+closed `privateWhy` (Y6VK onward). Mixing buckets contaminates claim-vs-truth.
+Detail: [`harness_artifacts.md`](harness_artifacts.md).
+
 ---
 
 # Benchmark Evolution
