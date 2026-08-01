@@ -602,8 +602,10 @@ export const COURT_SENTINEL_SOFT_HP = 2;
  *  15 s at 60 Hz. Survivor quests on alone (`Player.dead`). Scoring: TREASON-off
  *  → ordinary SOLO; TREASON-on → implicit betrayal (v3.1). */
 export const NEGLECT_ABANDON_TICKS = 900;
-/** Betrayal v3.2 — Winter Mark: −1 heart every 20 s until cleansed. */
-export const WINTER_MARK_PERIOD = 1200;
+/** Betrayal v3.2 — Winter Mark: −1 heart every 40 s until cleansed.
+ *  40s (was 20s): enough budget for Forest→Emberdeep→Sanctum after a blade win
+ *  (G54G drained on the Meadow melt loop before Mercy was reachable). */
+export const WINTER_MARK_PERIOD = 2400;
 export const WINTER_MARK_DAMAGE = 2;
 /** Betrayal duel: undeclared hero gets a brief Judge shield to answer (~4 s). */
 export const DUEL_VICTIM_SHIELD_TICKS = 240;
@@ -1310,7 +1312,7 @@ function applyWinterMark(g: Game, pi: number, announce = true): void {
   burst(g, p.x + 5, p.y + 6, "#7a9cff", 12);
   sfx(g, "secret");
   if (announce) {
-    g.message = "Winter Mark brands you — one heart every 20s until Ember Mercy or the Wraith's mercy";
+    g.message = "Winter Mark brands you — one heart every 40s until Ember Mercy or the Wraith's mercy";
     g.messageT = 240;
   }
 }
@@ -1890,7 +1892,7 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   burst(g, o.x + 5, o.y + 6, "#c81e3a", 14);
   sfx(g, "down");
   g.message = scoreBetrayal
-    ? `${msg} Winter Mark brands you — one heart / 20s until Ember Mercy or Wraith mercy.`
+    ? `${msg} Winter Mark brands you — one heart / 40s until Ember Mercy or Wraith mercy.`
     : msg;
   g.messageT = 240;
 }
@@ -1982,14 +1984,26 @@ function checkMirrorShatter(g: Game): void {
 }
 
 /**
- * On LOSS screens, stamp an ending only when the ledger has one worth keeping
- * (betrayal / redeemed / abandoned). Mid-quest wipe without those stays
- * ending=null — quiet-hero etc. are WIN epilogues, not wipe labels (8GQC).
+ * On LOSS screens, stamp an ending:
+ * - betrayal / redeemed / abandoned / winter-ascends when the ledger has them;
+ * - otherwise `party-wipe` (mid-quest wipe — not a WIN epilogue like quiet-hero).
+ * 8GQC fixed betrayal wipe → betrayal; JHNV ordinary wipe left ending=null in
+ * matches — farm rows need a label. quiet-hero etc. stay WIN-only via endingFor.
  */
 function stampLossEnding(g: Game): void {
   if (g.ending) return;
-  if (!g.betrayed && !g.bleedoutLoss && g.temptationPayoff !== "winter-ascends") return;
-  g.ending = endingFor(g);
+  if (g.betrayed || g.bleedoutLoss || g.temptationPayoff === "winter-ascends") {
+    g.ending = endingFor(g);
+    return;
+  }
+  g.ending = {
+    id: "party-wipe", title: "FALLEN TOGETHER",
+    lines: [
+      "both blades fell before the thaw.",
+      "winter keeps the unmarked grave.",
+    ],
+    bg: "rgba(20,24,36,0.90)",
+  };
 }
 
 /** v3.4: first living-partner TREASON strike opens the sealed arena. */

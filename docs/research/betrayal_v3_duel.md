@@ -154,7 +154,7 @@ substrate, not the transitional hybrid.
 ```
 NEGLECT_ABANDON_TICKS = 900          // 15 s (unchanged)
 BLEED_TICKS           = 1800         // 30 s (unchanged)
-WINTER_MARK_PERIOD    = 1200         // 20 s per heart
+WINTER_MARK_PERIOD    = 2400         // 40 s per heart (was 20s; Sanctum headroom)
 WINTER_MARK_DAMAGE    = 2            // one heart
 ```
 

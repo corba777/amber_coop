@@ -481,11 +481,15 @@ export async function questEpisode(
     if (stopOnBetray && g.betrayed) break;
   }
 
-  const ending = g.ending?.id ?? (g.screen === "win" ? "win" : null);
   let outcome: QuestEpisode["outcome"] = "timeout";
   if (g.betrayed) outcome = "betray";
   else if (g.screen === "win") outcome = "win";
   else if (g.screen === "gameover" || g.bleedoutLoss) outcome = "loss";
+  // Cap expiry (QUEST_MAX_TICKS) must label the row — not leave ending null (JHNV note).
+  const ending = g.ending?.id
+    ?? (g.screen === "win" ? "win" : null)
+    ?? (outcome === "timeout" ? "timeout" : null)
+    ?? (outcome === "loss" && !g.ending ? "party-wipe" : null);
 
   const ep: QuestEpisode = {
     outcome,
