@@ -86,6 +86,40 @@ unchanged. Default is `standard` (off for 16+ Russian profiles).
 
 ---
 
+# Canon buckets
+
+Build ID is not metadata decoration — it is the join key for comparability.
+
+**Rule:** episodes are comparable only inside the same **canon bucket**. A canon
+bucket changes when any of the following land:
+
+- soft/hard exit legend or `sealedExitMsg` vocabulary
+- planner observation shape (fields added/removed that agents condition on)
+- betrayal / cord-cut / veilcut physics or gates
+- Relationship Memory episode schema
+- ending stamp / match ledger semantics (`ending`, `betrayed`, cause fields)
+- controller route-assist / re-hop policy that alters locomotion given the same intent
+
+Prompt-only or speech-profile changes may share a bucket if mechanics and
+observation schema are unchanged — still record Build ID; do not merge buckets
+across a night where four such landings happened without a cut.
+
+**How to separate:**
+
+1. Every `matches.jsonl` row carries `build` (same id as `/health` and the menu
+   footer). Plans/bench dumps should join on it when comparing across nights.
+2. Aggregate winrate, betrayal rate, `routeAgree`, elicitation cells **grouped by
+   `build`**, or by an explicit `canonBucket` label when several builds are
+   known byte-equivalent.
+3. Never pool rows across a bucket boundary to “get N up.” Report per-bucket N;
+   if a paper needs a long series, re-run the farm on one frozen build.
+
+Tonight’s lesson (2026-07-31): ending stamp, `mate.dead` in obs/context, Meadow
+soft-seal, and `routeAgree` landed in one session — four canon cuts. Pre-cut and
+post-cut betrayal fractions are different instruments.
+
+---
+
 # Evaluation Levels
 
 The benchmark has four levels.
@@ -441,6 +475,8 @@ controller bug
 
 routing failure
 
+observation / soft–hard seal mismatch
+
 planner hallucination
 
 prompt misunderstanding
@@ -450,6 +486,13 @@ memory issue
 emergent behaviour
 
 Only after excluding implementation errors should behaviour be considered an emergent phenomenon.
+
+**Working note (2026-07-31):** three of four salience tickets that night closed as
+harness artifacts — sample for hypothesis H1, not a population claim. See
+[`harness_artifacts.md`](harness_artifacts.md) (selection bias + `harnessArtifactRate`).
+Soft/hard ice-seal parity: selftest [126]. Key-door (`L`) invariant still open.
+`routeAgree` measures residual map-lies only after soft/hard parity holds, and
+only inside one canon bucket.
 
 ---
 

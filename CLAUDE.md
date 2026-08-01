@@ -18,6 +18,9 @@ node dist/selftest.js         # FULL suite; prints "SELFTEST OK — N assertions
 node dist/server.js           # serve on :8081 (PORT env to change)
 PROVIDERS=mock N=5 node dist/bench.js                    # headless golem arena
 MODE=rink PROVIDERS=mock,anthropic N=10 node dist/bench.js   # Frozen Playground ice-plan eval
+MODE=quest PROVIDERS=openai:openai TEMPERAMENTS=hunter:hunter \
+  TRAVEL=free HARD_GATE=1 TREASON=1 N=40 node dist/bench.js  # Free Roam abandon farm
+# Bench aborts (exit 78) on credits/auth or sustained 429 — BenchApiGuard
 PROVIDERS=anthropic,ollama N=10 TEMPERAMENT=hunter PLAN_TICKS=90 node dist/bench.js
 ./scripts/deploy-dgx.sh       # rsync + docker compose on spark-a510 (DGX)
 ./scripts/publish-dgx.sh      # selftest gate, then deploy-dgx.sh
@@ -97,7 +100,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1017 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1134 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -301,6 +304,12 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
   `PROVIDERS`/`TEMPERAMENTS` take a colon pair (`slot0:slot1`). Team winrate +
   per-slot assists/parse-fail/latency.
   `MODE=duo PROVIDERS=anthropic:openai N=10 TEMPERAMENTS=guard:hunter node dist/bench.js`.
+- **Bench `MODE=quest`** (headless Free Roam AI+AI farm): meadow start, peer cast,
+  `TRAVEL`/`HARD_GATE`/`TREASON`/`SPEECH`/`QUEST_MAX_TICKS`; aggregates
+  `betrayRate` + cause (neglect/cord-cut/blade). Stops early on betrayal by
+  default. Example:
+  `MODE=quest PROVIDERS=openai:openai TEMPERAMENTS=hunter:hunter TRAVEL=free HARD_GATE=1 TREASON=1 N=40 node dist/bench.js`.
+  Smoke [115].
 - **Anchor devolution** ([80], author Artem 2026-07-12): leader (slot 0,
   `npc=false`) crosses doors and drags the companion; companion alone cannot
   reload the room under golem pressure — same npc room-anchor rule as human+AI.
@@ -936,6 +945,9 @@ Betrayal v3 design lock (**v3.1–v3.6 landed**):
 
 Evaluation protocols live under
 [`docs/research/evaluation.md`](docs/research/evaluation.md).
+
+Harness-forensics result note (2026-07-31 — anomalies as instrumentation):
+[`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
 
 Experiment definitions live under
 [`docs/research/experiment_catalog.md`](docs/research/experiment_catalog.md).

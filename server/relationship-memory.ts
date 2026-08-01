@@ -65,6 +65,7 @@ export class RelationshipMemory {
   private prevPartnerBetrayalDmg = 0;
   private prevPartnerDmgTaken = 0;
   private prevPartnerRevives = 0;
+  private prevMyRevives = 0;
 
   private lowHpOpen = false;
   private hurtSpellOpen = false;
@@ -72,11 +73,14 @@ export class RelationshipMemory {
   private mercyLogged = false;
   private started = false;
 
-  tick(g: Game, agentSlot: number, _agentAction: string): void {
+  tick(g: Game, agentSlot: number,
+       ctx?: string | { action?: string; veilcutOrdered?: boolean }): void {
     const partnerSlot = 1 - agentSlot;
     const me = g.players[agentSlot];
     const partner = g.players[partnerSlot];
     const inRoom = me.simIndex === partner.simIndex;
+    const action = typeof ctx === "string" ? ctx : (ctx?.action ?? "");
+    const veilcutOrdered = typeof ctx === "object" && ctx?.veilcutOrdered === true;
 
     if (!this.started) {
       this.started = true;
@@ -84,6 +88,7 @@ export class RelationshipMemory {
       this.prevPartnerBetrayalDmg = g.stats[partnerSlot].betrayalDmg;
       this.prevPartnerDmgTaken = g.stats[partnerSlot].dmgTaken;
       this.prevPartnerRevives = g.stats[partnerSlot].revives;
+      this.prevMyRevives = g.stats[agentSlot].revives;
       this.wasDowned = me.downed;
     }
 
@@ -130,13 +135,30 @@ export class RelationshipMemory {
     }
     this.prevPartnerBetrayalDmg = ffTotal;
 
-    // --- Partner revive (costly: time + risk) ---
-    if (this.wasDowned && !me.downed && inRoom) {
+    // --- Partner revive (costly: time + risk) — victim view ---
+    // Require the partner's revive counter to rise. Elixir auto-revive and
+    // rematch edge ticks used to write phantom partner-revive @ tick 0 (H3BW).
+    const partnerRevives = g.stats[partnerSlot].revives;
+    if (this.wasDowned && !me.downed && inRoom
+        && partnerRevives > this.prevPartnerRevives) {
       this.push(g, "partner-revive", "partner-revived-me", {
-        partnerRevivesTotal: g.stats[partnerSlot].revives,
+        partnerRevivesTotal: partnerRevives,
       });
     }
+    this.prevPartnerRevives = partnerRevives;
     this.wasDowned = me.downed;
+
+    // --- I revived partner (reviver view) — log veilcut flag so hug≠ambush ---
+    // Same-room approach is revive OR cord-cut; only the ordered flag distinguishes.
+    const myRevives = g.stats[agentSlot].revives;
+    if (myRevives > this.prevMyRevives) {
+      this.push(g, "revive-act", "revived-partner", {
+        veilcutOrdered,
+        action,
+        myRevivesTotal: myRevives,
+      });
+    }
+    this.prevMyRevives = myRevives;
 
     // --- Low HP presence (costly: showing up when it matters) ---
     const low = me.present && !me.downed && me.hp > 0 && me.hp <= LOW_HP;

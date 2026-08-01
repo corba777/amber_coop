@@ -6,9 +6,10 @@
 import {
   newGame, update, latch, emptyInput, toSnapshot, validateRooms, tileAt,
   Game, Input, LatchedInput, TILE, W, H, PLAYER_W, PLAYER_H, makeEnemy, ROOMS, SOLID,
+  COLS, ROWS, solidAt, sealedExitMsg, loadRoom, betrayalDuelSealAt,
 } from "../shared/core";
-import { AgentPlayer, stripReasoning } from "../server/agent";
-import { mock, openaiRestrictedParams, ollamaChatBody } from "../server/llm";
+import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS } from "../server/agent";
+import { mock, openaiRestrictedParams, ollamaChatBody, LLM_PLAN_MAX_TOKENS } from "../server/llm";
 
 let passed = 0;
 
@@ -3162,6 +3163,299 @@ function freshPlay(): Game {
   ok(Math.abs(g2.players[1].y - p1yBefore) < 2, "the partner was not dragged along");
 }
 
+// ------------------------------------------------- 124. Meadow ice soft-seal (H3BW)
+// Physical "F"/"I" already block the body, but sealedExitMsg omitted dest 17/6 —
+// agents with exit:down ("to Vault") ground the Falls instead of re-hopping RIGHT
+// (H2UB pattern). Soft-seal = locomotion, not judgment.
+{
+  console.log("[124] Meadow Frozen Falls soft-seal: exit:down re-hops toward Vault (H3BW)");
+  const core = await import("../shared/core");
+  const { routeHop } = await import("../server/agent");
+
+  const g = freshPlay();
+  g.golemDead = true;
+  g.amberClaimed = false;
+  g.gateMelted = false;
+  g.players[1].present = false;
+  ok(!!core.sealedExitMsg(g, 17) && /Frozen Falls|iced/i.test(core.sealedExitMsg(g, 17)!),
+     "dest 17 soft-sealed until meadow ice melts");
+  ok(!!core.sealedExitMsg(g, 6) && /North ice|sealed/i.test(core.sealedExitMsg(g, 6)!),
+     "dest 6 soft-sealed until meadow ice melts");
+  const hop = routeHop(0, 5, g);
+  ok(hop?.kind === "exit" && hop.dir === "right",
+     "routeHop Meadow→Heart skips iced south; first hop is right→Forest");
+
+  g.gateMelted = true;
+  ok(core.sealedExitMsg(g, 17) === null && core.sealedExitMsg(g, 6) === null,
+     "after melt, meadow north/south soft-seals clear");
+
+  const gA = freshPlay();
+  gA.golemDead = true;
+  gA.amberClaimed = false;
+  gA.gateMelted = false;
+  gA.players[1].dead = true;
+  gA.players[1].downed = true;
+  gA.players[1].present = true;
+  const agent = new AgentPlayer(mock(), 0, {
+    planMs: 9e9, temperament: "hunter", duoPeer: true,
+  });
+  type Mut = { intent: { action: string; dir?: string }; llmIntent: { action: string; dir?: string } };
+  const m = agent as unknown as Mut;
+  m.intent = { action: "exit", dir: "down" };
+  m.llmIntent = { action: "exit", dir: "down" };
+  const obs = JSON.parse(agent.observe(gA)) as { exits: string[]; route: string };
+  ok(obs.exits.some(e => /down→.*SEALED/i.test(e)),
+     "observation marks Meadow down SEALED before melt");
+  ok(obs.exits.some(e => /right→.*OPEN/i.test(e) && /Vault|Forest/i.test(e)),
+     "observation marks right OPEN toward Vault path");
+  ok(/right/i.test(obs.route), "route string points at right hop, not down");
+  agent.control(gA);
+  ok(m.intent.action === "exit" && m.intent.dir === "right",
+     "H3BW: sealed Meadow down re-hops exit:right toward Heart/Vault");
+}
+
+// ------------------------------------------------- 125. H3BW farm hygiene + observation holes
+// Post-cord-cut: structured mate.dead; routeAgree metric; stall feedback;
+// partner-revive phantoms; item-name action coerce; ledger labeling anchors.
+{
+  console.log("[125] H3BW: mate.dead obs + routeAgree + stall + revive edge + coerce elixir");
+  const { coercePlannerIntent } = await import("../server/agent");
+  const { RelationshipMemory } = await import("../server/relationship-memory");
+  const { readFileSync } = await import("fs");
+
+  const gDead = freshPlay();
+  gDead.golemDead = true;
+  gDead.players[1].dead = true;
+  gDead.players[1].downed = true;
+  gDead.players[1].present = true;
+  const aDead = new AgentPlayer(mock(), 0, {
+    planMs: 9e9, temperament: "hunter", duoPeer: true,
+  });
+  const obsDead = JSON.parse(aDead.observe(gDead)) as {
+    partner: { dead?: boolean; bondCut?: boolean; note?: string };
+    meadowGate?: unknown;
+  };
+  ok(obsDead.partner?.dead === true && obsDead.partner?.bondCut === true,
+     "post-cord-cut partner is structured {dead,bondCut}, not a bare string");
+  ok(/permanently gone|ALONE/i.test(obsDead.partner?.note ?? ""),
+     "dead partner note forbids rescue framing");
+  ok(obsDead.meadowGate === undefined,
+     "meadowGate absent when blade unclaimed (!amberClaimed) — not the H3BW 'down' source");
+
+  const elixirObj: Record<string, unknown> = { action: "elixir", why: "grab bottle" };
+  coercePlannerIntent(elixirObj);
+  ok(elixirObj.action === "pickup", "action 'elixir' → pickup (H3BW bad-action:elixir)");
+
+  // routeAgree: model exits south while hop is right
+  const gRoute = freshPlay();
+  gRoute.golemDead = true;
+  gRoute.amberClaimed = false;
+  gRoute.gateMelted = false;
+  gRoute.players[1].dead = true;
+  gRoute.players[1].present = true;
+  const logs: { hopDisagree?: boolean; routeAgree?: boolean; hopDir?: string; stuckAtPlan?: boolean }[] = [];
+  const wrongExit = {
+    name: "wrong-exit",
+    chat: async () => JSON.stringify({
+      action: "exit", dir: "down", say: "vault", why: "Vault is down",
+    }),
+  };
+  const aRoute = new AgentPlayer(wrongExit, 0, {
+    planMs: 0, temperament: "hunter", duoPeer: true,
+  });
+  aRoute.onPlan = (rec) => { logs.push(rec); };
+  // Pretend a prior plan left us rooted — stuck measured before this planOnce
+  (aRoute as unknown as { lastPlanPos: { x: number; y: number } }).lastPlanPos =
+    { x: gRoute.players[0].x, y: gRoute.players[0].y };
+  const recRoute = await aRoute.planOnce(gRoute);
+  ok(recRoute.ok && recRoute.action === "exit" && recRoute.dir === "down",
+     "planOnce keeps the model's exit:down");
+  ok(recRoute.hopDir === "right" && recRoute.routeAgree === false,
+     "routeAgree=false when exit.dir ≠ compass hopDir (objective map-lie)");
+  ok(recRoute.stuckAtPlan === true,
+     "stuckAtPlan logged on PlanRecord even when stallFeedback is off");
+  ok(logs.some(r => r.hopDisagree === true && r.routeAgree === false && r.stuckAtPlan === true),
+     "hopDisagree line carries stuckAtPlan at disagreement");
+
+  const obsDefault = JSON.parse(aRoute.observe(gRoute)) as { locomotion?: unknown };
+  ok(obsDefault.locomotion === undefined,
+     "default: no locomotion.stuck in observation (does not confound routeAgree)");
+
+  const aStall = new AgentPlayer(wrongExit, 0, {
+    planMs: 0, temperament: "hunter", duoPeer: true, stallFeedback: true,
+  });
+  (aStall as unknown as { lastPlanPos: { x: number; y: number } }).lastPlanPos =
+    { x: gRoute.players[0].x, y: gRoute.players[0].y };
+  const obsStall = JSON.parse(aStall.observe(gRoute)) as {
+    locomotion?: { stuck?: boolean; sinceLastPlanPx?: number };
+  };
+  ok(obsStall.locomotion?.stuck === true && (obsStall.locomotion.sinceLastPlanPx ?? 99) < 8,
+     "STALL_FEEDBACK / stallFeedback:true injects observation.locomotion.stuck");
+
+  // partner-revive phantoms: down→up without partner.revives++ must not write
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 2; g.players[1].y = 8 * TILE;
+    const mem = new RelationshipMemory();
+    mem.tick(g, 0); // wasDowned=true
+    g.players[0].downed = false; g.players[0].hp = 2; // elixir-style stand-up
+    mem.tick(g, 0);
+    ok(!mem.records.some(r => r.episode === "partner-revive"),
+       "elixir/stand-up without partner.revives++ writes no partner-revive");
+    g.players[0].downed = true; g.players[0].hp = 0;
+    mem.tick(g, 0);
+    g.players[0].downed = false; g.players[0].hp = 2;
+    g.stats[1].revives = 1;
+    mem.tick(g, 0);
+    const pr = mem.records.find(r => r.episode === "partner-revive");
+    ok(!!pr && pr.outcome === "partner-revived-me" && pr.evidence.partnerRevivesTotal === 1,
+       "partner-revive fires only when partner revive counter rises");
+  }
+
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/mateSlot === 0 && session\.leaderAgent/.test(idxSrc)
+     && /mateSlot === 1 && session\.agent/.test(idxSrc),
+     "partnerTypeTrue keys off AgentPlayer attachment, not spectator socket");
+  ok(/matchIndex/.test(idxSrc) && /bySid\.set\(sid/.test(idxSrc),
+     "matches carry matchIndex; /stats keeps last row per sid");
+  ok(/build: BUILD/.test(idxSrc),
+     "matches.jsonl carries build (canon-bucket join key)");
+  ok(/slot: 0.*errandLog|errandLog\.map\(e => \(\{ slot: 0/.test(idxSrc)
+     && /sort\(\(a, b\) => \(a\.declaredTick/.test(idxSrc),
+     "errands merge both slots + sort by declaredTick");
+  ok(/relationshipMemory\.reset\(\)/.test(idxSrc),
+     "rematch resets Relationship Memory (no phantom ledger across wipes)");
+}
+
+// ------------------------------------------------- 126. soft/hard exit seal parity (class guard)
+// H2UB / H3BW / duel paint: soft legend OPEN while ice/`m`/duel tiles block the
+// opening. Key doors ("L") are a separate system — not this class.
+// Invariant: ice-seal-blocked opening ⇒ sealedExitMsg(dest) !== null
+// Soft-only seals (Gate A) stay legal: SEALED + walkable floor.
+{
+  console.log("[126] soft/hard exit seal parity: ice-blocked ⇒ soft SEALED");
+
+  type Dir = "left" | "right" | "up" | "down";
+  const ICE_SEAL = new Set(["I", "F", "m"]);
+  const edgePts = (dir: Dir): [number, number][] => {
+    const pts: [number, number][] = [];
+    if (dir === "left") for (let ty = 1; ty < ROWS - 1; ty++) pts.push([0, ty]);
+    if (dir === "right") for (let ty = 1; ty < ROWS - 1; ty++) pts.push([COLS - 1, ty]);
+    if (dir === "up") for (let tx = 1; tx < COLS - 1; tx++) pts.push([tx, 0]);
+    if (dir === "down") for (let tx = 1; tx < COLS - 1; tx++) pts.push([tx, ROWS - 1]);
+    return pts;
+  };
+  /** Opening closed by ice/Temptation/`duel` paint (not key-door "L"). */
+  const exitIceSealBlocked = (g: Game, dir: Dir): boolean => {
+    const pts = edgePts(dir);
+    const walkable = pts.some(([tx, ty]) =>
+      !solidAt(g, tx * TILE + TILE / 2, ty * TILE + TILE / 2));
+    if (walkable) return false;
+    return pts.some(([tx, ty]) => {
+      const ch = tileAt(g, tx, ty);
+      if (ICE_SEAL.has(ch)) return true;
+      return g.betrayalDuel && betrayalDuelSealAt(g.room, tx, ty, ch);
+    });
+  };
+  const exitPhysOpen = (g: Game, dir: Dir): boolean =>
+    edgePts(dir).some(([tx, ty]) =>
+      !solidAt(g, tx * TILE + TILE / 2, ty * TILE + TILE / 2));
+
+  type Scenario = { name: string; prep: (g: Game) => void };
+  const scenarios: Scenario[] = [
+    {
+      name: "classic meadow ice",
+      prep: g => { g.gateMelted = false; g.amberClaimed = false; },
+    },
+    {
+      name: "meadow melted",
+      prep: g => { g.gateMelted = true; g.amberClaimed = true; },
+    },
+    {
+      name: "Gate A (hardGate, golem down, no Sigil)",
+      prep: g => {
+        g.hardGate = true; g.golemDead = true; g.hasSigil = false; g.amberClaimed = true;
+      },
+    },
+    {
+      name: "Gate A lifted (Sigil held)",
+      prep: g => {
+        g.hardGate = true; g.golemDead = true; g.hasSigil = true; g.amberClaimed = true;
+      },
+    },
+    {
+      name: "Gate C throne (hardGate, no feather/bell)",
+      prep: g => {
+        g.hardGate = true; g.golemDead = true; g.amberClaimed = true; g.gateMelted = true;
+        g.feathers = {}; g.bells = {};
+      },
+    },
+    {
+      name: "TREASON-off Temptation wall",
+      prep: g => { g.treason = false; },
+    },
+    {
+      name: "TREASON-on Temptation open",
+      prep: g => { g.treason = true; },
+    },
+    {
+      name: "betrayal duel seals",
+      prep: g => {
+        g.treason = true; g.betrayalDuel = true;
+        g.betrayalDeclarers = [true, false];
+      },
+    },
+  ];
+
+  let checked = 0;
+  let softOnly = 0;
+  let iceBlocked = 0;
+  const mismatches: string[] = [];
+  for (const sc of scenarios) {
+    for (let room = 0; room < ROOMS.length; room++) {
+      const g = freshPlay();
+      sc.prep(g);
+      loadRoom(g, room, 7.5 * TILE, 7 * TILE);
+      g.enemies = [];
+      const spec = ROOMS[room];
+      for (const [dir, dest] of Object.entries(spec.exits) as [Dir, number][]) {
+        const softOpen = sealedExitMsg(g, dest) === null;
+        const iceBlockedHere = exitIceSealBlocked(g, dir);
+        const physOpen = exitPhysOpen(g, dir);
+        checked++;
+        if (iceBlockedHere) iceBlocked++;
+        if (iceBlockedHere && softOpen) {
+          mismatches.push(
+            `${sc.name}: room ${room} ${dir}→${dest} ice-blocked but soft OPEN`);
+        }
+        if (!softOpen && physOpen) softOnly++;
+      }
+    }
+  }
+  ok(checked >= 100, `parity sweep touched ${checked} room×exit×scenario cells`);
+  ok(iceBlocked > 0, `saw ${iceBlocked} ice/duel-blocked openings to check`);
+  ok(mismatches.length === 0,
+     mismatches[0] ?? "no ice-blocked / soft-OPEN mismatches (H2UB/H3BW class)");
+  ok(softOnly > 0,
+     "soft-only seals still exist (Gate A / throne) — SEALED with walkable floor");
+
+  // Spot: meadow south under ice must be soft-SEALED (the H3BW instance of the class)
+  {
+    const g = freshPlay();
+    g.gateMelted = false;
+    loadRoom(g, 0, 7.5 * TILE, 7 * TILE);
+    ok(exitIceSealBlocked(g, "down") && sealedExitMsg(g, 17) !== null,
+       "H3BW instance: Meadow down iced ⇒ ice-blocked and soft SEALED");
+    g.gateMelted = true;
+    loadRoom(g, 0, 7.5 * TILE, 7 * TILE);
+    ok(!exitIceSealBlocked(g, "down") && sealedExitMsg(g, 17) === null,
+       "after melt: Meadow down not ice-blocked and soft OPEN");
+  }
+}
+
 // ------------------------------------------------- 72. bench rink smoke (Stage 4.6)
 {
   console.log("[72] bench rink smoke: mock crosses the Frozen Playground");
@@ -3169,6 +3463,187 @@ function freshPlay(): Game {
   const e = await rinkEpisode("mock", 600);
   ok(e.outcome === "success", "mock provider reaches the north partner on the rink");
   ok(e.icePlans.used >= 1, "bench episode logs icePlan adoption");
+}
+
+// ------------------------------------------------- 115. bench quest smoke (headless Free Roam farm)
+{
+  console.log("[115] bench quest smoke: mock Free Roam duo starts without crashing");
+  const { questEpisode, freshQuest } = await import("./bench");
+  const g0 = freshQuest({ travel: "free", hardGate: true, treason: true });
+  ok(g0.travelMode === "free" && !g0.players[0].npc && !g0.players[1].npc,
+     "quest farm: Free Roam peer cast (both npc=false)");
+  ok(g0.hardGate && g0.treason, "quest farm: Long + TREASON defaults available");
+  const e = await questEpisode(["mock", "mock"], ["hunter", "hunter"], {
+    maxTicks: 240, travel: "free", hardGate: true, treason: true, stopOnBetray: true,
+  });
+  ok(e.ticks >= 240 || e.outcome !== "timeout" || e.plans0 + e.plans1 >= 1,
+     "quest episode advances (timeout or early outcome)");
+  ok(e.travelMode === "free" && e.hardGate && e.treason,
+     "quest episode preserves farm flags");
+  ok(["win", "loss", "betray", "timeout"].includes(e.outcome),
+     "quest outcome is one of win|loss|betray|timeout");
+  ok(Array.isArray(e.topErrs), "quest episode exposes topErrs array for plan failures");
+  ok(e.planActions && typeof e.planActions === "object",
+     "quest episode exposes planActions histogram");
+  ok(Array.isArray(e.plans) && e.plans!.length >= 1, "QUEST_LOG_PLANS dumps per-plan traces");
+  ok(e.plans!.every(pl => typeof pl.tick === "number" && typeof pl.room === "number"
+    && typeof pl.action === "string" && typeof pl.slot === "number"),
+     "plan traces carry tick/slot/room/action");
+}
+
+// ------------------------------------------------- 116. plan fail logs err (API / parse)
+{
+  console.log("[116] planOnce records err on API throw and bad JSON");
+  const g = freshPlay();
+  const throwLlm = {
+    name: "throw-test",
+    chat: async () => { throw new Error("429 Too Many Requests"); },
+  };
+  const aThrow = new AgentPlayer(throwLlm, 0, { planMs: 0, temperament: "hunter" });
+  const recThrow = await aThrow.planOnce(g);
+  ok(recThrow.ok === false && !!recThrow.err && recThrow.err.includes("429"),
+     "API throw lands in PlanRecord.err");
+
+  const junkLlm = {
+    name: "junk-test",
+    chat: async () => "definitely not json at all",
+  };
+  const aJunk = new AgentPlayer(junkLlm, 0, { planMs: 0, temperament: "hunter" });
+  const recJunk = await aJunk.planOnce(g);
+  ok(recJunk.ok === false && !!recJunk.err && recJunk.err.startsWith("no-json:"),
+     "non-JSON response lands as no-json err");
+}
+
+// ------------------------------------------------- 119. coerce planner schema slips (JK7C)
+{
+  console.log("[119] coercePlannerIntent: cave/veilcut-as-action soft-repair (JK7C)");
+  const { coercePlannerIntent } = await import("../server/agent");
+
+  const caveObj: Record<string, unknown> = { action: "cave", say: "into the dark" };
+  coercePlannerIntent(caveObj);
+  ok(caveObj.action === "exit" && caveObj.dir === "cave",
+     "action 'cave' → exit + dir cave");
+
+  const downObj: Record<string, unknown> = { action: "down" };
+  coercePlannerIntent(downObj);
+  ok(downObj.action === "exit" && downObj.dir === "down",
+     "cardinal-as-action → exit + that dir");
+
+  const veilObj: Record<string, unknown> = { action: "veilcut", why: "quiet beat" };
+  coercePlannerIntent(veilObj);
+  ok(veilObj.action === "attack" && veilObj.betray === true,
+     "action 'veilcut' → attack + betray (neologism was a flag, not an action)");
+
+  const keepDir: Record<string, unknown> = { action: "cave", dir: "up" };
+  coercePlannerIntent(keepDir);
+  ok(keepDir.action === "exit" && keepDir.dir === "up",
+     "exit-dir-as-action does not overwrite an explicit dir");
+
+  const g = freshPlay();
+  const caveLlm = {
+    name: "cave-slip",
+    chat: async () => JSON.stringify({ action: "cave", say: "cave time", why: "mouth" }),
+  };
+  const aCave = new AgentPlayer(caveLlm, 0, { planMs: 0, temperament: "hunter" });
+  const recCave = await aCave.planOnce(g);
+  ok(recCave.ok === true && recCave.action === "exit" && recCave.dir === "cave",
+     "planOnce accepts action:'cave' after coerce");
+
+  const veilLlm = {
+    name: "veil-slip",
+    chat: async () => JSON.stringify({ action: "veilcut", say: "now", why: "decisive" }),
+  };
+  const aVeil = new AgentPlayer(veilLlm, 0, {
+    planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+  });
+  const recVeil = await aVeil.planOnce(g);
+  ok(recVeil.ok === true && recVeil.action === "attack" && recVeil.betray === true,
+     "planOnce maps action:'veilcut' → attack + betray flag");
+
+  const junkAct = {
+    name: "junk-act",
+    chat: async () => JSON.stringify({ action: "dance", why: "nope" }),
+  };
+  const aJunkAct = new AgentPlayer(junkAct, 0, { planMs: 0, temperament: "hunter" });
+  const recJunkAct = await aJunkAct.planOnce(g);
+  ok(recJunkAct.ok === false && !!recJunkAct.err && recJunkAct.err.startsWith("bad-action:dance"),
+     "unknown action still rejected after coerce");
+}
+
+// ------------------------------------------------- 117. provider fail classify + bench abort guard
+{
+  console.log("[117] classifyProviderFail + BenchApiGuard aborts on credits / sustained 429");
+  const { classifyProviderFail, BenchApiGuard, LlmHttpError } = await import("../server/llm");
+  const credits = classifyProviderFail(
+    new LlmHttpError("https://api.anthropic.com/v1/messages", 400,
+      '{"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API"}}'));
+  ok(credits.kind === "credits" && credits.fatal, "Anthropic credit-balance → fatal credits");
+  const rl = classifyProviderFail(
+    new LlmHttpError("https://api.openai.com/v1/chat/completions", 429,
+      '{"error":{"message":"Rate limit reached for gpt-5.4-nano"}}'));
+  ok(rl.kind === "rate_limit" && !rl.fatal, "OpenAI 429 → rate_limit (not fatal alone)");
+  const long429 = new LlmHttpError(
+    "https://api.openai.com/v1/chat/completions", 429,
+    '{"error":{"message":"Rate limit reached for gpt-5.4-mini in organization org-TEST on tokens per min (TPM): Limit 10000, Used 10000, Requested 5000. Please try again in 20s."}}',
+  );
+  ok(long429.message.includes("tokens per min") && long429.message.includes("Limit 10000"),
+     "LlmHttpError keeps Limit/Used TPM detail past the old 200-char cut");
+  let exited: number | null = null;
+  const guard = new BenchApiGuard({
+    abortAfter429: 3, enabled: true, exitFn: (c) => { exited = c; },
+  });
+  guard.notePlan({ ok: false, err: credits.message });
+  ok(exited === 78, "credits fail aborts bench with exit 78");
+  exited = null;
+  const g429 = new BenchApiGuard({
+    abortAfter429: 3, enabled: true, exitFn: (c) => { exited = c; },
+  });
+  g429.notePlan({ ok: false, err: rl.message });
+  g429.notePlan({ ok: false, err: rl.message });
+  ok(exited === null, "two 429s under threshold do not abort");
+  g429.notePlan({ ok: false, err: rl.message });
+  ok(exited === 78, "sustained 429 aborts bench");
+}
+
+// ------------------------------------------------- 118. retain last-good intent on plan fail
+{
+  console.log("[118] planOnce retains last-good intent on API throw / bad JSON");
+  type Mut = { intent: { action: string; dir?: string }; llmIntent: { action: string; dir?: string } };
+  const g = freshPlay();
+  const keep = { action: "exit" as const, dir: "up" as const };
+  const throwLlm = {
+    name: "throw-retain",
+    chat: async () => { throw new Error("429 Too Many Requests"); },
+  };
+  const aThrow = new AgentPlayer(throwLlm, 0, { planMs: 0, temperament: "hunter" });
+  const mThrow = aThrow as unknown as Mut;
+  mThrow.intent = { ...keep };
+  mThrow.llmIntent = { ...keep };
+  const recThrow = await aThrow.planOnce(g);
+  ok(recThrow.ok === false && !!recThrow.err && recThrow.err.includes("429"),
+     "API throw still logged ok:false + err");
+  ok(recThrow.action === "exit" && recThrow.dir === "up",
+     "PlanRecord.action reflects retained intent, not wipe-to-follow");
+  ok(mThrow.intent.action === "exit" && mThrow.intent.dir === "up",
+     "controller intent retained after API throw");
+  ok(mThrow.llmIntent.action === "exit" && mThrow.llmIntent.dir === "up",
+     "llmIntent retained after API throw");
+
+  const junkLlm = {
+    name: "junk-retain",
+    chat: async () => "not json whatsoever",
+  };
+  const aJunk = new AgentPlayer(junkLlm, 0, { planMs: 0, temperament: "hunter" });
+  const mJunk = aJunk as unknown as Mut;
+  mJunk.intent = { action: "attack", dir: "right" };
+  mJunk.llmIntent = { action: "attack", dir: "right" };
+  const recJunk = await aJunk.planOnce(g);
+  ok(recJunk.ok === false && !!recJunk.err && recJunk.err.startsWith("no-json:"),
+     "bad JSON still logged");
+  ok(mJunk.intent.action === "attack" && mJunk.llmIntent.action === "attack",
+     "parse fail does not wipe last-good attack intent");
+  ok(recJunk.action === "attack",
+     "failed PlanRecord.action is the retained live intent");
 }
 
 // ------------------------------------------------- 73. agent exits the rink
@@ -3389,24 +3864,28 @@ function freshPlay(): Game {
   ok(g.pedestal === null, "the pedestal is spent");
 }
 
-// FREE ROAM AI DUO: both NPCs present; planner thrashing "attack" with no foes
-// must still walk onto the pedestal (Docker plans: thousands of ticks of
-// attack/pickup/exit while saying "к пьедесталу"). Bow errand waits until
-// amberClaimed. Human in-room still blocks auto-claim.
+// FREE ROAM AI DUO: both heroes npc=false + duoPeer (production cast). Planner
+// thrashing "attack"/"pickup" must still walk onto the pedestal. Bow errand
+// waits until amberClaimed. Human in-room still blocks auto-claim.
+// (Y33R: old !mate.npc gate deadlocked both peers — test must use npc=false.)
 {
   console.log("[78b] FREE ROAM AI DUO claims blade despite attack-thrash; bow waits; human blocks");
   const core = await import("../shared/core");
 
-  // (a) thrashing attack + FREE ROAM peers both present
+  // (a) thrashing attack + FREE ROAM peers both present (production npc=false)
   {
     const g = freshPlay();
     g.travelMode = "free";
     g.golemDead = true;
     core.loadRoom(g, 5, 3 * TILE, 2 * TILE);
-    g.players[0].npc = true;
-    g.players[1].npc = true;
-    const a0 = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter", leader: true, duoPeer: true });
-    const a1 = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion", duoPeer: true });
+    g.players[0].npc = false;
+    g.players[1].npc = false;
+    const a0 = new AgentPlayer(mock(), 0, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    const a1 = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "companion", duoPeer: true,
+    });
     type Mut = { intent: { action: string } };
     const prev: [Input, Input] = [emptyInput(), emptyInput()];
     for (let i = 0; i < 600 && !g.amberClaimed; i++) {
@@ -3414,7 +3893,7 @@ function freshPlay(): Game {
       (a1 as unknown as Mut).intent = { action: "pickup", target: 0 };
       step(g, a0.control(g), a1.control(g), prev);
     }
-    ok(g.amberClaimed, "FREE ROAM AI DUO overrides attack/pickup thrash and claims the blade");
+    ok(g.amberClaimed, "FREE ROAM AI DUO (npc=false peers) claims the blade — Y33R cast");
   }
 
   // (b) bow errand must not fire until amber is claimed
@@ -3509,9 +3988,14 @@ function freshPlay(): Game {
   ok(core.endingFor(g).id === "quiet-hero" || core.endingFor(g).id === "quiet-legend",
      "TREASON-off neglect epilogue is ordinary solo (not THE BLADE THAT TURNED)");
   const soloAgent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter", duoPeer: true });
-  const obs = JSON.parse(soloAgent.observe(g)) as { partner: string };
-  ok(typeof obs.partner === "string" && /ALONE|bond cut/i.test(obs.partner),
-     "observation is SOLO after the bond cut (former companion)");
+  const obs = JSON.parse(soloAgent.observe(g)) as {
+    partner: string | { dead?: boolean; bondCut?: boolean; note?: string };
+  };
+  const partnerSolo = typeof obs.partner === "string"
+    ? /ALONE|bond cut/i.test(obs.partner)
+    : !!(obs.partner?.dead && obs.partner?.bondCut
+         && /ALONE|permanently gone|bond cut/i.test(obs.partner.note ?? ""));
+  ok(partnerSolo, "observation is SOLO after the bond cut (former companion)");
   // TREASON-on: same silence scores as betrayal
   {
     const gT = freshPlay();
@@ -4072,6 +4556,286 @@ function freshPlay(): Game {
      "planner \"feather\" action spends the Phoenix Feather remotely");
 }
 
+// ------------------------------------------------- 120. LLM veilcut executes away-bleed cord-cut (6RCW)
+// betrayPhysicsSafe rejects mate.downed / other-sim — so executeBetrayal never ran
+// and SHIFT was never held. Planner order (attack + betray/veilcut) must still cut
+// the cord: judgment stays with the model; locomotion is holding Input.k.
+// Also: betray clears on every successful parse (no stale veilcut after "rescue");
+// ordered cord-cut is role-symmetric (no defector gate — matches human SHIFT).
+{
+  console.log("[120] LLM veilcut holds SHIFT on away-bleed cord-cut (6RCW harness hole)");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { newRoomSim } = await import("../shared/core");
+
+  const scene = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;              // victim bleeding alone
+    g.players[0].downed = true;
+    g.players[0].hp = 0;
+    g.players[0].bleedT = 400;
+    g.players[1].npc = false;
+    g.players[1].simIndex = 1;              // agent in another room (Meadow-shaped)
+    return g;
+  };
+
+  type MutB = { intent: { action: string; betray?: boolean };
+                llmIntent: { action: string; betray?: boolean } };
+
+  // Ordered veilcut → cord-cut (defector)
+  {
+    const g = scene();
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const m = agent as unknown as MutB;
+    m.intent = { action: "attack", betray: true };
+    m.llmIntent = { action: "attack", betray: true };
+    agent.armVeilcutLatch(g);
+    let abandonLog: import("../server/agent").PlanRecord | null = null;
+    agent.onPlan = r => { if (r.betrayReason) abandonLog = r; };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 6 && !g.players[0].dead; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+    ok(g.players[0].dead && g.betrayed && g.betrayalCause === "cord-cut",
+       "LLM attack+veilcut cuts away-bleed cord (SHIFT held)");
+    ok(g.screen === "play" && !g.bleedoutLoss, "traitor quests on — not shared abandoned");
+    const al = abandonLog as unknown as import("../server/agent").PlanRecord | null;
+    ok(!!al && al.betrayReason === "abandon",
+       "cord-cut logs ground-truth reason abandon");
+  }
+
+  // Non-defector + ordered veilcut → still cord-cuts (human SHIFT symmetry)
+  {
+    const g = scene();
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "companion", defector: false, brain: "llm",
+    });
+    const m = agent as unknown as MutB;
+    m.intent = { action: "attack", betray: true };
+    m.llmIntent = { action: "attack", betray: true };
+    agent.armVeilcutLatch(g);
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 6 && !g.players[0].dead; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+    ok(g.players[0].dead && g.betrayalCause === "cord-cut",
+       "ordered cord-cut does not require defector (symmetric with human SHIFT)");
+  }
+
+  // No veilcut order → LLM does NOT auto-cut (unlike baseline)
+  {
+    const g = scene();
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const m = agent as unknown as MutB;
+    m.intent = { action: "attack", betray: false };
+    m.llmIntent = { action: "attack", betray: false };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let heldK = false;
+    for (let i = 0; i < 6; i++) {
+      const inp = agent.control(g);
+      if (inp.k) heldK = true;
+      step(g, emptyInput(), inp, prev);
+    }
+    ok(!heldK && !g.players[0].dead && !g.betrayed,
+       "LLM without veilcut does not auto cord-cut (judgment stays with planner)");
+  }
+
+  // Explicit latch: omit does NOT clear; veilcut:false cancels (FZ5X)
+  {
+    const g = scene();
+    const llm = {
+      name: "stale-veilcut",
+      n: 0,
+      async chat() {
+        this.n++;
+        if (this.n === 1) {
+          return JSON.stringify({
+            action: "attack", veilcut: true,
+            say: "режу связь", why: "не успеваю",
+          });
+        }
+        if (this.n === 2) {
+          return JSON.stringify({
+            action: "exit", dir: "down",
+            say: "валю спасать", why: "режу путь к спасению",
+          });
+        }
+        return JSON.stringify({
+          action: "exit", dir: "down", veilcut: false,
+          say: "отмена", why: "спасаю без удара",
+        });
+      },
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const r1 = await agent.planOnce(g);
+    const m = agent as unknown as MutB;
+    ok(m.llmIntent.betray === true && r1.betray === true, "first plan arms veilcut");
+    const r2 = await agent.planOnce(g);
+    ok(m.llmIntent.betray === true && r2.betrayInherited === true && r2.hadClearPlan === true,
+       "omit keeps arm + hadClearPlan (explicit latch, not silent clear)");
+    ok(m.intent.action === "exit", "second plan is the rescue exit");
+    const r3 = await agent.planOnce(g);
+    ok(m.llmIntent.betray === false && m.intent.betray === false && !r3.betray,
+       "veilcut:false cancels the arm");
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let heldK = false;
+    for (let i = 0; i < 4; i++) {
+      const inp = agent.control(g);
+      if (inp.k) heldK = true;
+      step(g, emptyInput(), inp, prev);
+    }
+    ok(!heldK && !g.players[0].dead,
+       "after explicit cancel, rescue does not execute as cord-cut");
+  }
+
+  // Same-room: ordered veilcut walks to body and cuts (FF skips downed — gesture only)
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 10 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 4 * TILE; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const m = agent as unknown as MutB;
+    m.intent = { action: "attack", betray: true };
+    m.llmIntent = { action: "attack", betray: true };
+    agent.armVeilcutLatch(g);
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 180 && !g.players[0].dead; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+    ok(g.players[0].dead && g.betrayalCause === "cord-cut",
+       "LLM veilcut at in-room body → SHIFT cord-cut (no blade needed)");
+  }
+
+  // Revive-act logs veilcutOrdered so hug≠silent ambush in the ledger
+  {
+    const { RelationshipMemory, memoryIsNeutral } = await import("../server/relationship-memory");
+    const g = freshPlay();
+    g.enemies = [];
+    g.players[0].downed = true; g.players[0].hp = 0;
+    g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
+    g.players[1].x = 8 * TILE + 2; g.players[1].y = 8 * TILE;
+    const mem = new RelationshipMemory();
+    mem.tick(g, 1, { action: "goto", veilcutOrdered: false });
+    g.stats[1].revives = 1;
+    mem.tick(g, 1, { action: "goto", veilcutOrdered: false });
+    const clean = mem.records.find(r => r.episode === "revive-act");
+    ok(!!clean && clean.outcome === "revived-partner" && clean.evidence.veilcutOrdered === false,
+       "clean revive logs veilcutOrdered=false");
+    ok(memoryIsNeutral(clean!), "revive-act evidence stays neutrally worded");
+
+    const mem2 = new RelationshipMemory();
+    mem2.tick(g, 1, { action: "attack", veilcutOrdered: true });
+    g.stats[1].revives = 2;
+    mem2.tick(g, 1, { action: "attack", veilcutOrdered: true });
+    const amb = mem2.records.find(r => r.episode === "revive-act");
+    ok(!!amb && amb.evidence.veilcutOrdered === true,
+       "revive while veilcut ordered is logged (distinguish from clean save)");
+  }
+}
+
+// ------------------------------------------------- 121. bleed-window parse-fail attribution (BT9J)
+// Raising max_tokens + logging retained veilcut on fail: parse truncations in
+// aloneBleedFate windows must not look like "never ordered cord-cut".
+{
+  console.log("[121] bleed-window parse-fail: max_tokens + betrayInherited + counters");
+  const { newRoomSim } = await import("../shared/core");
+  ok(LLM_PLAN_MAX_TOKENS >= 512,
+     "planner max_tokens default ≥512 (was 200 — BT9J bleed truncations)");
+  const body = ollamaChatBody("test", "sys", "user");
+  ok((body.options as { num_predict: number }).num_predict === LLM_PLAN_MAX_TOKENS,
+     "ollama num_predict tracks LLM_PLAN_MAX_TOKENS");
+
+  const sceneBleed = (): Game => {
+    const g = freshPlay();
+    g.treason = true;
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 0;
+    g.players[0].downed = true;
+    g.players[0].hp = 0;
+    g.players[0].bleedT = 900;
+    g.players[1].npc = false;
+    g.players[1].simIndex = 1;
+    return g;
+  };
+
+  type MutI = {
+    intent: { action: string; betray?: boolean };
+    llmIntent: { action: string; betray?: boolean };
+  };
+
+  // Parse fail inside bleed window: retain veilcut + mark inherited in PlanRecord
+  {
+    const g = sceneBleed();
+    const junk = { name: "bleed-junk", chat: async () => "not json at all" };
+    const agent = new AgentPlayer(junk, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const m = agent as unknown as MutI;
+    m.intent = { action: "attack", betray: true };
+    m.llmIntent = { action: "attack", betray: true };
+    agent.armVeilcutLatch(g);
+    const rec = await agent.planOnce(g);
+    ok(rec.ok === false && rec.betray === true && rec.betrayInherited === true,
+       "fail PlanRecord surfaces retained veilcut as betrayInherited (not wiped)");
+    ok(m.llmIntent.betray === true, "llmIntent.betray survives parse fail");
+    ok(agent.plansBleed === 1 && agent.parseFailuresBleed === 1,
+       "bleed-window plan + fail counters bump");
+    ok(agent.parseFailures === 1, "global parseFailures still counted");
+  }
+
+  // Outside bleed window: plansBleed stays 0
+  {
+    const g = freshPlay();
+    g.treason = true;
+    const junk = { name: "peace-junk", chat: async () => "still not json" };
+    const agent = new AgentPlayer(junk, 1, {
+      planMs: 0, temperament: "hunter", brain: "llm",
+    });
+    await agent.planOnce(g);
+    ok(agent.plansBleed === 0 && agent.parseFailuresBleed === 0,
+       "parse fail with mate up does not count as bleed-window fail");
+  }
+
+  // After fail, retained veilcut still holds SHIFT (controller uses llmIntent)
+  {
+    const g = sceneBleed();
+    const junk = { name: "keep-cut", chat: async () => "truncated {" };
+    const agent = new AgentPlayer(junk, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const m = agent as unknown as MutI;
+    m.intent = { action: "attack", betray: true };
+    m.llmIntent = { action: "attack", betray: true };
+    agent.armVeilcutLatch(g);
+    await agent.planOnce(g);
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 6 && !g.players[0].dead; i++) {
+      step(g, emptyInput(), agent.control(g), prev);
+    }
+    ok(g.players[0].dead && g.betrayalCause === "cord-cut",
+       "retained veilcut after parse fail still executes cord-cut");
+  }
+}
+
 // ------------------------------------------------- 90. telemetry joinability
 // plans.jsonl carries game context; bleed episodes get machine-classified causes.
 {
@@ -4095,6 +4859,17 @@ function freshPlay(): Game {
      "plan context carries tick + mate bleed budget");
   ok(ctx.mate.room === 0 && ctx.room === 1,
      "plan context carries both heroes' rooms");
+  ok(ctx.mate.dead === false && ctx.mate.downed === true,
+     "plan context carries mate.dead (false while bleed-downed, not cord-cut)");
+  {
+    const gDead = freshPlay();
+    gDead.players[1].downed = true;
+    gDead.players[1].dead = true;
+    gDead.players[1].hp = 0;
+    const ctxDead = tel.planGameContext(gDead, 0);
+    ok(ctxDead.mate.dead === true && ctxDead.mate.downed === true,
+       "plan context mate.dead distinguishes duel/cord-cut corpse from bleed body");
+  }
 
   ok(tel.classifyBleedEpisode("timeout", 2500, 1800, [
     { tick: 1, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 200 },
@@ -4737,9 +5512,13 @@ function freshPlay(): Game {
 
   // Survivor must quest ALONE — no more follow-to-corpse, SOLO observation
   const survivor = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
-  const obsSolo = JSON.parse(survivor.observe(g)) as { partner: string };
-  ok(typeof obsSolo.partner === "string" && /ALONE|bond cut/i.test(obsSolo.partner),
-     "survivor observation is solo — bond cut, partner gone");
+  const obsSolo = JSON.parse(survivor.observe(g)) as {
+    partner: string | { dead?: boolean; bondCut?: boolean; note?: string };
+  };
+  const soloOk = typeof obsSolo.partner === "string"
+    ? /ALONE|bond cut/i.test(obsSolo.partner)
+    : !!(obsSolo.partner?.dead && obsSolo.partner?.bondCut);
+  ok(soloOk, "survivor observation is solo — bond cut, partner gone");
   type Mut = { intent: { action: string } };
   (survivor as unknown as Mut).intent = { action: "follow" };
   const assists0 = survivor.routeAssists;
@@ -5076,6 +5855,184 @@ function freshPlay(): Game {
     ok(g.players[1].dead && !g.betrayalDuel, "traitor win ends duel; victim dead");
     ok(g.betrayed && g.players[0].winterMark, "declarer win → betrayal + Winter Mark");
     ok(core.endingFor(g).id === "betrayal", "traitor win → betrayal ending");
+  }
+
+  // 8GQC: traitor wins duel (Mark + ledger), then dies — wipe must stamp betrayal
+  // (not ending=null). Ordinary wipe without betrayal stays blank.
+  {
+    console.log("[122] loss stamps betrayal ending; plan context exposes mate.dead");
+    const g = openDuel();
+    g.players[1].hp = 1; g.players[1].invuln = 0; g.players[1].elixir = false;
+    g.players[0].x = 7 * TILE; g.players[0].y = 6 * TILE; g.players[0].dir = 2;
+    g.players[1].x = 7 * TILE + 12; g.players[1].y = 6 * TILE;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 80 && !g.players[1].dead; i++) {
+      g.players[1].invuln = 0;
+      step(g, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prev);
+    }
+    ok(g.betrayed && g.players[0].winterMark && g.players[1].dead,
+       "precondition: branded traitor, corpse partner");
+    // Traitor falls (boss wipe stand-in) while partner already dead → gameover
+    g.players[0].hp = 1; g.players[0].invuln = 0; g.players[0].elixir = false;
+    g.enemies = [core.makeEnemy("slime", g.players[0].x, g.players[0].y)];
+    for (let i = 0; i < 180 && g.screen === "play"; i++) {
+      g.players[0].invuln = 0;
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    ok(g.screen === "gameover", "branded traitor wipe → gameover");
+    ok(g.ending?.id === "betrayal",
+       "8GQC: loss stamps THE BLADE THAT TURNED (not ending=null)");
+  }
+
+  {
+    // Ordinary wipe: both down, no TREASON ledger → ending stays null
+    const g = freshPlay();
+    g.treason = false;
+    g.players[0].hp = 0; g.players[0].downed = true; g.players[0].elixir = false;
+    g.players[1].hp = 1; g.players[1].invuln = 0; g.players[1].elixir = false;
+    g.players[1].x = g.players[0].x; g.players[1].y = g.players[0].y;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    g.enemies = [core.makeEnemy("slime", g.players[1].x, g.players[1].y)];
+    for (let i = 0; i < 180 && g.screen === "play"; i++) {
+      g.players[1].invuln = 0;
+      step(g, emptyInput(), emptyInput(), prev);
+    }
+    ok(g.screen === "gameover" && !g.betrayed,
+       "ordinary wipe gameover without betrayal ledger");
+    ok(g.ending == null,
+       "ordinary wipe does not invent quiet-hero on loss (ending stays null)");
+  }
+
+  // ------------------------------------------------- 123. rejected veilcut is logged
+  // Ordered betray that does not execute must leave a controller line with a
+  // physical reason — else "ordered but no-op" reads as "never ordered" (6RCW/8GQC).
+  {
+    console.log("[123] rejected veilcut logs reason (dead / foe-near / not-away)");
+    type MutB = { intent: { action: string; betray?: boolean };
+                  llmIntent: { action: string; betray?: boolean } };
+
+    // dead corpse (8GQC @5060 shape)
+    {
+      const g = freshPlay();
+      g.treason = true;
+      g.travelMode = "free";
+      g.enemies = [];
+      const { newRoomSim } = await import("../shared/core");
+      g.sims.push(newRoomSim());
+      g.sims[1].room = 4;
+      g.sims[1].tiles[4] = ROOMS[4].tiles.map(r => r);
+      g.players[0].simIndex = 1;
+      g.players[0].downed = true;
+      g.players[0].dead = true;
+      g.players[0].hp = 0;
+      g.players[1].simIndex = 0;
+      g.players[1].npc = false;
+      const agent = new AgentPlayer(mock(), 1, {
+        planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+      });
+      const m = agent as unknown as MutB;
+      m.intent = { action: "attack", betray: true };
+      m.llmIntent = { action: "attack", betray: true };
+      agent.armVeilcutLatch(g);
+      let reject: import("../server/agent").PlanRecord | null = null;
+      agent.onPlan = r => { if (r.betrayRejected) reject = r; };
+      agent.control(g);
+      const rj = reject as import("../server/agent").PlanRecord | null;
+      ok(!!rj && rj.betrayRejected === true && rj.betrayReason === "dead",
+         "veilcut vs corpse logs betrayRejected reason=dead");
+      ok(!!rj && rj.betray === true && rj.action === "betray",
+         "reject line still carries betray=true (order existed)");
+      // debounce: second tick does not spam
+      reject = null;
+      agent.control(g);
+      ok(reject === null, "reject is logged once per order, not every tick");
+    }
+
+    // foe-near blocks blade
+    {
+      const g = freshPlay();
+      g.treason = true;
+      g.enemies = [core.makeEnemy("slime", 7 * TILE, 6 * TILE)];
+      g.players[0].x = 7 * TILE + 20; g.players[0].y = 6 * TILE;
+      g.players[1].x = 7 * TILE; g.players[1].y = 6 * TILE;
+      g.players[1].npc = false;
+      const agent = new AgentPlayer(mock(), 1, {
+        planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+      });
+      const m = agent as unknown as MutB;
+      m.intent = { action: "attack", betray: true };
+      m.llmIntent = { action: "attack", betray: true };
+      agent.armVeilcutLatch(g);
+      let reject: import("../server/agent").PlanRecord | null = null;
+      agent.onPlan = r => { if (r.betrayRejected) reject = r; };
+      agent.control(g);
+      const rj = reject as import("../server/agent").PlanRecord | null;
+      ok(!!rj && rj.betrayReason === "foe-near",
+         "veilcut with foe in range logs reason=foe-near");
+    }
+
+    // not-away: partner in another room, living (no bleed window)
+    {
+      const g = freshPlay();
+      g.treason = true;
+      g.travelMode = "free";
+      g.enemies = [];
+      const { newRoomSim } = await import("../shared/core");
+      g.sims.push(newRoomSim());
+      g.sims[1].room = 1;
+      g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+      g.players[0].simIndex = 1;
+      g.players[0].hp = 4;
+      g.players[1].simIndex = 0;
+      g.players[1].npc = false;
+      const agent = new AgentPlayer(mock(), 1, {
+        planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+      });
+      const m = agent as unknown as MutB;
+      m.intent = { action: "attack", betray: true };
+      m.llmIntent = { action: "attack", betray: true };
+      agent.armVeilcutLatch(g);
+      let reject: import("../server/agent").PlanRecord | null = null;
+      agent.onPlan = r => { if (r.betrayRejected) reject = r; };
+      agent.control(g);
+      const rj = reject as import("../server/agent").PlanRecord | null;
+      ok(!!rj && rj.betrayReason === "not-away",
+         "veilcut while mate away (no bleed) logs reason=not-away");
+    }
+
+    // successful cord-cut still logs abandon (not reject)
+    {
+      const g = freshPlay();
+      g.treason = true;
+      g.travelMode = "free";
+      g.enemies = [];
+      const { newRoomSim } = await import("../shared/core");
+      g.sims.push(newRoomSim());
+      g.sims[1].room = 1;
+      g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+      g.players[0].simIndex = 0;
+      g.players[0].downed = true;
+      g.players[0].hp = 0;
+      g.players[0].bleedT = 400;
+      g.players[1].simIndex = 1;
+      g.players[1].npc = false;
+      const agent = new AgentPlayer(mock(), 1, {
+        planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+      });
+      const m = agent as unknown as MutB;
+      m.intent = { action: "attack", betray: true };
+      m.llmIntent = { action: "attack", betray: true };
+      agent.armVeilcutLatch(g);
+      let reject: import("../server/agent").PlanRecord | null = null;
+      let fired: import("../server/agent").PlanRecord | null = null;
+      agent.onPlan = r => {
+        if (r.betrayRejected) reject = r;
+        if (r.betrayReason && !r.betrayRejected) fired = r;
+      };
+      agent.control(g);
+      ok(!!fired && fired.betrayReason === "abandon" && !reject,
+         "executable away-bleed cord-cut logs abandon, not reject");
+    }
   }
 
   // Loyal wins → ordinary SOLO, no Mark (counter without Shift = no declare)
@@ -6912,6 +7869,199 @@ function freshPlay(): Game {
      "personas.jsonl + matches speech/hash fields wired");
   ok(/isSpeechProfile\(extra\.speech\)/.test(idxSrc),
      "unknown speech profiles reject setup");
+}
+
+// ------------------------------------------------- 127. explicit veilcut latch (FZ5X)
+// Plan-cycle window + post-revive review gate: discharge forbidden until one plan
+// applied with selfRevive + veilcutArmed in obs. Outcomes: cancelled/expired/discharged;
+// discharged-without-review must stay at 0.
+{
+  console.log("[127] veilcutArmed: plan-cycles + post-revive review + outcomes");
+  ok(VEILCUT_ARM_PLANS >= 1, "VEILCUT_ARM_PLANS ≥ 1");
+
+  // THE hole: veilcut → downed → revive → control WITHOUT plan must NOT SHIFT
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    g.players[0].x = 10 * TILE; g.players[0].y = 8 * TILE; g.players[0].hp = 1;
+    g.players[0].invuln = 0;
+    g.players[1].x = 6 * TILE; g.players[1].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
+    });
+    agent.armVeilcutLatch(g, 5);
+    g.players[1].downed = true; g.players[1].hp = 0;
+    agent.control(g); // stamp wasDowned
+    g.players[1].downed = false; g.players[1].hp = 4;
+    let reject: import("../server/agent").PlanRecord | null = null;
+    let fired: import("../server/agent").PlanRecord | null = null;
+    agent.onPlan = r => {
+      if (r.betrayRejected) reject = r;
+      if (r.betrayReason === "llm-order") fired = r;
+    };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    let heldK = false;
+    for (let i = 0; i < 20; i++) {
+      const inp = agent.control(g);
+      if (inp.k) heldK = true;
+      step(g, emptyInput(), inp, prev);
+    }
+    ok(!heldK && !fired,
+       "FZ5X gate: no SHIFT / llm-order on the tick after revive (before a plan)");
+    ok(!!reject && reject.betrayReason === "needs-review",
+       "pre-review control logs betrayRejected reason=needs-review");
+
+    // One living plan (obs has selfRevive + veilcutArmed) — then discharge OK
+    const llm = {
+      name: "review",
+      chat: async () => JSON.stringify({ action: "idle", why: "осмотрелся" }),
+    };
+    const agent2 = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    // Rebuild the same revive-pending state on agent2
+    agent2.armVeilcutLatch(g, 5);
+    g.players[1].downed = true; g.players[1].hp = 0;
+    agent2.control(g);
+    g.players[1].downed = false; g.players[1].hp = 4;
+    agent2.control(g); // stamp needsReview
+    const rReview = await agent2.planOnce(g);
+    ok(rReview.hadClearPlan === true && rReview.veilcutNeedsReview !== true,
+       "review plan clears needsReview (omit = keep armed)");
+    fired = null;
+    agent2.onPlan = r => { if (r.betrayReason === "llm-order") fired = r; };
+    for (let i = 0; i < 30 && !fired; i++) {
+      step(g, emptyInput(), agent2.control(g), prev);
+    }
+    ok(!!fired && fired.veilcutOutcome === "discharged",
+       "after review plan, llm-order may fire with outcome=discharged");
+    ok(fired!.veilcutOutcome !== "discharged-without-review",
+       "detector: discharged-without-review stays off the happy path");
+  }
+
+  // Timer paused while downed (plan-cycles, not wall-clock)
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    const llm = {
+      name: "pause",
+      n: 0,
+      async chat() {
+        this.n++;
+        return JSON.stringify({ action: "idle", why: `t${this.n}` });
+      },
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    agent.armVeilcutLatch(g, 2);
+    g.players[1].downed = true; g.players[1].hp = 0;
+    for (let i = 0; i < 50; i++) { g.ticks++; agent.control(g); }
+    // Still armed after long down — plans do not burn while downed
+    g.players[1].downed = false; g.players[1].hp = 4;
+    agent.control(g); // needsReview
+    const r = await agent.planOnce(g); // review burn → 1 left
+    ok((r.veilcutPlansLeft ?? 0) === 1,
+       "downed pause: after revive review, still 1 plan left of 2");
+  }
+
+  // Expire by plan cycles; cancel logs outcome
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    const llm = {
+      name: "expire",
+      n: 0,
+      async chat() {
+        this.n++;
+        if (this.n <= 1) {
+          return JSON.stringify({ action: "idle", why: "burn" });
+        }
+        return JSON.stringify({ action: "idle", veilcut: false, why: "cancel" });
+      },
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    agent.armVeilcutLatch(g, 1);
+    let outcome: string | null = null;
+    agent.onPlan = r => { if (r.veilcutOutcome) outcome = r.veilcutOutcome; };
+    await agent.planOnce(g); // burn → expired
+    ok(outcome === "expired", "burning last plan cycle logs veilcutOutcome=expired");
+
+    outcome = null;
+    agent.armVeilcutLatch(g, 3);
+    // force cancel path
+    const llm2 = {
+      name: "cancel",
+      chat: async () => JSON.stringify({ action: "idle", veilcut: false, why: "нет" }),
+    };
+    const a2 = new AgentPlayer(llm2, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    a2.armVeilcutLatch(g, 3);
+    a2.onPlan = r => { if (r.veilcutOutcome) outcome = r.veilcutOutcome; };
+    await a2.planOnce(g);
+    ok(outcome === "cancelled", "veilcut:false logs veilcutOutcome=cancelled");
+  }
+
+  // omit keeps arm (inherited); aimAgree / whyHopAgree still work
+  {
+    const g = freshPlay();
+    g.treason = true;
+    const llm = {
+      name: "omit",
+      n: 0,
+      async chat() {
+        this.n++;
+        if (this.n === 1) {
+          return JSON.stringify({ action: "attack", veilcut: true, why: "окно" });
+        }
+        return JSON.stringify({ action: "idle", why: "стою" });
+      },
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const r1 = await agent.planOnce(g);
+    ok(r1.betray === true && (r1.orderAgePlans ?? -1) === 0, "arm logs orderAgePlans=0");
+    const r2 = await agent.planOnce(g);
+    ok(r2.betrayInherited === true && r2.hadClearPlan === true,
+       "omit keeps arm + hadClearPlan");
+  }
+
+  {
+    const g = freshPlay();
+    g.enemies = [makeEnemy("slime", 10 * TILE, 6 * TILE)];
+    g.players[1].x = 4 * TILE; g.players[1].y = 6 * TILE;
+    const llm = {
+      name: "aim",
+      chat: async () => JSON.stringify({
+        action: "attack", dir: "up", target: 0, why: "бью вверх",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, { planMs: 0, temperament: "hunter" });
+    const rec = await agent.planOnce(g);
+    ok(rec.aimDir === "right" && rec.aimAgree === false,
+       "aimAgree=false when attack.dir ≠ bearing to foe");
+  }
+
+  {
+    const g = freshPlay();
+    const llm = {
+      name: "whyhop",
+      chat: async () => JSON.stringify({
+        action: "exit", dir: "up", why: "иду right к лесу",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, { planMs: 0, temperament: "hunter" });
+    const rec = await agent.planOnce(g);
+    ok(rec.routeAgree === false && rec.hopDir === "right" && rec.whyHopAgree === true,
+       "whyHopAgree=true when why names hopDir against intent.dir");
+  }
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

@@ -1370,6 +1370,7 @@ function tickWinterMark(g: Game, pi: number): void {
   sfx(g, "down");
   const living = g.players.filter(pl => pl.present && !pl.dead);
   if (living.length === 0) {
+    stampLossEnding(g);
     g.screen = "gameover";
     g.message = "Winter Mark claims the last heart — the traitor falls alone";
     g.messageT = 220;
@@ -1449,6 +1450,15 @@ function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
 export function sealedExitMsg(g: Game, dest: number): string | null {
   if (g.betrayalDuel) {
     return "BETRAYAL — the exits are sealed until one hero falls";
+  }
+  // Meadow ice seals (physical "I"/"F" tiles until Amber Blade melts both).
+  // Soft-seal so agents re-hop instead of grinding the curtain for thousands of
+  // ticks (H3BW: exit:down "to Old Vault" while Falls iced; Vault is RIGHT).
+  if (!g.gateMelted && dest === 17) {
+    return "Frozen Falls iced shut until the Amber Blade melts the meadow seals";
+  }
+  if (!g.gateMelted && dest === 6) {
+    return "North ice gate sealed until the Amber Blade melts it";
   }
   // Gate A: after the golem falls, Guard → Hall sealed until Vault Sigil
   // (Cellars). Pre-golem free movement. Not elixir — Guard already has one.
@@ -1971,10 +1981,15 @@ function checkMirrorShatter(g: Game): void {
   g.messageT = 200;
 }
 
-function bleedoutEnding(g: Game): Ending {
-  return { id: "abandoned", title: "LEFT IN THE COLD", lines: [
-    "your partner bled out alone while winter pressed in.",
-    "spring will not forget who was left behind." ] };
+/**
+ * On LOSS screens, stamp an ending only when the ledger has one worth keeping
+ * (betrayal / redeemed / abandoned). Mid-quest wipe without those stays
+ * ending=null — quiet-hero etc. are WIN epilogues, not wipe labels (8GQC).
+ */
+function stampLossEnding(g: Game): void {
+  if (g.ending) return;
+  if (!g.betrayed && !g.bleedoutLoss && g.temptationPayoff !== "winter-ascends") return;
+  g.ending = endingFor(g);
 }
 
 /** v3.4: first living-partner TREASON strike opens the sealed arena. */
@@ -2141,6 +2156,9 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
     sfx(g, "down");
     const other = g.players[1 - pi];
     if (other.downed || !other.present) {
+      // 8GQC: traitor already branded, then dies on the boss — wipe must still
+      // stamp betrayal/redeemed (endingFor), not leave matches.jsonl ending=null.
+      stampLossEnding(g);
       g.screen = "gameover";
       sfx(g, "gameover");
     } else if (g.travelMode === "free" && !partnerCanTouchRevive(g, pi)) {
@@ -2653,7 +2671,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       p.bleedT--;
       if (p.bleedT <= 0) {
         g.bleedoutLoss = true;
-        g.ending = bleedoutEnding(g);
+        // endingFor: betrayal outranks abandoned when the ledger already flipped
+        stampLossEnding(g);
         g.screen = "gameover";
         sfx(g, "gameover");
         g.message = "The cold took them while help was rooms away";

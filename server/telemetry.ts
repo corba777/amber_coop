@@ -9,7 +9,7 @@ export interface PlanGameContext {
   me: { x: number; y: number; hp: number };
   mate: {
     room: number; x: number; y: number; hp: number;
-    downed: boolean; bleedTicksLeft: number;
+    downed: boolean; dead: boolean; bleedTicksLeft: number;
   };
 }
 
@@ -62,6 +62,9 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
       y: Math.round(mate.y),
       hp: mate.hp,
       downed: mate.downed,
+      // Cord-cut / duel resolve set dead=true; without this, plans look like a
+      // live bleed body (8GQC @5060 veilcut vs corpse read as remote cord-cut).
+      dead: mate.dead,
       bleedTicksLeft: mate.bleedT,
     },
   };
