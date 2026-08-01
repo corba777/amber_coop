@@ -155,12 +155,19 @@ PROVIDERS=mock N=5 node dist/bench.js
 PROVIDERS=anthropic,ollama N=10 TEMPERAMENT=hunter node dist/bench.js
 MODE=rink PROVIDERS=mock,anthropic N=10 node dist/bench.js
 MODE=duo PROVIDERS=anthropic:openai TEMPERAMENTS=guard:hunter N=10 node dist/bench.js
+MODE=quest PROVIDERS=openai:openai TEMPERAMENTS=hunter:hunter \
+  TRAVEL=free HARD_GATE=1 TREASON=1 N=40 QUEST_MAX_TICKS=18000 SPEECH=raw-ru \
+  node dist/bench.js
+# Farm exits 78 on Anthropic credit exhaustion / bad key, or after
+# BENCH_ABORT_AFTER_429 consecutive 429s (default 20). 429s also get
+# LLM_RETRY_MAX exponential backoff inside llm.chat.
 MODE=scenario SCENARIO=false-accusation PROVIDERS=mock,anthropic N=5 node dist/bench.js
 ```
 
 Reports winrate, median win ticks, boss damage, downs/revives, parse-failure
 rate, planning latency (measured off the critical path), `avgAssists`, ice-plan
-rates, and — for scenarios — suspicion / cooperation vs a fixed baseline fork.
+rates, quest-farm `betrayRate` / cause breakdown, and — for scenarios —
+suspicion / cooperation vs a fixed baseline fork.
 
 Research write-ups live under [`docs/research/`](docs/research/).
 

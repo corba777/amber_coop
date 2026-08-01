@@ -17,7 +17,7 @@ import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   Game, Input, LatchedInput, emptyInput, latch, newGame, update, toSnapshot,
-  TravelMode,
+  TravelMode, endingFor,
   validateRooms,
 } from "../shared/core";
 import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, type SpeechProfile } from "./agent";
@@ -44,6 +44,8 @@ const BRAIN: AgentBrain = process.env.BRAIN === "baseline" ? "baseline" : "llm";
 const ELICITATION_RUNG: ElicitationRung = parseElicitationRung(process.env.ELICITATION_RUNG);
 const ELICITATION_PRIOR = parseElicitationPrior(process.env.ELICITATION_PRIOR);
 const HARD_GATE_DEFAULT = process.env.HARD_GATE === "1";
+/** Opt-in: inject observation.locomotion.stuck (confounds routeAgree — default off). */
+const STALL_FEEDBACK = process.env.STALL_FEEDBACK === "1";
 const LOG_DIR = process.env.LOG_DIR || "./logs";
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
 /** sync — Esc/refresh must not race the process out from under a buffered write */
@@ -64,6 +66,12 @@ function cleanName(raw: string, fallback: string): string {
 
 function partnerTypeTrue(session: Session, agentSlot: number): PartnerTypeTrue {
   const mateSlot = 1 - agentSlot;
+  // Ground truth = whether the mate slot is driven by an AgentPlayer, NOT whether
+  // a spectator/host socket sits on that seat. FREE ROAM AI+AI casts both heroes
+  // npc=false and a human may spectate on a socket — the old socket&&!npc test
+  // labeled slot1's partner (slot0) as "human" (H3BW), poisoning elicitation joins.
+  if (mateSlot === 0 && session.leaderAgent) return "ai";
+  if (mateSlot === 1 && session.agent) return "ai";
   const mate = session.game.players[mateSlot];
   if (session.sockets[mateSlot] && mate.present && !mate.npc) return "human";
   return "ai";
@@ -109,6 +117,8 @@ class Session {
   pendingStart = false;   // a "start" message: synthesized START edge
   /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
   matchLogged = false;
+  /** Increments on rematch so farms can keep the last row per sid (H3BW: 4 losses). */
+  matchIndex = 0;
   /** Plan corpus for elicitation refusal taxonomy (per AI slot). */
   planTaxonomyBuf: [TaxonomyPlan[], TaxonomyPlan[]] = [[], []];
 
@@ -194,6 +204,7 @@ class Session {
       partnerTypeTrue: partnerTypeTrue(this, slot),
       elicitationRung: ELICITATION_RUNG,
       elicitationPrior: ELICITATION_PRIOR,
+      stallFeedback: STALL_FEEDBACK,
       ...base,
     });
 
@@ -313,7 +324,14 @@ class Session {
    *  silent no-op (BT9J: testers thought Esc never saved). */
   beginRematchLogging(): void {
     this.matchLogged = false;
+    this.matchIndex++;
     this.planTaxonomyBuf = [[], []];
+    // Fresh play on the same sid — do not carry Relationship Memory / errands
+    // across rematches (H3BW: revive ledger outlived wiped stats).
+    this.leaderAgent?.relationshipMemory.reset();
+    this.agent?.relationshipMemory.reset();
+    if (this.leaderAgent) this.leaderAgent.errandLog.length = 0;
+    if (this.agent) this.agent.errandLog.length = 0;
     if (this.leaderAgent) this.episodeTrackers[0] = new EpisodeTracker(0, this.id);
     if (this.agent) this.episodeTrackers[1] = new EpisodeTracker(1, this.id);
   }
@@ -360,6 +378,8 @@ class Session {
     appendLog("matches.jsonl", {
       t: new Date().toISOString(),
       sid: this.id,
+      matchIndex: this.matchIndex,
+      build: BUILD,
       mode: this.mode,
       p1name: this.names[0] || "HERO",
       partner: this.names[1] || "(solo)",
@@ -375,12 +395,20 @@ class Session {
       personaHash1: this.personaHashes[0],
       personaHash2: this.personaHashes[1],
       outcome,
-      ending: outcome === "quit" ? null : (this.game.ending?.id ?? null),
+      // Defense in depth for wipe paths that forgot to stamp (8GQC): ledger
+      // endings still land in matches.jsonl even if g.ending was left null.
+      ending: outcome === "quit" ? null
+        : (this.game.ending?.id
+          ?? ((this.game.betrayed || this.game.bleedoutLoss)
+            ? endingFor(this.game).id : null)),
       hardGate: this.game.hardGate,
       ticks: this.game.ticks,
       p1: this.game.stats[0], p2: this.game.stats[1],
       plans: (this.agent?.planCount ?? 0) + (this.leaderAgent?.planCount ?? 0),
       parseFailures: (this.agent?.parseFailures ?? 0) + (this.leaderAgent?.parseFailures ?? 0),
+      plansBleed: (this.agent?.plansBleed ?? 0) + (this.leaderAgent?.plansBleed ?? 0),
+      parseFailuresBleed: (this.agent?.parseFailuresBleed ?? 0)
+        + (this.leaderAgent?.parseFailuresBleed ?? 0),
       routeAssists: (this.agent?.routeAssists ?? 0) + (this.leaderAgent?.routeAssists ?? 0),
       bellRings: (this.agent?.bellRings ?? 0) + (this.leaderAgent?.bellRings ?? 0),
       // TREASON telemetry: was friendly fire enabled, did a betrayal down a
@@ -398,7 +426,11 @@ class Session {
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
       icePlans: this.agent ? this.agent.icePlanStats : null,
-      errands: this.agent ? this.agent.errandLog : [],
+      // Both AI slots (duo) — tag slot + sort by declare tick (H3BW: unattributable merge).
+      errands: [
+        ...(this.leaderAgent?.errandLog.map(e => ({ slot: 0, ...e })) ?? []),
+        ...(this.agent?.errandLog.map(e => ({ slot: 1, ...e })) ?? []),
+      ].sort((a, b) => (a.declaredTick ?? 0) - (b.declaredTick ?? 0)),
       bleedout: this.game.bleedoutLoss,
       episodes,
       relationshipMemory: [
@@ -595,9 +627,20 @@ const server = http.createServer((req, res) => {
     try {
       const lines = fs.readFileSync(path.join(LOG_DIR, "matches.jsonl"), "utf8")
         .split("\n").filter(Boolean);
+      // Rematches reuse sid — keep the LAST line per sid so early wipes don't
+      // dilute betrayal / winrate (H3BW: 4 rows, only the final cord-cut counts).
+      const bySid = new Map<string, Record<string, unknown>>();
+      const noSid: Record<string, unknown>[] = [];
       for (const line of lines) {
         try {
           const m = JSON.parse(line) as Record<string, unknown>;
+          const sid = typeof m.sid === "string" ? m.sid : "";
+          if (sid) bySid.set(sid, m);
+          else noSid.push(m);
+        } catch { /* skip */ }
+      }
+      for (const m of [...noSid, ...bySid.values()]) {
+        try {
           // Esc/refresh mid-play is research telemetry, not a rated game —
           // keep it out of winrate tables so quitters don't dilute heroes.
           if (m.outcome === "quit") continue;
