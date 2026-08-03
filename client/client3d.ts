@@ -244,7 +244,7 @@ function menuKey(code: string): boolean {
     return true;
   }
   if (code === "Backspace" || code === "ArrowLeft") {
-    if (menu.step > 0) menuBack(menu);
+    if (menu.step > 0) menuBack(menu, providers);
     return true;
   }
   return false;
@@ -1089,12 +1089,24 @@ function drawScreens(s: Snapshot): void {
       ["ESC: back to menu (host)", 7, "#6f688c"],
     ], 152);
   } else if (s.screen === "gameover") {
-    uictx.fillStyle = "rgba(20,4,8,0.8)";
-    uictx.fillRect(0, 0, W, H);
-    centerText([
-      ["GAME OVER", 20, "#e8384f"],
-      ["press ENTER to try again", 8, "#ffffff"],
-    ], 100);
+    const end = s.ending;
+    if (end && end.id === "api-abort") {
+      uictx.fillStyle = end.bg ?? "rgba(28,10,6,0.92)";
+      uictx.fillRect(0, 0, W, H);
+      // Fallback title kept in-bundle so a stale server still names the silence.
+      const lines: [string, number, string][] =
+        [[end.title || "PROVIDER SILENCE", 14, "#e8a838"]];
+      for (const ln of end.lines) lines.push([ln, 8, "#c9a890"]);
+      lines.push(["press ENTER to try again", 8, "#ffffff"]);
+      centerText(lines, 96);
+    } else {
+      uictx.fillStyle = "rgba(20,4,8,0.8)";
+      uictx.fillRect(0, 0, W, H);
+      centerText([
+        ["GAME OVER", 20, "#e8384f"],
+        ["press ENTER to try again", 8, "#ffffff"],
+      ], 100);
+    }
     // mini scoreboard
     {
       const st = s.stats;

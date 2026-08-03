@@ -3,7 +3,14 @@
 export type MenuStep = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export type MenuPath = "" | "single" | "multi" | "single-human" | "single-auto" | "multi-coop" | "multi-ai" | "multi-duo";
 
-export interface ProviderInfo { ok: boolean; label: string; hint: string; }
+export interface ProviderInfo {
+  ok: boolean;
+  label: string;
+  hint: string;
+  /** Allowlist from server hello (comma-env). Missing → one synthetic row. */
+  models?: string[];
+  defaultModel?: string;
+}
 
 export interface MenuOption { label: string; ok: boolean; hint?: string; toggle?: boolean; }
 
@@ -16,8 +23,17 @@ export interface MenuState {
   architect: boolean;
   slick: boolean;
   treason: boolean;
+  /** Index into PROVIDER_ORDER. */
   provider: number;
   provider2: number;
+  /** Index into that provider's models[] (submenu after provider). */
+  model: number;
+  model2: number;
+  /**
+   * Pixel-style "dropdown": on step 2/5, after picking a provider with 2+
+   * models, flip to the model list without a new MenuStep number.
+   */
+  pickModel: boolean;
   temp: number;
   temp2: number;
   speech: number;
@@ -35,14 +51,33 @@ export function freshMenu(): MenuState {
   return {
     step: 0, idx: 0, path: "",
     hard: false, travel: "linked", architect: false, slick: false, treason: false,
-    provider: 0, provider2: 0, temp: 1, temp2: 1, speech: 0, speech2: 0,
+    provider: 0, provider2: 0, model: 0, model2: 0, pickModel: false,
+    temp: 1, temp2: 1, speech: 0, speech2: 0,
   };
+}
+
+/** Models for one catalog entry (always ≥1). */
+export function modelsOf(p: ProviderInfo | undefined, key: string): string[] {
+  if (p?.models && p.models.length > 0) return p.models;
+  return [p?.defaultModel || key];
+}
+
+function providerHasModelMenu(
+  providers: Record<string, ProviderInfo> | undefined,
+  providerIdx: number,
+): boolean {
+  if (!providers) return false;
+  const key = PROVIDER_ORDER[providerIdx] ?? PROVIDER_ORDER[0];
+  return modelsOf(providers[key], key).length > 1;
 }
 
 export function menuTitle(menu: MenuState): string {
   if (menu.step === 0) return "single or multiplayer?";
   if (menu.step === 1) return menu.path.startsWith("single") ? "choose your hero" : "choose your party";
   if (menu.step === 2) {
+    if (menu.pickModel) {
+      return menu.path === "multi-duo" ? "choose the HERO's model" : "choose their model";
+    }
     return menu.path === "multi-duo" ? "choose the HERO's AI" : "choose your AI";
   }
   if (menu.step === 3) {
@@ -51,18 +86,39 @@ export function menuTitle(menu: MenuState): string {
   if (menu.step === 4) {
     return menu.path === "multi-duo" ? "choose the HERO's speech" : "choose their speech";
   }
-  if (menu.step === 5) return "choose the COMPANION's AI";
+  if (menu.step === 5) {
+    return menu.pickModel ? "choose the COMPANION's model" : "choose the COMPANION's AI";
+  }
   if (menu.step === 6) return "choose the COMPANION's temperament";
   if (menu.step === 7) return "choose the COMPANION's speech";
   return "choose your quest";
 }
 
-function providerOptions(providers: Record<string, ProviderInfo>): MenuOption[] {
+/** Brand rows only — model opens as a second beat (dropdown-in-style). */
+function providerBrandOptions(providers: Record<string, ProviderInfo>): MenuOption[] {
   return PROVIDER_ORDER.map(k => {
     const p = providers[k];
-    return p ? { label: p.label.toUpperCase(), ok: p.ok, hint: p.hint }
-             : { label: k.toUpperCase(), ok: false, hint: "not configured" };
+    if (!p) return { label: k.toUpperCase(), ok: false, hint: "not configured" };
+    const models = modelsOf(p, k);
+    const n = models.length;
+    const hint = n > 1
+      ? `${n} models · ${p.hint}`
+      : `${models[0]} · ${p.hint}`;
+    return { label: (p.label || k).toUpperCase(), ok: p.ok, hint };
   });
+}
+
+function modelOptions(
+  providers: Record<string, ProviderInfo>,
+  providerIdx: number,
+): MenuOption[] {
+  const key = PROVIDER_ORDER[providerIdx] ?? PROVIDER_ORDER[0];
+  const p = providers[key];
+  return modelsOf(p, key).map(m => ({
+    label: m.toUpperCase(),
+    ok: true,
+    hint: p?.label ? `${p.label} · ${p.hint}` : p?.hint,
+  }));
 }
 
 function temperamentOptions(): MenuOption[] {
@@ -126,7 +182,16 @@ export function menuOptions(menu: MenuState, providers: Record<string, ProviderI
       { label: "AI + AI", ok: true, hint: "two minds quest — you spectate both" },
     ];
   }
-  if (menu.step === 2 || menu.step === 5) return providerOptions(providers);
+  if (menu.step === 2) {
+    return menu.pickModel
+      ? modelOptions(providers, menu.provider)
+      : providerBrandOptions(providers);
+  }
+  if (menu.step === 5) {
+    return menu.pickModel
+      ? modelOptions(providers, menu.provider2)
+      : providerBrandOptions(providers);
+  }
   if (menu.step === 3 || menu.step === 6) return temperamentOptions();
   if (menu.step === 4 || menu.step === 7) return speechOptions();
   return questOptions(menu);
@@ -134,6 +199,39 @@ export function menuOptions(menu: MenuState, providers: Record<string, ProviderI
 
 export interface MenuSend {
   (payload: Record<string, unknown>): void;
+}
+
+function resolveSlot(
+  providers: Record<string, ProviderInfo>,
+  providerIdx: number,
+  modelIdx: number,
+): { provider: (typeof PROVIDER_ORDER)[number]; model: string } {
+  const provider = PROVIDER_ORDER[providerIdx] ?? PROVIDER_ORDER[0];
+  const models = modelsOf(providers[provider], provider);
+  const model = models[Math.max(0, Math.min(modelIdx, models.length - 1))] ?? models[0];
+  return { provider, model };
+}
+
+/** After brand confirm: open model list, or skip when only one model. */
+function afterProviderPick(
+  menu: MenuState,
+  providers: Record<string, ProviderInfo>,
+  which: "hero" | "companion",
+): void {
+  const pIdx = which === "hero" ? menu.provider : menu.provider2;
+  const key = PROVIDER_ORDER[pIdx] ?? PROVIDER_ORDER[0];
+  const models = modelsOf(providers[key], key);
+  if (models.length <= 1) {
+    if (which === "hero") menu.model = 0;
+    else menu.model2 = 0;
+    menu.pickModel = false;
+    if (which === "hero") { menu.step = 3; menu.idx = 1; }
+    else { menu.step = 6; menu.idx = 1; }
+    return;
+  }
+  menu.pickModel = true;
+  menu.idx = which === "hero" ? menu.model : menu.model2;
+  if (menu.idx < 0 || menu.idx >= models.length) menu.idx = 0;
 }
 
 export function menuConfirm(
@@ -154,21 +252,27 @@ export function menuConfirm(
     if (menu.path === "single") {
       menu.path = menu.idx === 0 ? "single-human" : "single-auto";
       if (menu.idx === 0) { menu.step = 8; menu.idx = 0; }
-      else { menu.step = 2; menu.idx = 0; }
+      else { menu.step = 2; menu.idx = 0; menu.pickModel = false; }
       return;
     }
     menu.path = menu.idx === 0 ? "multi-coop" : menu.idx === 1 ? "multi-ai" : "multi-duo";
     if (menu.idx === 0) { menu.step = 8; menu.idx = 0; }
-    else { menu.step = 2; menu.idx = 0; }
+    else { menu.step = 2; menu.idx = 0; menu.pickModel = false; }
     return;
   }
 
   if (menu.step === 2) {
-    const opt = providerOptions(providers)[menu.idx];
-    if (!opt.ok) return;
+    if (menu.pickModel) {
+      menu.model = menu.idx;
+      menu.pickModel = false;
+      menu.step = 3;
+      menu.idx = 1;
+      return;
+    }
+    const opt = providerBrandOptions(providers)[menu.idx];
+    if (!opt?.ok) return;
     menu.provider = menu.idx;
-    menu.step = 3;
-    menu.idx = 1;
+    afterProviderPick(menu, providers, "hero");
     return;
   }
 
@@ -181,7 +285,10 @@ export function menuConfirm(
 
   if (menu.step === 4) {
     menu.speech = menu.idx;
-    if (menu.path === "multi-duo") { menu.step = 5; menu.idx = 0; return; }
+    if (menu.path === "multi-duo") {
+      menu.step = 5; menu.idx = 0; menu.pickModel = false;
+      return;
+    }
     if (menu.path === "single-auto" || menu.path === "multi-ai") {
       menu.step = 8; menu.idx = 0;
       return;
@@ -190,11 +297,17 @@ export function menuConfirm(
   }
 
   if (menu.step === 5) {
-    const opt = providerOptions(providers)[menu.idx];
-    if (!opt.ok) return;
+    if (menu.pickModel) {
+      menu.model2 = menu.idx;
+      menu.pickModel = false;
+      menu.step = 6;
+      menu.idx = 1;
+      return;
+    }
+    const opt = providerBrandOptions(providers)[menu.idx];
+    if (!opt?.ok) return;
     menu.provider2 = menu.idx;
-    menu.step = 6;
-    menu.idx = 1;
+    afterProviderPick(menu, providers, "companion");
     return;
   }
 
@@ -233,6 +346,8 @@ export function menuConfirm(
   const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect,
     slick: menu.slick, treason: menu.treason };
   const host = hostName?.trim().slice(0, 12);
+  const c0 = resolveSlot(providers, menu.provider, menu.model);
+  const c1 = resolveSlot(providers, menu.provider2, menu.model2);
 
   if (menu.path === "single-human") {
     setUrlRoom(false);
@@ -241,7 +356,8 @@ export function menuConfirm(
     setUrlRoom(false);
     send({
       t: "setup", mode: "auto",
-      provider: PROVIDER_ORDER[menu.provider],
+      provider: c0.provider,
+      model: c0.model,
       temperament: TEMPERAMENTS[menu.temp],
       speech: SPEECH_PROFILES[menu.speech],
       ...base, travelMode: "linked",
@@ -253,7 +369,8 @@ export function menuConfirm(
     setUrlRoom(false);
     send({
       t: "setup", mode: "llm",
-      provider: PROVIDER_ORDER[menu.provider],
+      provider: c0.provider,
+      model: c0.model,
       temperament: TEMPERAMENTS[menu.temp],
       speech: SPEECH_PROFILES[menu.speech],
       hostName: host,
@@ -263,8 +380,10 @@ export function menuConfirm(
     setUrlRoom(false);
     send({
       t: "setup", mode: "duo",
-      provider: PROVIDER_ORDER[menu.provider],
-      provider2: PROVIDER_ORDER[menu.provider2],
+      provider: c0.provider,
+      model: c0.model,
+      provider2: c1.provider,
+      model2: c1.model,
       temperament: TEMPERAMENTS[menu.temp],
       temperament2: TEMPERAMENTS[menu.temp2],
       speech: SPEECH_PROFILES[menu.speech],
@@ -274,25 +393,64 @@ export function menuConfirm(
   }
 }
 
-export function menuBack(menu: MenuState): void {
+export function menuBack(
+  menu: MenuState,
+  providers?: Record<string, ProviderInfo>,
+): void {
   if (menu.step === 0) return;
   if (menu.step === 8) {
     if (menu.path === "single-human" || menu.path === "multi-coop") menu.step = 1;
     else if (menu.path === "single-auto" || menu.path === "multi-ai") menu.step = 4;
     else if (menu.path === "multi-duo") menu.step = 7;
     menu.idx = 0;
+    menu.pickModel = false;
     return;
   }
   if (menu.step === 7) { menu.step = 6; menu.idx = 1; return; }
-  if (menu.step === 6) { menu.step = 5; menu.idx = 0; return; }
-  if (menu.step === 5) { menu.step = 4; menu.idx = 0; return; }
+  if (menu.step === 6) {
+    menu.step = 5;
+    if (providerHasModelMenu(providers, menu.provider2)) {
+      menu.pickModel = true;
+      menu.idx = menu.model2;
+    } else {
+      menu.pickModel = false;
+      menu.idx = menu.provider2;
+    }
+    return;
+  }
+  if (menu.step === 5) {
+    if (menu.pickModel) {
+      menu.pickModel = false;
+      menu.idx = menu.provider2;
+      return;
+    }
+    menu.step = 4; menu.idx = 0; return;
+  }
   if (menu.step === 4) { menu.step = 3; menu.idx = 1; return; }
-  if (menu.step === 3) { menu.step = 2; menu.idx = 0; return; }
-  if (menu.step === 2) { menu.step = 1; menu.idx = 0; return; }
+  if (menu.step === 3) {
+    menu.step = 2;
+    if (providerHasModelMenu(providers, menu.provider)) {
+      menu.pickModel = true;
+      menu.idx = menu.model;
+    } else {
+      menu.pickModel = false;
+      menu.idx = menu.provider;
+    }
+    return;
+  }
+  if (menu.step === 2) {
+    if (menu.pickModel) {
+      menu.pickModel = false;
+      menu.idx = menu.provider;
+      return;
+    }
+    menu.step = 1; menu.idx = 0; return;
+  }
   if (menu.step === 1) {
     menu.step = 0;
     menu.path = "";
     menu.idx = 0;
+    menu.pickModel = false;
   }
 }
 
