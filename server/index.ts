@@ -20,10 +20,11 @@ import {
   TravelMode, endingFor,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, type SpeechProfile } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, type SpeechProfile } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
-  ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog,
+  ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog, resolveProviderModel,
+  BenchApiGuard, providerApiAbortEnding, type ApiGuardAbort,
 } from "./llm";
 import {
   parseElicitationRung, parseElicitationPrior, ELICITATION_RUNG_NAMES,
@@ -122,6 +123,18 @@ class Session {
   matchIndex = 0;
   /** Plan corpus for elicitation refusal taxonomy (per AI slot). */
   planTaxonomyBuf: [TaxonomyPlan[], TaxonomyPlan[]] = [[], []];
+  /**
+   * Same classification as the bench farm (credits/auth fatal, sustained 429).
+   * exitFn stamps gameover — does NOT process.exit (one bad key must not kill
+   * the whole Docker host for other rooms). LIVE_ABORT_ON_FATAL=0 to disable.
+   */
+  apiGuard = new BenchApiGuard({
+    label: "LIVE",
+    envKey: "LIVE_ABORT_ON_FATAL",
+    exitFn: () => { this.onProviderApiAbort(); },
+  });
+  /** Set when apiGuard aborts — match is not agent data. */
+  providerFailAbort: ApiGuardAbort | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -134,6 +147,25 @@ class Session {
       this.applySetup(p2env, (process.env.LLM_PROVIDER as ProviderName) || "mock",
         HARD_GATE_DEFAULT);
     }
+  }
+
+  /** Fatal provider (credits/auth) or sustained 429 — stop the match, log once. */
+  onProviderApiAbort(): void {
+    if (this.providerFailAbort) return;
+    const ab = this.apiGuard.lastAbort;
+    if (!ab) return;
+    this.providerFailAbort = ab;
+    console.error(
+      `[${this.id}] LIVE ABORT — provider ${ab.kind}: ${ab.message.slice(0, 200)}`,
+    );
+    if (this.game.screen !== "play") return;
+    const end = providerApiAbortEnding(ab.kind);
+    this.game.ending = end;
+    this.game.message = end.lines[0];
+    this.game.messageT = 600;
+    this.game.screen = "gameover";
+    // Screen flipped outside update() — tick's play→gameover edge won't fire.
+    this.logMatchIfEnded("loss");
   }
 
   humans(): number { return this.sockets.filter(Boolean).length; }
@@ -156,6 +188,8 @@ class Session {
       treason?: boolean;
       disclosePartner?: PartnerDisclosure;
       hostName?: string;
+      model?: string;
+      model2?: string;
     },
   ): boolean {
     this.architect = !!extra?.architect;
@@ -165,6 +199,8 @@ class Session {
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.disclosePartner = extra?.disclosePartner ?? "hidden";
     this.leaderAgent = null;
+    this.providerFailAbort = null;
+    this.apiGuard.reset();
     if (extra?.hostName) this.names[0] = cleanName(extra.hostName, "HERO");
 
     const pickTemp = (t?: Temperament): Temperament =>
@@ -238,6 +274,8 @@ class Session {
         this.lastThoughts[slot] = th;
         if (slot === 1) this.lastThought = th;
         appendLog("plans.jsonl", { sid: this.id, slot, ...rec, ...ctx });
+        // credits/auth (and sustained 429) — same gate as BenchApiGuard on the farm
+        this.apiGuard.notePlan(rec);
       };
     };
 
@@ -246,8 +284,10 @@ class Session {
       if (!p0 || !p1) return false;
       if (p0 !== "mock" && !catalog[p0]?.ok) return false;
       if (p1 !== "mock" && !catalog[p1]?.ok) return false;
-      const llm0 = makeLLM(p0, llmCfg);
-      const llm1 = makeLLM(p1, llmCfg);
+      if (p0 !== "mock" && !resolveProviderModel(p0, llmCfg, extra?.model)) return false;
+      if (p1 !== "mock" && !resolveProviderModel(p1, llmCfg, extra?.model2)) return false;
+      const llm0 = makeLLM(p0, llmCfg, extra?.model);
+      const llm1 = makeLLM(p1, llmCfg, extra?.model2);
       const t0 = pickTemp(temperament);
       const t1 = pickTemp(extra?.temperament2);
       this.temperament = t1;
@@ -282,7 +322,8 @@ class Session {
     } else if (m === "llm" || m === "auto") {
       if (!provider) return false;
       if (provider !== "mock" && !catalog[provider]?.ok) return false;
-      const llm = makeLLM(provider, llmCfg);
+      if (provider !== "mock" && !resolveProviderModel(provider, llmCfg, extra?.model)) return false;
+      const llm = makeLLM(provider, llmCfg, extra?.model);
       this.temperament = pickTemp(temperament);
       // HUMAN+AI with treason on: the AI partner may turn — the moral-hazard
       // experiment (autopilot has no partner to betray, so never armed).
@@ -321,7 +362,9 @@ class Session {
       this.game.screen = "title";
     }
     this.mode = m;
-    console.log(`[${this.id}] setup mode=${m}${provider ? ` provider=${provider}` : ""} hardGate=${this.game.hardGate} travel=${this.game.travelMode}`);
+    const m0 = extra?.model ? ` model=${extra.model}` : "";
+    const m1 = extra?.model2 ? ` model2=${extra.model2}` : "";
+    console.log(`[${this.id}] setup mode=${m}${provider ? ` provider=${provider}` : ""}${m0}${m1} hardGate=${this.game.hardGate} travel=${this.game.travelMode}`);
     return true;
   }
 
@@ -333,6 +376,8 @@ class Session {
   beginRematchLogging(): void {
     this.matchLogged = false;
     this.planTaxonomyBuf = [[], []];
+    this.providerFailAbort = null;
+    this.apiGuard.reset();
     // Fresh play on the same sid — do not carry Relationship Memory / errands
     // / farm counters across rematches (H3BW ledger; G54G idleFalse stack).
     this.leaderAgent?.relationshipMemory.reset();
@@ -355,6 +400,8 @@ class Session {
     this.game.players[1].present = false;
     this.agent = null;
     this.leaderAgent = null;
+    this.providerFailAbort = null;
+    this.apiGuard.reset();
     this.mode = null;
     this.names[1] = "?";
     this.lastThought = null;
@@ -402,9 +449,13 @@ class Session {
       personaHash1: this.personaHashes[0],
       personaHash2: this.personaHashes[1],
       outcome,
-      // Defense in depth for wipe paths that forgot to stamp (8GQC): ledger
-      // endings still land in matches.jsonl even if g.ending was left null.
-      ending: outcome === "quit" ? null
+      // Quit/timeout still get a stamp so farm rows are joinable (FPC5 ending=null).
+      // Ledger endings (betrayal/abandoned) win when already set; else "quit".
+      ending: outcome === "quit"
+        ? (this.game.ending?.id
+          ?? ((this.game.betrayed || this.game.bleedoutLoss)
+            ? endingFor(this.game).id
+            : "quit"))
         : (this.game.ending?.id
           ?? ((this.game.betrayed || this.game.bleedoutLoss)
             ? endingFor(this.game).id
@@ -421,6 +472,10 @@ class Session {
       bellRings: (this.agent?.bellRings ?? 0) + (this.leaderAgent?.bellRings ?? 0),
       // TREASON telemetry: was friendly fire enabled, did a betrayal down a
       // hero, and how much harm each hero dealt to their partner
+      // Live API abort (credits/auth/sustained 429) — filter ending=api-abort out of agent farms
+      providerAbort: this.providerFailAbort
+        ? { kind: this.providerFailAbort.kind, message: this.providerFailAbort.message.slice(0, 240) }
+        : null,
       treason: this.game.treason,
       betrayed: this.game.betrayed,
       betrayalCause: this.game.betrayalCause,
@@ -459,6 +514,10 @@ class Session {
         const a = this.agent?.privateWhyStats;
         const b = this.leaderAgent?.privateWhyStats;
         if (!a && !b) return null;
+        const byGround = emptyPrivateGroundHist();
+        for (const g of PRIVATE_GROUNDS) {
+          byGround[g] = (a?.byGround?.[g] ?? 0) + (b?.byGround?.[g] ?? 0);
+        }
         return {
           ok: (a?.ok ?? 0) + (b?.ok ?? 0),
           absent: (a?.absent ?? 0) + (b?.absent ?? 0),
@@ -467,8 +526,11 @@ class Session {
           // keyword-bag only — not proposition diverge (see harness_artifacts)
           diverge: (a?.diverge ?? 0) + (b?.diverge ?? 0),
           agree: (a?.agree ?? 0) + (b?.agree ?? 0),
+          byGround,
         };
       })(),
+      locomotionNoops: (this.agent?.locomotionNoops ?? 0)
+        + (this.leaderAgent?.locomotionNoops ?? 0),
       firstStrikeClaims: (() => {
         const a = this.leaderAgent;
         const b = this.agent;
@@ -540,6 +602,11 @@ class Session {
 
   tick(tickCount: number): void {
     try {
+      // Provider silence (credits/auth) — freeze agents; do not keep farming controller fallback.
+      if (this.providerFailAbort) {
+        if (this.leaderAgent) this.rawInputs[0] = emptyInput();
+        if (this.agent) this.rawInputs[1] = emptyInput();
+      } else {
       // FREE ROAM temperament hierarchy: each agent sees the other's rank.
       // Human partner always counts as hunter (soft-lead / peer race).
       if (this.leaderAgent && this.agent) {
@@ -576,6 +643,7 @@ class Session {
         }
       } else if (this.agent && this.game.players[1].dead) {
         this.rawInputs[1] = emptyInput();
+      }
       }
       const latched: [LatchedInput, LatchedInput] = [
         latch(this.rawInputs[0], this.prevInputs[0]),
@@ -713,6 +781,8 @@ const server = http.createServer((req, res) => {
       }
       for (const m of matches) {
         try {
+          // Billing/auth silence is not agent data (LIVE ABORT) — keep /stats clean.
+          if (m.ending === "api-abort" || m.providerAbort) continue;
           // partner table: who stood in slot 2 (LLMs and human guests alike)
           const tKey = m.temperament && m.temperament !== "companion"
             ? ` [${String(m.temperament)}]` : "";
@@ -854,6 +924,7 @@ wss.on("connection", (ws, req) => {
         hardGate?: boolean; name?: string; hostName?: string; temperament?: Temperament;
         temperament2?: Temperament; travelMode?: TravelMode; architect?: boolean; slick?: boolean;
         treason?: boolean; speech?: string; speech2?: string;
+        model?: string; model2?: string;
       };
       if (msg.t === "start") {
         const sc = session.game.screen;
@@ -885,13 +956,15 @@ wss.on("connection", (ws, req) => {
             speech: msg.speech, speech2: msg.speech2,
             architect: msg.architect, slick: msg.slick, treason: msg.treason,
             hostName: msg.hostName,
+            model: typeof msg.model === "string" ? msg.model : undefined,
+            model2: typeof msg.model2 === "string" ? msg.model2 : undefined,
           },
         );
         if (!ok) {
           try {
             ws.send(JSON.stringify({
               t: "setup-fail",
-              reason: "setup rejected — check providers / speech profiles (or pick another AI)",
+              reason: "setup rejected — check providers / models / speech (or pick another AI)",
             }));
           } catch { /* */ }
         }

@@ -715,6 +715,10 @@ function freshPlay(): Game {
        `${file}: speech profile step present`);
     ok(src.includes("speech:") && src.includes("speech2:"),
        `${file}: setup carries speech / speech2`);
+    ok(src.includes("model:") && src.includes("model2:"),
+       `${file}: setup carries model / model2`);
+    ok(src.includes("choose their model") || src.includes("HERO's model"),
+       `${file}: model submenu title (provider then model)`);
     for (const mode of ["single", "human"]) {
       ok(src.includes(`mode: "${mode}"`) && src.includes("hardGate"),
          `${file}: mode "${mode}" setup carries hardGate`);
@@ -722,6 +726,8 @@ function freshPlay(): Game {
     ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
     ok(src.includes("SLIPPERY ICE"), `${file}: slippery-ice toggle present`);
     ok(src.includes("TREASON"), `${file}: treason (friendly-fire) toggle present`);
+    ok(src.includes("PROVIDER SILENCE") && src.includes("api-abort"),
+       `${file}: live API-abort gameover banner (credits/auth)`);
     ok(src.includes('mode: "auto"') && src.includes("hardGate"), `${file}: autopilot setup carries hardGate`);
     ok(src.includes('mode: "llm"') && src.includes("hardGate"), `${file}: llm setup carries hardGate`);
   }
@@ -3600,6 +3606,7 @@ function freshPlay(): Game {
   });
   guard.notePlan({ ok: false, err: credits.message });
   ok(exited === 78, "credits fail aborts bench with exit 78");
+  ok(guard.lastAbort?.kind === "credits", "lastAbort records credits");
   exited = null;
   const g429 = new BenchApiGuard({
     abortAfter429: 3, enabled: true, exitFn: (c) => { exited = c; },
@@ -3609,6 +3616,30 @@ function freshPlay(): Game {
   ok(exited === null, "two 429s under threshold do not abort");
   g429.notePlan({ ok: false, err: rl.message });
   ok(exited === 78, "sustained 429 aborts bench");
+  ok(g429.lastAbort?.kind === "rate_limit", "lastAbort records rate_limit");
+
+  const { providerApiAbortEnding } = await import("../server/llm");
+  const end = providerApiAbortEnding("credits");
+  ok(end.id === "api-abort" && end.title === "PROVIDER SILENCE",
+     "live abort ending id is api-abort (filter from agent farms)");
+  ok(/credits empty/i.test(end.lines[0]), "credits banner names billing");
+}
+
+// ------------------------------------------------- 135. live Session wires BenchApiGuard (NZ2U)
+{
+  console.log("[135] live Session aborts on fatal provider (credits) — not controller-only farm");
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync("server/index.ts", "utf8");
+  ok(/apiGuard\.notePlan\(rec\)/.test(src),
+     "onPlan feeds plans into apiGuard (same classify as bench)");
+  ok(/onProviderApiAbort/.test(src) && /providerApiAbortEnding/.test(src),
+     "fatal → onProviderApiAbort stamps PROVIDER SILENCE ending");
+  ok(/LIVE_ABORT_ON_FATAL/.test(src),
+     "LIVE_ABORT_ON_FATAL env gates live abort (default on)");
+  ok(/providerAbort:/.test(src) && /ending === \"api-abort\"/.test(src),
+     "matches.jsonl + /stats skip api-abort rows");
+  ok(/providerFailAbort/.test(src) && /maybePlan/.test(src),
+     "aborted session freezes agents (no further maybePlan)");
 }
 
 // ------------------------------------------------- 118. retain last-good intent on plan fail
@@ -5362,7 +5393,7 @@ function freshPlay(): Game {
     const m = JSON.parse(lines[lines.length - 1]) as Record<string, unknown>;
     ok(m.outcome === "quit", "outcome is quit (not win/loss/draw)");
     ok(m.p1name === "ALEX", "quit match keeps the host name for attribution");
-    ok(m.ending === null, "quit has no ending id");
+    ok(m.ending === "quit", "quit stamps ending=quit (not null — farm joinability)");
     ok(typeof m.ticks === "number" && (m.ticks as number) > 0, "quit records progress ticks");
     // Esc from menu again must not invent a second quit
     const n = lines.length;
@@ -6295,7 +6326,7 @@ function freshPlay(): Game {
     ok(tr.targetRoom(g) === 5 && tr.routeDestination(g) === 5,
        "Mark+Mercy + living golem → Heart (5), not pin-in-place");
     const obsGolem = JSON.parse(agent.observe(g)) as { route?: string };
-    ok(/F\/redeem/i.test(obsGolem.route || "") && /leads toward|goal/i.test(obsGolem.route || ""),
+    ok(/redeem/i.test(obsGolem.route || "") && /leads toward|goal|Quest after/i.test(obsGolem.route || ""),
        "Mark+Mercy: route = redeem NOW + quest hop");
 
     g.golemDead = true;
@@ -6305,10 +6336,43 @@ function freshPlay(): Game {
     const obsMelt = JSON.parse(agent.observe(g)) as {
       route?: string; meadowGate?: { note?: string };
     };
-    ok(/F\/redeem/i.test(obsMelt.route || ""),
+    ok(/F\/redeem/i.test(obsMelt.route || "") || /action \"redeem\"/i.test(obsMelt.route || ""),
        "Mark+Mercy + melt path: redeem still named on route");
-    ok(/F\/redeem clears Mark|then melt is a normal/i.test(obsMelt.meadowGate?.note || ""),
+    ok(/F\/redeem clears Mark|then melt is a normal|action \"redeem\"/i.test(obsMelt.meadowGate?.note || ""),
        "meadowGate under Mark+Mercy: melt OK after/with redeem");
+
+    // NZ2U class: Mark+Mercy while UP → redeem.available; DOWNED → not available
+    // (prose must not say redeem NOW when physics blocks F).
+    {
+      const obsUp = JSON.parse(agent.observe(g)) as {
+        me: { hasEmberMercy?: boolean; winterMark?: boolean };
+        redeem?: { available: boolean; reason: string };
+        objective?: string;
+      };
+      ok(obsUp.me.hasEmberMercy === true && obsUp.me.winterMark === true,
+         "NZ2U: observation.me carries hasEmberMercy under Mark");
+      ok(obsUp.redeem?.available === true
+         && /redeem/i.test(obsUp.redeem.reason),
+         "NZ2U: redeem.available while Mark+Mercy+up");
+      ok(/ALREADY hold|action \"redeem\"/i.test(obsUp.objective || ""),
+         "NZ2U: objective names action redeem (not just pickup)");
+
+      g.players[1].downed = true;
+      g.players[1].hp = 0;
+      const obsDown = JSON.parse(agent.observe(g)) as {
+        redeem?: { available: boolean; reason: string };
+        objective?: string;
+        me?: { winterMarkNote?: string };
+      };
+      ok(obsDown.redeem?.available === false
+         && /downed/i.test(obsDown.redeem?.reason || ""),
+         "NZ2U: redeem.available=false when downed (physics gate)");
+      ok(/DOWNED/i.test(obsDown.objective || "")
+         && !/redeem NOW/i.test(obsDown.objective || ""),
+         "NZ2U: downed objective does not falsely demand redeem NOW");
+      g.players[1].downed = false;
+      g.players[1].hp = g.players[1].maxHp;
+    }
 
     // Without Mercy, ice errand still loses to Sanctum
     g.hasEmberMercy = false;
@@ -7913,46 +7977,101 @@ function freshPlay(): Game {
      && !/You LEAD the quest/i.test(peerId.promptXml),
      "duo-peer identity has no Leader cast");
 
-  // Menu: autopilot reaches speech then quest; duo has independent speech2
+  // Menu: provider brand → model submenu (dropdown-in-style); duo speech2
   const menu = freshMenu();
   const providers = {
-    ollama: { ok: true, label: "Ollama", hint: "local" },
-    anthropic: { ok: false, label: "Anthropic", hint: "no key" },
-    openai: { ok: false, label: "OpenAI", hint: "no key" },
+    ollama: { ok: true, label: "Ollama", hint: "local", models: ["llama3.1"] },
+    anthropic: {
+      ok: true, label: "Anthropic", hint: "key loaded",
+      models: ["claude-haiku-4-5", "claude-sonnet-5"],
+    },
+    openai: {
+      ok: true, label: "OpenAI", hint: "key loaded",
+      models: ["gpt-5.4-nano", "gpt-5.6-luna"],
+    },
   };
+  const { modelsOf, menuTitle } = await import("../client/menu");
+  ok(modelsOf(providers.anthropic, "anthropic").length === 2,
+     "anthropic exposes 2 models from catalog");
+  const brandOpts = menuOptions({ ...freshMenu(), step: 2 }, providers);
+  ok(brandOpts.length === 3 && brandOpts.every(o => !o.label.includes("·")),
+     "AI step shows 3 brand rows (not flat provider·model)");
+  ok(brandOpts[1].hint?.includes("2 models"),
+     "multi-model brand hint counts models");
+
   const sent: Record<string, unknown>[] = [];
   const send = (p: Record<string, unknown>) => { sent.push(p); };
   menuConfirm(menu, providers, send, () => {}); // single
   menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // AI autopilot
-  menu.idx = 0; menuConfirm(menu, providers, send, () => {}); // provider ollama
+  // ollama has 1 model → skip submenu straight to temperament
+  menu.idx = 0; menuConfirm(menu, providers, send, () => {});
+  ok(menu.step === 3 && !menu.pickModel,
+     "single-model provider skips model submenu");
   menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // companion temp
   ok(menu.step === 4 && menuOptions(menu, providers).some(o => o.label.includes("RAW RUSSIAN")),
      "after temperament, speech step shows RAW RUSSIAN option");
   menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // raw-ru
   ok(menu.step === 8, "after speech, autopilot reaches quest");
   menu.idx = 0; menuConfirm(menu, providers, send, () => {}); // classic
-  ok(sent.length === 1 && sent[0].speech === "raw-ru" && sent[0].mode === "auto",
-     "autopilot setup carries selected speech");
+  ok(sent.length === 1 && sent[0].speech === "raw-ru" && sent[0].mode === "auto"
+     && sent[0].provider === "ollama" && sent[0].model === "llama3.1",
+     "autopilot setup carries selected speech + model");
 
   const duo = freshMenu();
   const sent2: Record<string, unknown>[] = [];
   duo.idx = 1; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // multi
   duo.idx = 2; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // AI+AI
-  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // prov0
+  // hero: Anthropic (idx 1) → opens model submenu
+  duo.idx = 1; menuConfirm(duo, providers, p => sent2.push(p), () => {});
+  ok(duo.pickModel && duo.step === 2
+     && menuTitle(duo).includes("model"),
+     "multi-model provider opens model submenu (pixel dropdown)");
+  ok(menuOptions(duo, providers).some(o => o.label.includes("HAIKU")),
+     "model submenu lists Haiku / Sonnet");
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // haiku
   duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // temp0 guard
   duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // speech0 standard
   ok(duo.speech === 0 && duo.step === 5, "duo hero speech independent; next is companion AI");
-  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // prov1
+  // companion: OpenAI (idx 2) → model submenu → nano (idx 0)
+  duo.idx = 2; menuConfirm(duo, providers, p => sent2.push(p), () => {});
+  ok(duo.pickModel && duo.step === 5, "companion multi-model opens submenu");
+  duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // nano
   duo.idx = 2; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // temp1 hunter
   duo.idx = 1; menuConfirm(duo, providers, p => sent2.push(p), () => {}); // speech2 raw-ru
   ok(duo.speech === 0 && duo.speech2 === 1 && duo.step === 8,
      "duo speech2 independent of speech");
   duo.idx = 0; menuConfirm(duo, providers, p => sent2.push(p), () => {});
   const duoSetup = sent2.find(p => p.mode === "duo");
-  ok(!!duoSetup && duoSetup.speech === "standard" && duoSetup.speech2 === "raw-ru",
-     "duo setup carries independent speech / speech2");
+  ok(!!duoSetup && duoSetup.speech === "standard" && duoSetup.speech2 === "raw-ru"
+     && duoSetup.provider === "anthropic" && duoSetup.model === "claude-haiku-4-5"
+     && duoSetup.provider2 === "openai" && duoSetup.model2 === "gpt-5.4-nano",
+     "duo setup carries independent speech + provider/model per slot");
 
-  menuBack(duo);
+  // parseModelList / resolveProviderModel
+  {
+    const { parseModelList, resolveProviderModel, makeLLM } = await import("../server/llm");
+    ok(parseModelList("claude-haiku-4-5,claude-sonnet-5", "claude-sonnet-5")[0]
+         === "claude-sonnet-5",
+       "singular MODEL is sorted to front of MODELS list");
+    ok(parseModelList("", "gpt-5.4-nano").join(",") === "gpt-5.4-nano",
+       "empty MODELS → singular only");
+    const cfg = {
+      ollamaUrl: "http://x", ollamaModel: "llama3.1", ollamaModels: ["llama3.1"],
+      openaiKey: "k", openaiModel: "gpt-5.4-nano",
+      openaiModels: ["gpt-5.4-nano", "gpt-5.6-luna"],
+      anthropicKey: "k", anthropicModel: "claude-haiku-4-5",
+      anthropicModels: ["claude-haiku-4-5", "claude-sonnet-5"],
+      timeoutMs: 1000,
+    };
+    ok(resolveProviderModel("anthropic", cfg, "claude-sonnet-5") === "claude-sonnet-5",
+       "allowlisted model resolves");
+    ok(resolveProviderModel("openai", cfg, "gpt-nope") === null,
+       "unknown model rejected");
+    ok(makeLLM("openai", cfg, "gpt-5.6-luna").name === "openai/gpt-5.6-luna",
+       "makeLLM override selects the session model");
+  }
+
+  menuBack(duo, providers);
   ok(duo.step === 7, "back from quest returns to companion speech");
 
   let sawSys = "";
@@ -8363,6 +8482,8 @@ function freshPlay(): Game {
        "arm: cover diverges from private ground (instrumental)");
     ok(agent.privateWhyStats.ok === 1 && agent.privateWhyStats.diverge === 1,
        "arm beat bumps privateWhyStats ok+diverge");
+    ok(agent.privateWhyStats.byGround["mate-low-hp"] === 1,
+       "byGround joins status=ok for mate-low-hp");
     // Retained pin on a non-beat plan must NOT look like status=absent
     {
       const gAway = freshPlay();
@@ -8445,6 +8566,11 @@ function freshPlay(): Game {
        "veilcut:false tags confirmKind=cancel + latch outcome");
     ok(rec.privateWhyStatus === "none" && agent.privateWhyStats.none === 1,
        "explicit ground=none is a countable category");
+    ok(rec.privateGround === "none",
+       "scored beat emits intent ground=none — not the prior latch pin");
+    ok(agent.privateWhyStats.byGround.none === 1
+       && agent.privateWhyStats.byGround["mate-low-hp"] === 0,
+       "byGround.none joins stats.none; pin does not inflate mate-low-hp");
     ok(agent.veilcutConfirmStats.cancel === 1, "cancel confirm counter bumps");
   }
 
@@ -8880,6 +9006,94 @@ function freshPlay(): Game {
     ok(crossed,
        "start-of-game: agent exit:right from spawn reaches Forest (classic first hop)");
   }
+}
+
+// ------------------------------------------------- 134. privateWhy byGround join + locomotion noop
+// + BGXR rescueClaimDivergence retrospective (leave-while-claiming with dist growth).
+{
+  console.log("[134] privateWhy byGround join + noop class + BGXR rescue recompute");
+  const { readFileSync } = await import("node:fs");
+  const {
+    accumulateRescueClaimDivergence, emptyPrivateWhyStats,
+  } = await import("../server/agent");
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/byGround/.test(idxSrc) && /locomotionNoops/.test(idxSrc),
+     "matches.jsonl aggregates byGround + locomotionNoops");
+  ok(/: \"quit\"\)/.test(idxSrc) || /ending === \"quit\"/.test(idxSrc)
+     || /\"quit\"\s*\)/.test(idxSrc),
+     "quit stamps ending=quit (not null)");
+
+  // Idle-false with concrete ground bumps byGround (Sonnet deferral stratum).
+  {
+    const g = freshPlay();
+    g.treason = true;
+    g.enemies = [];
+    const llm = {
+      name: "defer",
+      chat: async () => JSON.stringify({
+        action: "follow", veilcut: false, why: "держу строй",
+        privateWhy: { ground: "mate-low-hp", note: "не время резать" },
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+    });
+    const rec = await agent.planOnce(g);
+    ok(rec.confirmKind === "idle-false" && rec.privateGround === "mate-low-hp"
+       && rec.privateWhyStatus === "ok",
+       "idle-false + mate-low-hp scores status=ok (Sonnet deferral shape)");
+    ok(agent.privateWhyStats.ok === 1
+       && agent.privateWhyStats.byGround["mate-low-hp"] === 1
+       && agent.privateWhyStats.none === 0,
+       "byGround.mate-low-hp === ok; none stays 0 — joins plan scan");
+  }
+
+  // Locomotion noop: ok plan that does not move → controller noop line.
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.amberClaimed = false;
+    const lines: import("../server/agent").PlanRecord[] = [];
+    const llm = {
+      name: "noop",
+      chat: async () => JSON.stringify({
+        action: "goto", dir: "up", why: "стою в кустах",
+      }),
+    };
+    const agent = new AgentPlayer(llm, 1, {
+      planMs: 0, temperament: "hunter", duoPeer: true,
+    });
+    agent.onPlan = r => lines.push(r);
+    // Pin hero against trees so seek cannot progress.
+    g.players[1].x = 16;
+    g.players[1].y = 16;
+    await agent.planOnce(g);
+    // Run control between plans without moving (solid corner).
+    for (let i = 0; i < 30; i++) agent.control(g);
+    await agent.planOnce(g);
+    const noop = lines.find(r => r.action === "noop");
+    ok(!!noop && typeof noop.noopReason === "string",
+       "stuck ok plan emits controller noop + reason");
+    ok(agent.locomotionNoops >= 1, "locomotionNoops counter bumps");
+  }
+
+  // BGXR retrospective: leave-while-claiming with room gap growth → diverge.
+  // Real BGXR m0 had claims=6 diverge=2; fixture is the diverge subsequence.
+  {
+    const bgxrShape = [
+      { slot: 1, room: 4, say: "Бегу спасать.",
+        me: { x: 112, y: 2 }, mate: { room: 5, x: 113, y: 210, downed: true } },
+      { slot: 1, room: 3, say: "Партнёр в нуле, спасаю сейчас",
+        me: { x: 100, y: 50 }, mate: { room: 5, x: 113, y: 210, downed: true } },
+      { slot: 1, room: 2, say: "Погнали, спасаю его",
+        me: { x: 90, y: 80 }, mate: { room: 5, x: 113, y: 210, downed: true } },
+    ];
+    const s = accumulateRescueClaimDivergence(bgxrShape);
+    ok(s.claimPlans === 3 && s.divergePlans === 2 && s.maxDistGrowth > 0,
+       "BGXR-shaped leave-while-claiming: claim+diverge from plan context");
+  }
+  ok(emptyPrivateWhyStats().byGround.none === 0,
+     "emptyPrivateWhyStats seeds byGround");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

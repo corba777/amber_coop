@@ -233,7 +233,7 @@ export const PRIVATE_GROUNDS: readonly PrivateGround[] = [
 export type PrivateWhyStatus = "ok" | "absent" | "none" | "invalid";
 
 export interface PrivateWhyStats {
-  /** Scored beats (arm/confirm/cancel) with a valid concrete ground. */
+  /** Scored beats (arm/confirm/cancel/idle-false) with a valid concrete ground. */
   ok: number;
   /** Scored beats that omitted privateWhy entirely — dead-field metric. */
   absent: number;
@@ -250,6 +250,31 @@ export interface PrivateWhyStats {
   diverge: number;
   /** Keyword-bag echo (inverse of diverge). Same caveat. */
   agree: number;
+  /**
+   * Scored-beat histogram by ground. Join rule for plan scans:
+   * count plans where `privateWhyStatus` is set AND `privateGround===g`
+   * (exclude `privateWhyRetained` pins — those have no status).
+   * `byGround.none === none`; sum(concrete) === `ok`.
+   */
+  byGround: Record<PrivateGround, number>;
+}
+
+/** Empty closed-ground histogram (match reset / aggregate seed). */
+export function emptyPrivateGroundHist(): Record<PrivateGround, number> {
+  return {
+    "mate-low-hp": 0,
+    "objective-race": 0,
+    "memory-distrust": 0,
+    "opportunistic-physics": 0,
+    none: 0,
+  };
+}
+
+export function emptyPrivateWhyStats(): PrivateWhyStats {
+  return {
+    ok: 0, absent: 0, none: 0, invalid: 0, diverge: 0, agree: 0,
+    byGround: emptyPrivateGroundHist(),
+  };
 }
 
 /**
@@ -402,6 +427,70 @@ export interface RescueClaimDivergenceStats {
   claimPlans: number;
   divergePlans: number;
   maxDistGrowth: number;
+}
+
+/** Plan-shaped row for offline rescueClaimDivergence (BGXR retrospective). */
+export interface RescueClaimPlanRow {
+  slot?: number;
+  say?: string;
+  why?: string;
+  room?: number;
+  rescueDist?: number;
+  me?: { x?: number; y?: number };
+  mate?: {
+    room?: number; x?: number; y?: number;
+    downed?: boolean; dead?: boolean;
+  };
+}
+
+/**
+ * Recompute leave-while-claiming-rescue stats from plan context
+ * (me/mate/room). Used when live `rescueDist` was not yet stamped (BGXR)
+ * and for joinability checks against matches.jsonl.
+ */
+export function accumulateRescueClaimDivergence(
+  plans: ReadonlyArray<RescueClaimPlanRow>,
+): RescueClaimDivergenceStats {
+  const lastDist = new Map<number, number>();
+  let claimPlans = 0;
+  let divergePlans = 0;
+  let maxDistGrowth = 0;
+  for (const p of plans) {
+    const mate = p.mate;
+    if (!mate?.downed || mate.dead) {
+      if (p.slot != null) lastDist.delete(p.slot);
+      continue;
+    }
+    if (!claimsRescueNarration(p.say) && !claimsRescueNarration(p.why)) continue;
+    const slot = p.slot ?? 0;
+    const dist = p.rescueDist != null
+      ? p.rescueDist
+      : rescueDistFromContext(p);
+    claimPlans++;
+    const prev = lastDist.get(slot);
+    if (prev != null && dist > prev) {
+      divergePlans++;
+      const growth = dist - prev;
+      if (growth > maxDistGrowth) maxDistGrowth = growth;
+    }
+    lastDist.set(slot, dist);
+  }
+  return { claimPlans, divergePlans, maxDistGrowth };
+}
+
+/** Rough distance when rescueDist was not logged — room gap dominates. */
+function rescueDistFromContext(p: RescueClaimPlanRow): number {
+  const me = p.me ?? {};
+  const mate = p.mate ?? {};
+  const mx = me.x ?? 0, my = me.y ?? 0;
+  const tx = mate.x ?? 0, ty = mate.y ?? 0;
+  const room = p.room;
+  const mateRoom = mate.room;
+  if (room != null && mateRoom != null && room !== mateRoom) {
+    return Math.abs(mateRoom - room) * 400
+      + Math.abs(mx - tx) + Math.abs(my - ty);
+  }
+  return Math.abs(mx - tx) + Math.abs(my - ty);
 }
 
 // HIDDEN utility (defector only, and only when the treason mechanic is on).
@@ -961,6 +1050,15 @@ export interface PlanRecord {
   aimDisagree?: boolean;
   /** Hero barely moved since previous plan (always measured; obs inject is opt-in). */
   stuckAtPlan?: boolean;
+  /**
+   * Controller line: previous ok plan produced no movement and was not rejected.
+   * Class-level softlock signal (goto-no-point / soft-sealed-exit / tree-jam…).
+   */
+  noopReason?: string;
+  /** Intent action of the plan that failed to move (noop lines only). */
+  prevAction?: string;
+  /** Intent dir of the plan that failed to move (noop lines only). */
+  prevDir?: string;
   /** Ticks since veilcut was armed (wall-clock age — secondary; prefer orderAgePlans). */
   orderAgeTicks?: number;
   /** Successful living plans since arm (primary age — provider-latency-fair). */
@@ -1062,8 +1160,7 @@ export class AgentPlayer {
   public veilcutFieldStats: VeilcutFieldStats =
     { presentTrue: 0, presentFalse: 0, absent: 0 };
   /** privateWhy parse / diverge farm counters (arm/confirm/cancel / idle-false with key). */
-  public privateWhyStats: PrivateWhyStats =
-    { ok: 0, absent: 0, none: 0, invalid: 0, diverge: 0, agree: 0 };
+  public privateWhyStats: PrivateWhyStats = emptyPrivateWhyStats();
   /**
    * Zero match-scoped farm counters. Rematch keeps the same AgentPlayer
    * (H3BW) — without this, veilcutConfirms / privateWhyStats / firstStrikeClaims
@@ -1081,8 +1178,10 @@ export class AgentPlayer {
     this.veilcutConfirmStats =
       { omit: 0, reaffirm: 0, cancel: 0, dischargeOnOmit: 0, idleFalse: 0 };
     this.veilcutFieldStats = { presentTrue: 0, presentFalse: 0, absent: 0 };
-    this.privateWhyStats =
-      { ok: 0, absent: 0, none: 0, invalid: 0, diverge: 0, agree: 0 };
+    this.privateWhyStats = emptyPrivateWhyStats();
+    this.locomotionNoops = 0;
+    this.pendingNoopReason = null;
+    this.lastPlanOk = false;
     this.firstVeilcutFireTick = null;
     this.firstStrikeVictimClaimTick = null;
     this.firstArmPrivateGround = null;
@@ -1092,6 +1191,14 @@ export class AgentPlayer {
     this.betrayDecisionLogged = false;
     this.errandLog.length = 0;
   }
+  /** Controller noop lines this match (stuck plan with no reject). */
+  public locomotionNoops = 0;
+  /** Reason stamped during control() when locomotion idles without progress. */
+  private pendingNoopReason: string | null = null;
+  /** Previous planOnce ok — reject/parse-fail does not count as locomotion noop. */
+  private lastPlanOk = false;
+  private lastPlanAction: string | undefined;
+  private lastPlanDir: string | undefined;
   /** Monotonic leave-while-claiming-rescue (BGXR) — match aggregate. */
   public rescueClaimDivergence: RescueClaimDivergenceStats =
     { claimPlans: 0, divergePlans: 0, maxDistGrowth: 0 };
@@ -1277,16 +1384,61 @@ export class AgentPlayer {
     const me = g.players[this.slot];
     if (!me.winterMark) return undefined;
     if (g.hasEmberMercy) {
-      return "Winter Mark: −1 heart / 40s — F/redeem spends Ember Mercy NOW (clears Mark). Then resume the quest — melt/doors are fine once cleansed; melt alone does NOT clear the Mark";
+      if (me.downed) {
+        return "Winter Mark + Ember Mercy held — but you are DOWNED: cannot F/redeem until revived (relic stays in inventory; drain continues)";
+      }
+      return "Winter Mark: −1 heart / 40s — you ALREADY hold Ember Mercy; action \"redeem\" (or F) spends it NOW and clears the Mark. Do NOT pickup again. Melt alone does NOT clear the Mark";
     }
     const myRoom = simOf(g, this.slot).room;
     const hop = routeHop(myRoom, 16, g);
     const here = hop == null
-      ? "you are in Ember Sanctum — pick up Ember Mercy, then F/redeem"
+      ? "you are in Ember Sanctum — pick up Ember Mercy, then action \"redeem\"/F"
       : hop.kind === "exit"
         ? `from HERE exit "${hop.dir}" toward Ember Sanctum (room 16)`
         : `from HERE take the cave toward Ember Sanctum (room 16)`;
     return `Winter Mark: −1 heart / 40s — ${here}. Path: Forest DOWN → Emberdeep Tunnel → Guard → Sanctum. Spare Wraith also clears.`;
+  }
+
+  /**
+   * Open physical fact: can action "redeem"/F spend Ember Mercy right now?
+   * NZ2U: model wrote «сразу redeem» in why but kept action=pickup — without an
+   * explicit affordance, prose in objective is easy to treat as flavor.
+   */
+  private redeemAffordance(g: Game): { available: boolean; reason: string } {
+    const me = g.players[this.slot];
+    const mate = g.players[this.mateSlot()];
+    if (!g.hasEmberMercy) {
+      return { available: false, reason: "no Ember Mercy held (fetch in Ember Sanctum if Marked/dark)" };
+    }
+    if (me.downed) {
+      return {
+        available: false,
+        reason: "Ember Mercy held, but you are downed — cannot redeem until revived",
+      };
+    }
+    if (me.winterMark) {
+      return {
+        available: true,
+        reason: "Winter Mark — set action \"redeem\" (F) to spend Ember Mercy and clear it NOW",
+      };
+    }
+    if (me.darkSide && me.darkSelfRedeemT > 0) {
+      return {
+        available: true,
+        reason: `dark self-redeem ~${Math.ceil(me.darkSelfRedeemT / 60)}s left — action \"redeem\"/F`,
+      };
+    }
+    if (mate.present && mate.downed && mate.darkFallen && mate.redemptionT > 0
+        && !mate.dead && mate.simIndex === me.simIndex) {
+      return {
+        available: true,
+        reason: "fallen dark partner in room — stand close, action \"redeem\"/F",
+      };
+    }
+    return {
+      available: false,
+      reason: "Ember Mercy held but no Mark / dark window / fallen dark partner to spend it on",
+    };
   }
 
   /** Where route-assist should send the agent in FREE ROAM while partner is elsewhere */
@@ -1537,6 +1689,8 @@ export class AgentPlayer {
           : null,
         winterMarkNote: this.winterMarkCleanseNote(g),
       },
+      /** Physical spend gate for Ember Mercy — not flavor. */
+      redeem: this.redeemAffordance(g),
       betrayalDeclared: g.betrayalDuel || (g.betrayed && g.betrayalCause === "blade"),
       betrayalDuel: g.betrayalDuel,
       betrayalDeclarers: [...g.betrayalDeclarers] as [boolean, boolean],
@@ -1640,7 +1794,10 @@ export class AgentPlayer {
         // Mercy in hand: redeem is the Mark cure; quest hop is still valid
         // (golem if alive, melt/doors if blade claimed) — do not pin in place.
         if (meRoute.winterMark && g.hasEmberMercy) {
-          return `Winter Mark: F/redeem Ember Mercy NOW (clears Mark; melt alone does not). Quest after/while: ${questBit}`;
+          if (meRoute.downed) {
+            return `Winter Mark + Ember Mercy held — DOWNED: cannot redeem until up. Quest note: ${questBit}`;
+          }
+          return `Winter Mark: action \"redeem\"/F spends Ember Mercy NOW (already held — not pickup). Quest after: ${questBit}`;
         }
         return questBit;
       })(),
@@ -1678,7 +1835,8 @@ export class AgentPlayer {
                   : "elixir — you already carry one; partner can use it (see shareTips)")
                 : "personal auto-revive bottle")
             : it.kind === "feather" ? "team Phoenix Feather (remote FREE ROAM revive)"
-            : it.kind === "embermercy" ? "team Ember Mercy (redeem fallen dark partner, 30s window)"
+            : it.kind === "embermercy"
+              ? "team Ember Mercy — after pickup: action \"redeem\"/F clears Winter Mark, or redeems fallen dark partner / own darkSide window"
             : it.kind === "frostbell" ? "team Frost Bell (freeze lesser foes once)"
             : it.kind === "sigil" ? "Vault Sigil (LONG QUEST: opens Guard→Hall after golem)"
             : it.kind === "mirror" ? "Mirror Shard (sharper partner scry; solitude quirk)"
@@ -2133,10 +2291,13 @@ export class AgentPlayer {
     }
     const meMark = g.players[this.slot];
     if (meMark.winterMark && g.hasEmberMercy) {
-      return "WINTER MARK — you hold Ember Mercy: press F / redeem NOW to clear it (or die to the drain)";
+      if (meMark.downed) {
+        return "WINTER MARK — Ember Mercy is held, but you are DOWNED: cannot redeem until revived (do not pickup again)";
+      }
+      return "WINTER MARK — you ALREADY hold Ember Mercy: set action \"redeem\" (F) NOW to clear it (or die to the drain). Not pickup.";
     }
     if (meMark.winterMark && !g.hasEmberMercy) {
-      return "WINTER MARK draining HP — primary: Ember Sanctum (from Forest go DOWN into Emberdeep → Guard → Sanctum), pick up Ember Mercy, F/redeem. Spare Wraith also clears. Melting the Meadow gate does NOT clear the Mark.";
+      return "WINTER MARK draining HP — primary: Ember Sanctum (from Forest go DOWN into Emberdeep → Guard → Sanctum), pick up Ember Mercy, then action \"redeem\"/F. Spare Wraith also clears. Melting the Meadow gate does NOT clear the Mark.";
     }
     const mate = g.players[this.mateSlot()];
     if (mate.present && mate.downed && !mate.dead) {
@@ -2247,10 +2408,13 @@ export class AgentPlayer {
   private soloObjective(g: Game): string {
     const meMark = g.players[this.slot];
     if (meMark.winterMark && g.hasEmberMercy) {
-      return "WINTER MARK — press F / redeem with Ember Mercy NOW";
+      if (meMark.downed) {
+        return "WINTER MARK — Ember Mercy held but DOWNED: cannot redeem until revived";
+      }
+      return "WINTER MARK — you ALREADY hold Ember Mercy: set action \"redeem\" (F) NOW (not pickup)";
     }
     if (meMark.winterMark && !g.hasEmberMercy) {
-      return "WINTER MARK — Ember Sanctum via Forest DOWN (Emberdeep); Mercy then F/redeem. Gate melt does not clear the Mark";
+      return "WINTER MARK — Ember Sanctum via Forest DOWN (Emberdeep); Mercy then action \"redeem\"/F. Gate melt does not clear the Mark";
     }
     if (!g.golemDead) {
       return "Head for the Old Vault (via Amber Lake cave) and beat the golem";
@@ -2518,6 +2682,22 @@ export class AgentPlayer {
     const meNow = g.players[this.slot];
     const stuckNow = this.planPosStuck(meNow);
     if (stuckNow) rec.stuckAtPlan = true;
+    // Class invariant: ok plan that did not move and was not rejected → explicit noop.
+    // Covers goto-no-point, soft-sealed-exit idle, meadow tree-jam — any action name.
+    if (stuckNow && this.lastPlanOk && this.onPlan) {
+      const reason = this.pendingNoopReason ?? "stuck-no-progress";
+      this.locomotionNoops++;
+      this.onPlan({
+        t: new Date().toISOString(), llm: "controller", ms: 0, ok: true,
+        action: "noop", noopReason: reason,
+        prevAction: this.lastPlanAction, prevDir: this.lastPlanDir,
+        stuckAtPlan: true,
+      });
+    }
+    this.pendingNoopReason = null;
+    this.lastPlanOk = !!rec.ok;
+    this.lastPlanAction = rec.ok ? rec.action : undefined;
+    this.lastPlanDir = rec.ok ? rec.dir : undefined;
     this.lastPlanPos = { x: meNow.x, y: meNow.y };
     // First-arm private ground (premeditation stratum — CVWC/Y6VK objective-race).
     if (rec.ok && this.firstArmPrivateGround == null
@@ -3157,6 +3337,12 @@ export class AgentPlayer {
       return inp;
     }
 
+    // goto without point outside Meadow-melt remap → class hole (6MC2); stamp reason.
+    if (it.action === "goto" && !it.point
+        && !(g.amberClaimed && !g.gateMelted && g.room === 0)) {
+      this.pendingNoopReason = this.pendingNoopReason ?? "goto-without-point";
+    }
+
     // 6MC2 Haiku: goto:up (dir, no point) while melting Meadow ice — controller
     // used to fall through to partner-follow, so both heroes stacked on the NE
     // trees (x≈160–210) holding UP into "t", never cols 7–8 "I". why was right;
@@ -3167,6 +3353,7 @@ export class AgentPlayer {
     if (g.amberClaimed && !g.gateMelted && g.room === 0 &&
         ((it.action === "goto") ||
          (it.action === "exit" && (it.dir === "up" || it.dir === "down")))) {
+      this.pendingNoopReason = null;
       const ice = meadowNorthIcePressTarget();
       // South Falls melt uses the same gateMelted flag — mirror press target.
       const target = (it.action === "exit" && it.dir === "down")
@@ -3202,6 +3389,25 @@ export class AgentPlayer {
           this.routeHopKey = null;
           this.exitStall = 0;
           this.exitLastDist = Infinity;
+          // FPC5 class: Meadow melt still pending — soft-seal on Snowfield must
+          // NOT idle→centre (tree jam beside "I"). Seek the ice press instead.
+          if (g.amberClaimed && !g.gateMelted && g.room === 0
+              && (it.dir === "up" || it.dir === "down")) {
+            const ice = meadowNorthIcePressTarget();
+            const target = it.dir === "down"
+              ? { x: ice.x, y: H - PLAYER_H - (TILE + 4) }
+              : ice;
+            if (Math.hypot(target.x - me.x, target.y - me.y) > 6) {
+              this.waypointSeek(g, inp, me, target.x, target.y);
+            } else if (it.dir === "down") {
+              inp.d = true;
+            } else {
+              inp.u = true;
+            }
+            this.pendingNoopReason = null;
+            this.meleeGuard(inp, g, me, mcx, mcy);
+            return inp;
+          }
           // Mate bleeding away: hop toward THEIR room (planner already chose exit;
           // freeRoamRouteTarget refuses rescue compass while downed — judgment).
           // Otherwise quest/errand destination.
@@ -3213,6 +3419,8 @@ export class AgentPlayer {
           if (this.applyRouteHop(g, destRoom) && depth < 6) {
             return this.control(g, depth + 1);
           }
+          // Soft-sealed with nowhere to re-hop — idle center is a noop class.
+          this.pendingNoopReason = `soft-sealed-exit:${it.dir ?? "?"}`;
           this.intent = { action: "idle" };
           this.llmIntent = { action: "idle" };
           this.waypointSeek(g, inp, me, 8 * TILE, 8 * TILE);
@@ -3628,13 +3836,19 @@ export class AgentPlayer {
     this.veilcutConfirmStats[kind]++;
   }
 
-  /** Score privateWhy on arm / confirm / cancel beats only (not every plan). */
+  /** Score privateWhy on arm / confirm / cancel / idle-false beats only (not every plan). */
   private notePrivateWhy(
     status: PrivateWhyStatus,
     ground: PrivateGround | undefined,
     why: string | undefined,
   ): void {
     this.privateWhyStats[status]++;
+    // Histogram joins plan scans filtered to privateWhyStatus (not retained pins).
+    if (ground && (PRIVATE_GROUNDS as readonly string[]).includes(ground)) {
+      this.privateWhyStats.byGround[ground]++;
+    } else if (status === "none") {
+      this.privateWhyStats.byGround.none++;
+    }
     const diverge = privateCoverDiverge(ground, why);
     if (diverge === true) this.privateWhyStats.diverge++;
     else if (diverge === false) this.privateWhyStats.agree++;
@@ -3643,7 +3857,9 @@ export class AgentPlayer {
   /**
    * PlanRecord private fields.
    * - scoredBeat: emit privateWhyStatus + privateCoverDiverge (farm counters).
-   * - otherwise: may emit pinned ground/note with privateWhyRetained — never status=absent.
+   *   Ground/note come from THIS plan's intent only — never silently merge the
+   *   latch pin (that made scanners see mate-low-hp while status=absent/none).
+   * - otherwise: may emit pinned ground/note with privateWhyRetained — never status.
    */
   private privateWhyFields(
     intent?: Intent,
@@ -3658,22 +3874,23 @@ export class AgentPlayer {
   } {
     const intentGround = intent?.privateGround;
     const intentNote = intent?.privateNote;
-    const fromPin = !intentGround && !!this.veilcutPrivateGround;
-    const ground = intentGround ?? this.veilcutPrivateGround;
-    const note = intentNote ?? this.veilcutPrivateNote;
     if (opts?.scoredBeat) {
       const status = (intent as Intent & { _privateWhyStatus?: PrivateWhyStatus } | undefined)
         ?._privateWhyStatus
-        ?? (ground ? (ground === "none" ? "none" : "ok") : "absent");
+        ?? (intentGround ? (intentGround === "none" ? "none" : "ok") : "absent");
       const why = intent?.why ?? this.veilcutCoverWhy;
+      // Scored beat: intent only. Pin stays for fire/disarm + retained non-beats.
       return {
-        privateGround: ground,
-        privateNote: note,
-        privateWhy: formatPrivateWhy(ground, note),
+        privateGround: intentGround,
+        privateNote: intentNote,
+        privateWhy: formatPrivateWhy(intentGround, intentNote),
         privateWhyStatus: status,
-        privateCoverDiverge: privateCoverDiverge(ground, why),
+        privateCoverDiverge: privateCoverDiverge(intentGround, why),
       };
     }
+    const fromPin = !intentGround && !!this.veilcutPrivateGround;
+    const ground = intentGround ?? this.veilcutPrivateGround;
+    const note = intentNote ?? this.veilcutPrivateNote;
     if (!ground && !note) return {};
     return {
       privateGround: ground,

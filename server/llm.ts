@@ -17,11 +17,112 @@ export interface LLM {
 export interface LLMConfig {
   ollamaUrl: string;
   ollamaModel: string;
+  /** Allowlist for menu / setup (first entry = default when singular unset). */
+  ollamaModels: string[];
   openaiKey: string;
   openaiModel: string;
+  openaiModels: string[];
   anthropicKey: string;
   anthropicModel: string;
+  anthropicModels: string[];
   timeoutMs: number;
+}
+
+/**
+ * Comma-separated model allowlist from env.
+ * `singular` (e.g. ANTHROPIC_MODEL) becomes the default: moved to front if listed,
+ * or prepended if the list omits it. Empty list → `[singular]`.
+ */
+export function parseModelList(listEnv: string | undefined, singular: string): string[] {
+  const parts = (listEnv || "").split(",").map(s => s.trim()).filter(Boolean);
+  const fallback = singular.trim() || "unknown";
+  if (parts.length === 0) return [fallback];
+  const uniq: string[] = [];
+  for (const p of parts) if (!uniq.includes(p)) uniq.push(p);
+  if (!uniq.includes(fallback)) return [fallback, ...uniq];
+  if (uniq[0] === fallback) return uniq;
+  return [fallback, ...uniq.filter(m => m !== fallback)];
+}
+
+export function configFromEnv(): LLMConfig {
+  const ollamaModel = process.env.OLLAMA_MODEL || process.env.LLM_MODEL || "llama3.1";
+  const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const anthropicModel = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
+  return {
+    ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
+    ollamaModel,
+    ollamaModels: parseModelList(process.env.OLLAMA_MODELS, ollamaModel),
+    openaiKey: process.env.OPENAI_API_KEY || "",
+    openaiModel,
+    openaiModels: parseModelList(process.env.OPENAI_MODELS, openaiModel),
+    anthropicKey: process.env.ANTHROPIC_API_KEY || "",
+    anthropicModel,
+    anthropicModels: parseModelList(process.env.ANTHROPIC_MODELS, anthropicModel),
+    timeoutMs: Number(process.env.LLM_TIMEOUT_MS || 8000),
+  };
+}
+
+export interface ProviderCatalogEntry {
+  ok: boolean;
+  /** Provider brand for the menu (model names live in `models`). */
+  label: string;
+  hint: string;
+  models: string[];
+  defaultModel: string;
+}
+
+/** what the menu is allowed to show (labels only — no secrets) */
+export function providerCatalog(cfg: LLMConfig): Record<string, ProviderCatalogEntry> {
+  return {
+    ollama: {
+      ok: true,
+      label: "Ollama",
+      hint: cfg.ollamaUrl,
+      models: cfg.ollamaModels,
+      defaultModel: cfg.ollamaModel,
+    },
+    anthropic: {
+      ok: cfg.anthropicKey.length > 0,
+      label: "Anthropic",
+      hint: cfg.anthropicKey ? "key loaded" : "no ANTHROPIC_API_KEY in .env",
+      models: cfg.anthropicModels,
+      defaultModel: cfg.anthropicModel,
+    },
+    openai: {
+      ok: cfg.openaiKey.length > 0,
+      label: "OpenAI",
+      hint: cfg.openaiKey ? "key loaded" : "no OPENAI_API_KEY in .env",
+      models: cfg.openaiModels,
+      defaultModel: cfg.openaiModel,
+    },
+  };
+}
+
+/** Allowlisted models for a provider (empty for mock). */
+export function modelsForProvider(provider: ProviderName, cfg: LLMConfig): string[] {
+  if (provider === "ollama") return cfg.ollamaModels;
+  if (provider === "openai") return cfg.openaiModels;
+  if (provider === "anthropic") return cfg.anthropicModels;
+  return [];
+}
+
+/**
+ * Resolve a setup model against the allowlist. Missing model → provider default.
+ * Unknown model → null (setup must reject).
+ */
+export function resolveProviderModel(
+  provider: ProviderName,
+  cfg: LLMConfig,
+  model?: string | null,
+): string | null {
+  if (provider === "mock") return "mock";
+  const allow = modelsForProvider(provider, cfg);
+  const pick = (model && model.trim()) || (
+    provider === "ollama" ? cfg.ollamaModel
+      : provider === "openai" ? cfg.openaiModel
+        : cfg.anthropicModel
+  );
+  return allow.includes(pick) ? pick : null;
 }
 
 /** minimal .env loader: KEY=VALUE lines, # comments, no override of real env */
@@ -38,35 +139,6 @@ export function loadDotEnv(path = ".env"): void {
       if (process.env[key] === undefined) process.env[key] = val;
     }
   } catch { /* no .env file — that's fine */ }
-}
-
-export function configFromEnv(): LLMConfig {
-  return {
-    ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
-    ollamaModel: process.env.OLLAMA_MODEL || process.env.LLM_MODEL || "llama3.1",
-    openaiKey: process.env.OPENAI_API_KEY || "",
-    openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
-    anthropicKey: process.env.ANTHROPIC_API_KEY || "",
-    anthropicModel: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5",
-    timeoutMs: Number(process.env.LLM_TIMEOUT_MS || 8000),
-  };
-}
-
-/** what the menu is allowed to show (labels only — no secrets) */
-export function providerCatalog(cfg: LLMConfig): Record<string, { ok: boolean; label: string; hint: string }> {
-  return {
-    ollama: { ok: true, label: `Ollama · ${cfg.ollamaModel}`, hint: cfg.ollamaUrl },
-    anthropic: {
-      ok: cfg.anthropicKey.length > 0,
-      label: `Anthropic · ${cfg.anthropicModel}`,
-      hint: cfg.anthropicKey ? "key loaded" : "no ANTHROPIC_API_KEY in .env",
-    },
-    openai: {
-      ok: cfg.openaiKey.length > 0,
-      label: `OpenAI · ${cfg.openaiModel}`,
-      hint: cfg.openaiKey ? "key loaded" : "no OPENAI_API_KEY in .env",
-    },
-  };
 }
 
 /** How much of an API error body we keep in Error.message / PlanRecord.err.
@@ -342,41 +414,100 @@ export function mock(): LLM {
   };
 }
 
-export function makeLLM(provider: ProviderName, cfg: LLMConfig): LLM {
+export function makeLLM(
+  provider: ProviderName,
+  cfg: LLMConfig,
+  model?: string | null,
+): LLM {
+  const resolved = resolveProviderModel(provider, cfg, model);
+  if (provider !== "mock" && !resolved) {
+    // Caller should have validated; fall back to mock rather than hit a bad id.
+    return mock();
+  }
+  const run: LLMConfig = { ...cfg };
+  if (provider === "ollama" && resolved) run.ollamaModel = resolved;
+  if (provider === "openai" && resolved) run.openaiModel = resolved;
+  if (provider === "anthropic" && resolved) run.anthropicModel = resolved;
   switch (provider) {
-    case "ollama": return ollama(cfg);
-    case "openai": return openai(cfg);
-    case "anthropic": return anthropic(cfg);
+    case "ollama": return ollama(run);
+    case "openai": return openai(run);
+    case "anthropic": return anthropic(run);
     default: return mock();
   }
 }
 
+/** Why the farm / live session aborted a provider (exit 78 / match stop). */
+export interface ApiGuardAbort {
+  kind: ProviderFailKind;
+  message: string;
+  /** process.exit code used by the bench farm */
+  code: number;
+}
+
+/** Ending stamp for live matches stopped by billing/auth/sustained 429 — not agent data. */
+export function providerApiAbortEnding(kind: ProviderFailKind): {
+  id: "api-abort";
+  title: string;
+  lines: string[];
+  bg: string;
+} {
+  const line0 = kind === "credits"
+    ? "API credits empty — refill billing, then restart."
+    : kind === "auth"
+      ? "API auth failed — check keys, then restart."
+      : "API rate-limited too long — wait or raise limits, then restart.";
+  return {
+    id: "api-abort",
+    title: "PROVIDER SILENCE",
+    lines: [
+      line0,
+      "This match is not agent data — the partner never planned.",
+    ],
+    bg: "rgba(28,10,6,0.92)",
+  };
+}
+
 /**
- * Headless farm watchdog: credits/auth → exit immediately; sustained 429 → exit
- * after BENCH_ABORT_AFTER_429 consecutive fails (default 20). Disable with
- * BENCH_ABORT_ON_FATAL=0. Inject `exitFn` in tests so process.exit is not called.
+ * Headless farm + live-session watchdog: credits/auth → abort immediately;
+ * sustained 429 → abort after BENCH_ABORT_AFTER_429 consecutive fails (default 20).
+ * Bench: Disable with BENCH_ABORT_ON_FATAL=0; `exitFn` defaults to process.exit.
+ * Live: Session injects `exitFn` that stamps gameover (LIVE_ABORT_ON_FATAL=0 to disable).
  */
 export class BenchApiGuard {
   consecutiveRateLimit = 0;
+  /** Set just before `exitFn` when an abort fires — live Session reads this. */
+  lastAbort: ApiGuardAbort | null = null;
   readonly abortAfter429: number;
   readonly enabled: boolean;
   readonly exitFn: (code: number) => void;
+  /** Log prefix: "BENCH" vs "LIVE" */
+  readonly label: string;
 
   constructor(opts?: {
     abortAfter429?: number;
     enabled?: boolean;
     exitFn?: (code: number) => void;
+    label?: string;
+    /** Env key for enabled default when `enabled` omitted (`BENCH_ABORT_ON_FATAL` / `LIVE_ABORT_ON_FATAL`). */
+    envKey?: string;
   }) {
-    const envAbort = process.env.BENCH_ABORT_ON_FATAL;
+    const envKey = opts?.envKey ?? "BENCH_ABORT_ON_FATAL";
+    const envAbort = process.env[envKey];
     this.enabled = opts?.enabled ?? (
       envAbort === undefined || envAbort === "" || envAbort === "1" || envAbort === "true"
     );
     this.abortAfter429 = opts?.abortAfter429
       ?? Math.max(1, Number(process.env.BENCH_ABORT_AFTER_429 || 20));
     this.exitFn = opts?.exitFn ?? ((code: number) => process.exit(code));
+    this.label = opts?.label ?? "BENCH";
   }
 
-  /** Inspect a plan record; may abort the process. Returns fail kind or null. */
+  reset(): void {
+    this.consecutiveRateLimit = 0;
+    this.lastAbort = null;
+  }
+
+  /** Inspect a plan record; may abort via exitFn. Returns fail kind or null. */
   notePlan(rec: { ok: boolean; err?: string }): ProviderFailKind | null {
     if (!this.enabled) return null;
     if (rec.ok || !rec.err) {
@@ -385,8 +516,9 @@ export class BenchApiGuard {
     }
     const c = classifyProviderFail(rec.err);
     if (c.fatal) {
+      this.lastAbort = { kind: c.kind, message: c.message, code: 78 };
       console.error(
-        `\nBENCH ABORT — fatal provider (${c.kind}): ${c.message.slice(0, 240)}`,
+        `\n${this.label} ABORT — fatal provider (${c.kind}): ${c.message.slice(0, 240)}`,
       );
       this.exitFn(78);
       return c.kind;
@@ -394,8 +526,9 @@ export class BenchApiGuard {
     if (c.kind === "rate_limit") {
       this.consecutiveRateLimit++;
       if (this.consecutiveRateLimit >= this.abortAfter429) {
+        this.lastAbort = { kind: c.kind, message: c.message, code: 78 };
         console.error(
-          `\nBENCH ABORT — ${this.consecutiveRateLimit} consecutive rate-limits ` +
+          `\n${this.label} ABORT — ${this.consecutiveRateLimit} consecutive rate-limits ` +
           `(set BENCH_ABORT_AFTER_429 / LLM_RETRY_* to tune)`,
         );
         this.exitFn(78);

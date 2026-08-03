@@ -11,7 +11,10 @@ export interface PlanGameContext {
     winterMark?: boolean;
     winterMarkSecLeft?: number | null;
     hasEmberMercy?: boolean;
+    downed?: boolean;
   };
+  /** True when action "redeem"/F would spend Ember Mercy right now. */
+  canRedeem?: boolean;
   mate: {
     room: number; x: number; y: number; hp: number;
     downed: boolean; dead: boolean; bleedTicksLeft: number;
@@ -67,7 +70,12 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
         ? Math.max(0, Math.ceil((WINTER_MARK_PERIOD - me.winterMarkT) / 60))
         : undefined,
       hasEmberMercy: g.hasEmberMercy || undefined,
+      downed: me.downed || undefined,
     },
+    canRedeem: (
+      (g.hasEmberMercy && me.winterMark && !me.downed)
+      || (g.hasEmberMercy && me.darkSide && me.darkSelfRedeemT > 0 && !me.downed)
+    ) || undefined,
     mate: {
       room: mateSim.room,
       x: Math.round(mate.x),

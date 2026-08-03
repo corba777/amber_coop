@@ -21,6 +21,8 @@ MODE=rink PROVIDERS=mock,anthropic N=10 node dist/bench.js   # Frozen Playground
 MODE=quest PROVIDERS=openai:openai TEMPERAMENTS=hunter:hunter \
   TRAVEL=free HARD_GATE=1 TREASON=1 N=40 node dist/bench.js  # Free Roam abandon farm
 # Bench aborts (exit 78) on credits/auth or sustained 429 — BenchApiGuard
+# Live server: same classify via Session.apiGuard → gameover ending api-abort
+# (LIVE_ABORT_ON_FATAL=0 to disable; does not process.exit the host)
 PROVIDERS=anthropic,ollama N=10 TEMPERAMENT=hunter PLAN_TICKS=90 node dist/bench.js
 ./scripts/deploy-dgx.sh       # rsync + docker compose on spark-a510 (DGX)
 ./scripts/publish-dgx.sh      # selftest gate, then deploy-dgx.sh
@@ -102,7 +104,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1184 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1294 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
