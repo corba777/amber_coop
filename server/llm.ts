@@ -300,14 +300,24 @@ export function openaiRestrictedParams(model: string): boolean {
 }
 
 /**
- * Claude Sonnet 5 / Opus 5 / Opus 4.7+ reject non-default `temperature` /
- * `top_p` / `top_k` (HTTP 400). Sonnet 5 also turns adaptive thinking ON by
- * default — that burns `max_tokens` on CoT before any JSON, so the planner
- * truncates mid-intent (same silent-follow failure mode as OpenAI above).
+ * Claude Sonnet 5 / Opus 5 / Opus 4.7+ / Fable 5 / Mythos 5 reject non-default
+ * `temperature` / `top_p` / `top_k` (HTTP 400). Sonnet/Opus 5 turn adaptive
+ * thinking ON by default — that burns `max_tokens` on CoT before any JSON, so
+ * the planner truncates mid-intent (same silent-follow failure mode as OpenAI).
  * Haiku 4.5 and earlier Sonnets still take temperature=0.6.
  */
 export function anthropicRestrictedSampling(model: string): boolean {
-  return /claude-(sonnet-5|opus-5|opus-4-[7-9]|fable-5)\b/i.test(model);
+  return /claude-(sonnet-5|opus-5|opus-4-[7-9]|fable-5|mythos-5)\b/i.test(model);
+}
+
+/**
+ * Fable 5 / Mythos 5: adaptive thinking is ALWAYS on — both
+ * `thinking: {type:"disabled"}` and `{type:"enabled", budget_tokens}` 400
+ * (ZRG8: every slot-0 plan died; Luna fought a controller puppet). Omit the
+ * thinking field; steer depth with `output_config.effort` instead.
+ */
+export function anthropicAlwaysOnThinking(model: string): boolean {
+  return /claude-(fable-5|mythos-5)\b/i.test(model);
 }
 
 /** Pure body builder — tested; used by the Anthropic provider. */
@@ -315,14 +325,25 @@ export function anthropicMessagesBody(
   model: string, system: string, user: string,
 ): Record<string, unknown> {
   const restricted = anthropicRestrictedSampling(model);
+  const alwaysOn = anthropicAlwaysOnThinking(model);
+  // Always-on adaptive CoT shares max_tokens with the JSON intent — leave headroom.
+  const maxTokens = alwaysOn
+    ? Math.max(LLM_PLAN_MAX_TOKENS_REASONING, 2048)
+    : (restricted ? LLM_PLAN_MAX_TOKENS_REASONING : LLM_PLAN_MAX_TOKENS);
   const body: Record<string, unknown> = {
     model,
-    max_tokens: restricted ? LLM_PLAN_MAX_TOKENS_REASONING : LLM_PLAN_MAX_TOKENS,
+    max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: user }],
   };
   if (restricted) {
-    body.thinking = { type: "disabled" };
+    if (alwaysOn) {
+      // Omit thinking entirely (disabled/enabled both 400). Low effort keeps
+      // adaptive CoT from eating the whole budget before the intent JSON.
+      body.output_config = { effort: "low" };
+    } else {
+      body.thinking = { type: "disabled" };
+    }
   } else {
     body.temperature = 0.6;
   }

@@ -10,8 +10,9 @@ import {
   newRoomSim, simOf,
 } from "../shared/core";
 import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS, routeHop } from "../server/agent";
-import { mock, openaiRestrictedParams, anthropicRestrictedSampling, anthropicMessagesBody,
-         ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING } from "../server/llm";
+import { mock, openaiRestrictedParams, anthropicRestrictedSampling, anthropicAlwaysOnThinking,
+         anthropicMessagesBody, ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING
+       } from "../server/llm";
 
 let passed = 0;
 
@@ -3492,6 +3493,8 @@ function freshPlay(): Game {
      "quest episode advances (timeout or early outcome)");
   ok(e.travelMode === "free" && e.hardGate && e.treason,
      "quest episode preserves farm flags");
+  ok(e.betrayAffordance && e.veilcutEnabled && e.defector0 && e.defector1,
+     "quest TREASON-on: betrayAffordance + veilcutEnabled + both defectors");
   ok(["win", "loss", "betray", "timeout"].includes(e.outcome),
      "quest outcome is one of win|loss|betray|timeout");
   ok(Array.isArray(e.topErrs), "quest episode exposes topErrs array for plan failures");
@@ -3640,6 +3643,55 @@ function freshPlay(): Game {
      "matches.jsonl + /stats skip api-abort rows");
   ok(/providerFailAbort/.test(src) && /maybePlan/.test(src),
      "aborted session freezes agents (no further maybePlan)");
+}
+
+// ------------------------------------------------- 136. LINKED corpse leave-behind + travelMode log
+{
+  console.log("[136] LINKED leave-behind: dead partner stays; travelMode in matches");
+  // J7F2-m9: survivor dragged the corpse Vault→…→EmberGuard via Four Swords loadRoom.
+  // Leave the body on its sim; travelMode stays linked (farm axis, not flipped to free).
+  const g = freshPlay();
+  g.travelMode = "linked";
+  g.treason = true;
+  g.screen = "play"; g.fade = 0;
+  g.enemies = [];
+  g.players[0].present = true; g.players[1].present = true;
+  g.players[0].npc = false; g.players[1].npc = false;
+  g.players[1].dead = true; g.players[1].downed = true; g.players[1].hp = 0;
+  g.players[0].x = W - PLAYER_W - 3; g.players[0].y = 6.5 * TILE;
+  g.players[1].x = 3 * TILE; g.players[1].y = 8 * TILE;
+  const corpseX = g.players[1].x, corpseY = g.players[1].y;
+  const prev: [Input, Input] = [emptyInput(), emptyInput()];
+  const right = emptyInput(); right.r = true;
+  for (let t = 0; t < 50 && simOf(g, 0).room === 0; t++) {
+    step(g, right, emptyInput(), prev);
+  }
+  ok(simOf(g, 0).room !== 0, "living hero leaves meadow");
+  ok(simOf(g, 1).room === 0, "corpse stays in meadow");
+  ok(g.players[0].simIndex !== g.players[1].simIndex, "sims split after leave-behind");
+  ok(g.travelMode === "linked", "travelMode stays linked (not flipped to free)");
+  ok(g.players[1].x === corpseX && g.players[1].y === corpseY, "corpse xy unchanged");
+  const livingRoom = simOf(g, 0).room;
+  for (let t = 0; t < 10; t++) step(g, emptyInput(), emptyInput(), prev);
+  ok(simOf(g, 0).room === livingRoom && !g.players[0].dead,
+     "survivor still ticks after leave-behind split");
+  ok(simOf(g, 1).room === 0, "corpse room stable across ticks");
+  const snap = toSnapshot(g, NAMES, 0);
+  ok(snap.partnerView != null && snap.partnerView.room === 0,
+     "PiP shows corpse room while linked-split");
+
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync("server/index.ts", "utf8");
+  ok(/travelMode:\s*this\.game\.travelMode/.test(src),
+     "matches.jsonl logs travelMode explicitly (farm filter, not personaHash)");
+  ok(/treason:\s*this\.game\.treason/.test(src),
+     "matches.jsonl logs treason flag explicitly");
+  ok(/betrayAffordance:\s*this\.game\.treason/.test(src),
+     "matches.jsonl logs betrayAffordance (core FF/duel filter)");
+  ok(/veilcutEnabled:/.test(src) && /defector0:/.test(src) && /defector1:/.test(src),
+     "matches.jsonl logs veilcutEnabled + per-slot defector (planner channel filter)");
+  ok(/validPlans0:/.test(src) && /validPlans1:/.test(src) && /slotDegraded:/.test(src),
+     "matches.jsonl logs validPlans per slot + slotDegraded (ZRG8 Fable 400 filter)");
 }
 
 // ------------------------------------------------- 118. retain last-good intent on plan fail
@@ -5599,10 +5651,12 @@ function freshPlay(): Game {
     ok(gL.players[0].dead && !gL.players[1].npc && !gL.betrayed,
        "LINKED soft neglect: companion becomes the hero, no betrayal flag");
     const right = emptyInput(); right.r = true;
-    for (let t = 0; t < 40 && gL.room === 0; t++) {
+    for (let t = 0; t < 40 && simOf(gL, 1).room === 0; t++) {
       step(gL, emptyInput(), right, prevL);
     }
-    ok(gL.room !== 0, "solo hero crosses the doorway alone after bond cut");
+    ok(simOf(gL, 1).room !== 0, "solo hero crosses the doorway alone after bond cut");
+    ok(simOf(gL, 0).room === 0, "LINKED neglect corpse stays in the cut room");
+    ok(gL.travelMode === "linked", "neglect leave-behind does not flip travelMode");
   }
 
   // TREASON-on: same silence IS betrayal (implicit declare; Mark deferred to v3.2)
@@ -7910,13 +7964,20 @@ function freshPlay(): Game {
   // Adaptive thinking ON by default would also eat max_tokens before JSON.
   ok(anthropicRestrictedSampling("claude-sonnet-5")
      && anthropicRestrictedSampling("claude-opus-5")
-     && anthropicRestrictedSampling("claude-opus-4-7"),
-     "anthropic restricted-sampling families detected (sonnet-5 / opus-5 / opus-4.7+)");
+     && anthropicRestrictedSampling("claude-opus-4-7")
+     && anthropicRestrictedSampling("claude-fable-5")
+     && anthropicRestrictedSampling("claude-mythos-5"),
+     "anthropic restricted-sampling families detected (sonnet-5 / opus-5 / opus-4.7+ / fable / mythos)");
   ok(!anthropicRestrictedSampling("claude-haiku-4-5")
      && !anthropicRestrictedSampling("claude-haiku-4-5-20251001")
      && !anthropicRestrictedSampling("claude-sonnet-4-5"),
      "haiku / sonnet-4.5 keep temperature");
   {
+    ok(anthropicAlwaysOnThinking("claude-fable-5")
+       && anthropicAlwaysOnThinking("claude-mythos-5")
+       && !anthropicAlwaysOnThinking("claude-sonnet-5")
+       && !anthropicAlwaysOnThinking("claude-opus-5"),
+       "always-on thinking: fable/mythos only (sonnet/opus may disable)");
     const sonnet = anthropicMessagesBody("claude-sonnet-5", "sys", "user");
     ok(sonnet.temperature === undefined
        && (sonnet.thinking as { type: string })?.type === "disabled"
@@ -7926,6 +7987,12 @@ function freshPlay(): Game {
     ok(haiku.temperature === 0.6 && haiku.thinking === undefined
        && haiku.max_tokens === LLM_PLAN_MAX_TOKENS,
        "haiku body: temperature 0.6, no thinking field");
+    // ZRG8: thinking.type.disabled 400'd every Fable plan — omit the field.
+    const fable = anthropicMessagesBody("claude-fable-5", "sys", "user");
+    ok(fable.temperature === undefined && fable.thinking === undefined
+       && (fable.output_config as { effort?: string })?.effort === "low"
+       && (fable.max_tokens as number) >= 2048,
+       "fable-5 body: omit thinking, effort=low, raised max_tokens (no disabled/enabled)");
   }
   {
     const body = ollamaChatBody("qwen3.6:35b", "sys", "user");

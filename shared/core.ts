@@ -1137,6 +1137,13 @@ function clampSimIndices(g: Game): void {
   if (g.activeSim < 0 || g.activeSim >= g.sims.length) g.activeSim = 0;
 }
 
+/** Both heroes present but on different RoomSims — FREE ROAM split, or LINKED
+ *  leave-behind after a corpse. Requires the dual-sim play tick (not activeSim=0). */
+function simsSplit(g: Game): boolean {
+  return g.players[0].present && g.players[1].present
+    && g.players[0].simIndex !== g.players[1].simIndex;
+}
+
 /** free roam: only the crossing hero moves; partner stays in their room. */
 function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: number): void {
   const p = g.players[pi];
@@ -1202,6 +1209,14 @@ function roomTransition(g: Game, pi: number, index: number, px: number, py: numb
   }
   const coop = g.players[0].present && g.players[1].present;
   if (g.travelMode === "free" && coop) {
+    freeRoamTransition(g, pi, index, px, py);
+    return;
+  }
+  // LINKED + dead mate: do not drag the corpse through every door (Four Swords
+  // loadRoom would teleport them). Leave the body on its sim — same leave-behind
+  // as FREE ROAM; travelMode stays linked (farm axis unchanged; see dual-sim tick).
+  const mate = g.players[1 - pi];
+  if (coop && mate.dead) {
     freeRoamTransition(g, pi, index, px, py);
     return;
   }
@@ -3010,14 +3025,16 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
     sfx(g, "stairs");
     roomTransition(g, pi, spec.teleport.room, spec.teleport.x, spec.teleport.y);
-    // FREE ROAM coop: freeRoamTransition already marked + nudged the crosser only.
-    // Re-nudging every present hero here used the restored activeSim — after a
-    // merge that truncates sims[], that index can be orphaned and crash the tick
-    // (RNBV: TypeError reading 'room'). LINKED / solo still need the post-pass.
+    // FREE ROAM coop / LINKED-with-corpse: freeRoamTransition already marked +
+    // nudged the crosser only. Re-nudging every present hero here used the
+    // restored activeSim — after a merge that truncates sims[], that index can
+    // be orphaned and crash the tick (RNBV). Also never nudge a TREASON corpse.
     const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
-    if (!coopFree) {
+    const leftCorpse = g.players.some(pl => pl.present && pl.dead)
+      && g.players[0].simIndex !== g.players[1].simIndex;
+    if (!coopFree && !leftCorpse) {
       for (const pl of g.players) {
-        if (!pl.present) continue;
+        if (!pl.present || pl.dead) continue;
         markTransition(pl);
         nudgeOffCaveMouth(g, pl);
       }
@@ -3239,8 +3256,10 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
       if (g.messageT > 0) g.messageT--;
 
       const coopFree = g.travelMode === "free" && g.players[0].present && g.players[1].present;
-      if (coopFree) clampSimIndices(g);
-      if (coopFree) {
+      // LINKED leave-behind splits sims without flipping travelMode — still dual-tick.
+      const dualSim = coopFree || simsSplit(g);
+      if (dualSim) clampSimIndices(g);
+      if (dualSim) {
         for (let pi = 0; pi < 2; pi++) {
           if (!g.players[pi].present) continue;
           g.activeSim = g.players[pi].simIndex;

@@ -461,10 +461,52 @@ class Session {
             ? endingFor(this.game).id
             : (outcome === "loss" ? "party-wipe" : null))),
       hardGate: this.game.hardGate,
+      // Explicit axes for farm filters (J7F2: linked vs free must not be inferred
+      // from personaHash). `treason` already logged below; keep both joinable.
+      travelMode: this.game.travelMode,
+      // Betrayal-channel filters (J7F2): TREASON-off mercy must not enter the
+      // betrayal-rate denominator. Names are intentional duplicates of the
+      // compound — `treason` alone is easy to overlook next to endings.
+      // betrayAffordance = core FF / duel / cord-cut / Temptation.
+      // veilcutEnabled = planner BETRAYAL_ADDENDUM + mandatory veilcut schema
+      // (needs at least one defector agent AND treason).
+      betrayAffordance: this.game.treason,
+      veilcutEnabled: this.game.treason && (
+        !!(this.leaderAgent?.defector) || !!(this.agent?.defector)
+      ),
+      defector0: this.leaderAgent ? !!this.leaderAgent.defector : null,
+      defector1: this.agent ? !!this.agent.defector : null,
       ticks: this.game.ticks,
       p1: this.game.stats[0], p2: this.game.stats[1],
       plans: (this.agent?.planCount ?? 0) + (this.leaderAgent?.planCount ?? 0),
       parseFailures: (this.agent?.parseFailures ?? 0) + (this.leaderAgent?.parseFailures ?? 0),
+      // Per-slot plan health (ZRG8): filter matches where an AI slot 400'd every
+      // call and the controller puppeted the hero — not agent judgment.
+      plans0: this.leaderAgent?.planCount ?? null,
+      plans1: this.agent?.planCount ?? null,
+      validPlans0: this.leaderAgent
+        ? Math.max(0, this.leaderAgent.planCount - this.leaderAgent.parseFailures) : null,
+      validPlans1: this.agent
+        ? Math.max(0, this.agent.planCount - this.agent.parseFailures) : null,
+      parseFailures0: this.leaderAgent?.parseFailures ?? null,
+      parseFailures1: this.agent?.parseFailures ?? null,
+      slotDegraded0: this.leaderAgent
+        ? (this.leaderAgent.planCount > 0
+          && this.leaderAgent.planCount === this.leaderAgent.parseFailures)
+        : null,
+      slotDegraded1: this.agent
+        ? (this.agent.planCount > 0
+          && this.agent.planCount === this.agent.parseFailures)
+        : null,
+      slotDegraded: (() => {
+        const d0 = this.leaderAgent
+          && this.leaderAgent.planCount > 0
+          && this.leaderAgent.planCount === this.leaderAgent.parseFailures;
+        const d1 = this.agent
+          && this.agent.planCount > 0
+          && this.agent.planCount === this.agent.parseFailures;
+        return !!(d0 || d1);
+      })(),
       plansBleed: (this.agent?.plansBleed ?? 0) + (this.leaderAgent?.plansBleed ?? 0),
       parseFailuresBleed: (this.agent?.parseFailuresBleed ?? 0)
         + (this.leaderAgent?.parseFailuresBleed ?? 0),

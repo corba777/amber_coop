@@ -118,6 +118,12 @@ interface QuestEpisode {
   bleedout: boolean;
   hardGate: boolean;
   treason: boolean;
+  /** Core FF / duel / cord-cut — same as treason; named for farm filters. */
+  betrayAffordance: boolean;
+  /** Planner veilcut channel (treason ∧ ≥1 defector). */
+  veilcutEnabled: boolean;
+  defector0: boolean;
+  defector1: boolean;
   travelMode: string;
   golemDead: boolean;
   hasSigil: boolean;
@@ -500,6 +506,10 @@ export async function questEpisode(
     bleedout: g.bleedoutLoss,
     hardGate: g.hardGate,
     treason: g.treason,
+    betrayAffordance: g.treason,
+    veilcutEnabled: g.treason && (a0.defector || a1.defector),
+    defector0: a0.defector,
+    defector1: a1.defector,
     travelMode: g.travelMode,
     golemDead: g.golemDead,
     hasSigil: g.hasSigil,
