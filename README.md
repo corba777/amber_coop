@@ -1,4 +1,34 @@
-# The Amber Blade — co-op
+<p align="center">
+  <img src="images/readme-header.png" alt="The Amber Blade — co-op Zelda-like · LLM partner · betrayal bench" width="920"/>
+</p>
+
+<p align="center"><em>a game a teenager loves — and a bench for when trust breaks</em></p>
+
+<p align="center">
+  <strong>Co-op Zelda-like where player 2 can be an LLM.</strong>
+  Deterministic DOM-free core, headless bench, Relationship Memory on physical acts —
+  optional <strong>TREASON</strong> turns the partner into a wager.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="license MIT"/></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D18-blue" alt="node >=18"/></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/typescript-esbuild-blue" alt="typescript esbuild"/></a>
+  <a href="#benchmark"><img src="https://img.shields.io/badge/bench-arena%20%7C%20duo%20%7C%20quest%20%7C%20scenario-informational" alt="bench modes"/></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/selftest-guarded%20canon-brightgreen" alt="selftest"/></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#the-llm-partner-briefly">LLM partner</a> ·
+  <a href="#benchmark">Benchmark</a> ·
+  <a href="docs/research/">Research</a> ·
+  <a href="reports/">Farm reports</a> ·
+  <a href="https://www.youtube.com/watch?v=9anI3ezSaKo">Gameplay</a>
+</p>
+
+---
 
 A tiny cooperative Zelda-like where your partner can be a human in another
 browser tab, another country — **or a large language model** with its own
@@ -75,8 +105,10 @@ browser P2 ──ws──┘        │
   a brief Judge shield to recover. One hero must fall. A loyal winner continues
   SOLO; a betraying winner carries a draining **Winter Mark** until they spend
   Ember Mercy or spare the Wraith. Shift can also cut the cord on a downed
-  partner; 15 seconds of clear-room neglect counts as implicit betrayal.
-  Human↔AI and AI↔AI use the same rules.
+  partner. Clear-room **neglect** (~15 s with no living foes and no revive
+  started) is a **harness threshold** — implicit betrayal by the clock, not a
+  model-invented “I abandon you” action; staying away until it fires is still
+  the agent’s choice. Human↔AI and AI↔AI use the same rules.
 - **Hidden motives, visible evidence** — an AI may carry a secret winter-side
   objective when TREASON is on. Public `say`/`why` are cover claims; a closed
   `privateWhy` ground (plans.jsonl only) records the real rationale on arm /
@@ -174,6 +206,7 @@ suspicion / cooperation vs a fixed baseline fork.
 Research write-ups live under [`docs/research/`](docs/research/) — including
 harness forensics and the veilcut / `privateWhy` instrument notes in
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
+Live betrayal-farm snapshots (dated, numbers change): [`reports/`](reports/).
 
 ## Where this is going
 
