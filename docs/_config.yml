@@ -1,0 +1,32 @@
+title: The Amber Blade
+description: Co-op Zelda-like where your partner can be an LLM — and a bench for when trust breaks.
+url: "https://corba777.github.io"
+baseurl: "/amber_coop"
+
+author:
+  name: Artem Zvyagintsev
+
+theme: minima
+
+plugins:
+  - jekyll-seo-tag
+
+header_pages:
+  - betrayal-shows-up-late.md
+  - research/index.md
+
+# Keep long research notes as GitHub blobs (linked from research/index.md),
+# not as Jekyll pages — they are engineering docs, not site essays.
+exclude:
+  - research/social_reasoning.md
+  - research/betrayal_v3_duel.md
+  - research/harness_artifacts.md
+  - research/experiment_catalog.md
+  - research/evaluation.md
+  - PAGES.md
+  - .DS_Store
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
