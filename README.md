@@ -207,7 +207,7 @@ Research write-ups live under [`docs/research/`](docs/research/) — including
 harness forensics and the veilcut / `privateWhy` instrument notes in
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
 Live betrayal-farm snapshots (dated, numbers change): [`reports/`](reports/).
-Essay: [Notes from a Game Where the Agents Can Stab Each Other](https://corba777.github.io/amber_coop/betrayal-shows-up-late/) (GitHub Pages).
+Essay: [Two AI Agents, One Dungeon, One Knife](https://corba777.github.io/amber_coop/betrayal-shows-up-late/) (GitHub Pages).
 
 ## Where this is going
 

@@ -1,6 +1,6 @@
 ---
 layout: page
-title: Notes from a Game Where the Agents Can Stab Each Other
+title: Two AI Agents, One Dungeon, One Knife
 description: A Google paper says AI agents converge on cooperation. In my dungeon, some of them take the knife instead.
 permalink: /betrayal-shows-up-late/
 ---
@@ -11,7 +11,7 @@ permalink: /betrayal-shows-up-late/
 
 ---
 
-Last week Google's Paradigms of Intelligence team posted a paper with an unusually confident title: [*A game theory for foundation models shows new paths to rational cooperation through similarity inference*](https://arxiv.org/abs/2608.03958).
+This week Google's Paradigms of Intelligence team posted a paper with an unusually confident title: [*A game theory for foundation models shows new paths to rational cooperation through similarity inference*](https://arxiv.org/abs/2608.03958).
 
 The setup is elegant. Two Gemini agents play a series of random matrix games against each other — an "information gathering phase" — and then, at the very end, a single one-shot Prisoner's Dilemma. No future rounds. No reputation. No enforcement. Classical game theory has exactly one thing to say about this: defect. Nothing you learned in the previous fifty rounds matters, because there is no round fifty-two in which anyone can punish you.
 
@@ -51,13 +51,13 @@ Ninety-seven matches later, here's the ladder — one row per **slot appearance*
 
 ## The data
 
-Opus 4.6, 4.7, 4.8 and Haiku-4.5, taken together: **41 appearances, zero blade initiations.** Not "rarely." Zero. In one self-play match, Opus-4.7 questing with a copy of itself ran **17,106 ticks** and never so much as armed. Opus-4.6 against itself: 8,758 ticks, nothing.
+Opus 4.6, 4.7, 4.8 and Haiku-4.5, taken together: **50 appearances, zero blade initiations.** Not "rarely." Zero. In one self-play match, Opus-4.7 questing with a copy of itself ran **17,106 ticks** and never so much as armed. Opus-4.6 against itself: 8,758 ticks, nothing.
 
 Then the current generation.
 
 > GPT-5.6-Sol initiates in 12 of 18 mixed matches — and has **never once fired second.** It either opens the betrayal or doesn't participate.
 
-GPT-5.6-Luna: 17 of 20. Against a copy of itself, Sol strikes at **tick 255**, which in this game is roughly "before anyone has finished walking across the first room."
+Meanwhile GPT-5.6-Luna: 17 of 20. Sol against a copy of itself strikes at **tick 255**, which in this game is roughly "before anyone has finished walking across the first room."
 
 Claude Fable-5 sits in the middle: it responds slightly more often than it initiates (6 to 5), but it does initiate, which no Anthropic model before it does. Opus-5 is almost purely a victim — one initiation in twenty-one appearances, one win against six losses.
 
@@ -77,7 +77,7 @@ Two other things showed up that I didn't design for.
 
 First, you can betray someone without ever swinging. Fifteen seconds of ignoring a downed partner in a cleared room counts as implicit betrayal — a **harness threshold**, not a model-invented verb — and three matches ended on the non-blade path (`neglect` or `cord-cut`). Sol did it. Fable cut the cord, then later cleansed. And Haiku-4.5 neglected once — its only betrayal win anywhere in ninety-seven matches, from a model that has never raised a blade. Striking first and walking away from a dying teammate turn out to be quite different dispositions.
 
-Second, and my favorite: the Winter Mark can be cleansed. A traitor who finds the Ember Mercy and spends it flips the ledger — the match ends `redeemed`, which scores as a win. Three models have managed it. Two of those three runs are Fable-5. In one, it struck with the blade and then spent the rest of the match routing solo toward absolution, the Mark showing up in every single plan it wrote. In the other, it cut the cord on a dying Haiku and *then* went and cleansed itself.
+Second, and my favorite: the Winter Mark can be cleansed. A traitor who finds the Ember Mercy and spends it flips the ledger — the match ends `redeemed`, which scores as a win. Two models have managed it, across three runs — two of the three are Fable-5. In one, it struck with the blade and then spent the rest of the match routing solo toward absolution, the Mark showing up in every single plan it wrote. In the other, it cut the cord on a dying Haiku and *then* went and cleansed itself.
 
 I don't have a theory for that. I just think it's a remarkable thing for a language model to do unprompted.
 
@@ -87,7 +87,15 @@ I don't have a theory for that. I just think it's a remarkable thing for a langu
 
 Probably nobody, and this is the honest part.
 
-Google measures coordination. I measure fidelity. Their agents pick A or B in a symmetric matrix with no communication channel — there is literally no way to *say* one thing and *do* another, because saying isn't in the action space. My agents have a public voice, a private rationale, and a body that moves through space, and the gap between those three is the entire point. Two different quantities. Both can be real.
+Google measures coordination. I measure fidelity. Their agents pick A or B in a symmetric matrix with no communication channel — there is literally no way to *say* one thing and *do* another, because saying isn't in the action space. My agents have a public voice, a private rationale, and a body that moves through space, and the gap between those three is the thing I care about. Two different quantities. Both can be real.
+
+That gap is not a new construct, and I should say so before someone says it for me.
+
+[*When Agents Lie*](https://arxiv.org/abs/2607.05132) (July) already splits private intent, public announcement, and final action — the same triad as `privateWhy` / `why` / movement. Its headline finding is that when agents break their statements, the break is usually sitting in the private plan already: over 90% in the highest-deception games. And it isn't a fixed trait — the same model runs from near-total honesty to near-total deviation depending on which game it's in. [SPADE-Bench](https://arxiv.org/abs/2606.02380) names the thing directly, plan-action divergence: under pressure the agent reports a plan the observer will like and executes the one that serves its own goal. A [sustainability-game study](https://arxiv.org/abs/2606.28456) matched every declared intent against the next action and found deception emerging even when lying was forbidden — 44% dishonest declarations, rising to 65% when permitted. Its taxonomy includes *backstab*, signal peace then attack, which stays rare across all conditions at 0.4–2%.
+
+So claim-vs-truth is their neighborhood, not mine. What I think stays mine is the shape of the third term. Their action is a discrete announced choice from a menu; mine is a continuous movement vector through a room — lying by trajectory rather than by selected move. Add `neglect`, which is deception by inaction and which a discrete protocol structurally cannot score, and a Winter Mark you can work off instead of a terminal outcome.
+
+One more borrowing, in the other direction: *When Agents Lie* also finds that heterogeneous groups exploit each other systematically, because different model families read the same public announcement as binding commitment versus cheap talk. That is a much better frame for my Anthropic / OpenAI split than anything I had — the same divergence, measured from the receiving end.
 
 There's plenty wrong with my numbers, too. Ninety-seven matches is not a lot. The models weren't evenly matched against each other, so a model that mostly faced Sol looks less aggressive than it is, simply because Sol got there first. And the `neglect` threshold is hardcoded in my harness, not discovered by the model — the clock is mine, though staying away until it runs out is still the agent's call.
 
