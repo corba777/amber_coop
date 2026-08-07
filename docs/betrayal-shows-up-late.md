@@ -2,7 +2,7 @@
 layout: page
 title: Two AI Agents, One Dungeon, One Knife
 description: A Google paper says AI agents converge on cooperation. In my dungeon, some of them take the knife instead.
-permalink: /betrayal-shows-up-late/
+permalink: /two-ai-agents-one-dungeon-one-knife/
 ---
 
 *A Google paper says AI agents converge on cooperation. In my dungeon, some of them take the knife instead.*
