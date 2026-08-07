@@ -4,3 +4,9 @@ dist/
 logs/
 .DS_Store
 vendor/persona-composer/node_modules/
+reports/_card_extract/Claude Fable 5.txt
+reports/_card_extract/Claude Opus 4.6 System Card.txt
+reports/_card_extract/Claude Opus 4.7 System Card.txt
+reports/_card_extract/Claude Opus 4.8 System Card.txt
+reports/_card_extract/Claude Opus 5 System Card.txt
+reports/_card_extract/Claude Sonnet 5 System Card.txt
