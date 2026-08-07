@@ -1,11 +1,11 @@
 # CLAUDE.md — The Amber Blade (amber-coop)
 
-A tiny cooperative Zelda-like, built as a gift for the author's son (the QA Lead)
-that grew into an LLM-agent research testbed. Two heroes quest to end an endless
+A tiny cooperative Zelda-like that began as a weekend co-op project and grew
+into an LLM-agent research testbed. Two heroes quest to end an endless
 winter; the second hero can be a human, an LLM agent, or absent (AI autopilot with
 a human spectator). PvE co-op is treated as a three-player coalition game — hero,
 partner, dungeon — and the roadmap heads toward mixed-motive / hidden-utility
-partner experiments. Keep both natures in mind: it is a *game a teenager loves*
+partner experiments. Keep both natures in mind: it is a *game people love to play*
 and a *benchmark harness*. Never sacrifice the first for the second.
 
 ## Commands
@@ -122,8 +122,8 @@ is opt-in.
 
 ## Iron rules
 
-1. **The classic quest is canon and canon is guarded by tests.** The QA Lead cleared it;
-   it stays exactly as he knows it. World growth is open-closed: add side wings,
+1. **The classic quest is canon and canon is guarded by tests.** The first playtester cleared it;
+ it stays exactly as they know it. World growth is open-closed: add side wings,
    optional bosses (Emberdeep), new modes — never edit the classic path. Canon
    changes require explicit tester consensus and a comment in the guarding test
    naming who agreed (see the wraith-enrage precedent in selftest).
@@ -1055,7 +1055,7 @@ agentic-AI advocacy at work. Russian for discussion, English for code and docs.
 Prefers open-closed design, composable Lego-style architecture, honest metrics,
 staged refactorings where every stage ships a working game. He builds locally
 in Docker and deploys dist/ to a DGX (Tailscale) that friends and family play
-on — never break trunk: testers include his son, his wife, and friends abroad.
+on — never break trunk: testers include family and friends abroad.
 Feedback arrives as Telegram screenshots; treat tester reports as tickets and
 close them with tests. Build ids and assertion counts are the shared language
 of verification.

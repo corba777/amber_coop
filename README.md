@@ -2,7 +2,7 @@
   <img src="images/readme-header.png" alt="The Amber Blade — co-op Zelda-like · LLM partner · betrayal bench" width="920"/>
 </p>
 
-<p align="center"><em>a game a teenager loves — and a bench for when trust breaks</em></p>
+<p align="center"><em>a game people finish in five minutes — and a bench for when trust breaks</em></p>
 
 <p align="center">
   <strong>Co-op Zelda-like where player 2 can be an LLM.</strong>
@@ -36,11 +36,11 @@ sword, bow, temperament, and a visible one-line rationale. You can also watch
 two models quest together, or send one alone into the dungeon while you
 spectate.
 
-It began as a father's gift to his son. Then the son cleared it in five
-minutes, the world grew side wings and optional bosses, friends across the
-ocean started filing latency tickets, and the LLM partner learned to quest
-alone — and, when you ask it to, to keep a secret. It is still a game a
-teenager loves. It is also, quietly, a testbed for questions like *"can a
+It began as a weekend co-op project. The first playtester cleared the classic
+quest in five minutes, the world grew side wings and optional bosses, friends
+across the ocean started filing latency tickets, and the LLM partner learned to
+quest alone — and, when you ask it to, to keep a secret. It is still a game
+meant to be played. It is also, quietly, a testbed for questions like *"can a
 small model beat a dungeon without a human?"*, *"what does trusting an AI
 teammate feel like?"*, and *"when does that trust break?"*
 
@@ -219,8 +219,6 @@ engineering map and roadmap.
 ## Credits
 
 Design & code: Artem Zvyagintsev, with an AI pair (Claude).
-QA Lead: the author's son, who cleared the classic quest before it had a name
-for its difficulty and whose canon the tests guard.
 QA and Contributor: [Alexey Belozerov](https://github.com/abelozerov) — playtesting across
 the ocean, latency reports, and the agent-combat tickets that became tests.
 Playtesters: family and friends who filed every ticket in this changelog.

@@ -478,7 +478,7 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 12. team keys
 {
-  console.log("[12] partner-held key opens the door (QA Lead's bug)");
+  console.log("[12] partner-held key opens the door (first-playtester bug)");
   const core = await import("../shared/core");
   const g = freshPlay();
   core.loadRoom(g, 4, 7.5 * TILE, 2 * TILE);   // guard room, near the top door
@@ -949,7 +949,7 @@ function freshPlay(): Game {
 
 // ------------------------------------------------- 19. message word-wrap
 {
-  console.log("[19] long riddles wrap instead of running off-screen (QA Lead's bug)");
+  console.log("[19] long riddles wrap instead of running off-screen (first-playtester bug)");
   const { wrapText } = await import("../client/textutil");
   // canvas-free mock: 5px per character, like a tiny monospace font
   const fakeCtx = { measureText: (s: string) => ({ width: s.length * 5 }) };
