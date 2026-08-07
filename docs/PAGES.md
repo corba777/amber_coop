@@ -6,4 +6,4 @@
 4. **Branch:** `main` / folder **`/docs`**.
 5. Save. Site URL: `https://corba777.github.io/amber_coop/`
 
-Essay path: `/betrayal-shows-up-late/`
+Essay path: `/betrayal-shows-up-late-n/`

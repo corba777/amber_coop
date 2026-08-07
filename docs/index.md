@@ -11,7 +11,7 @@ title: Home
 
 ### Essay
 
-**[Two AI Agents, One Dungeon, One Knife]({{ '/betrayal-shows-up-late/' | relative_url }})**  
+**[Two AI Agents, One Dungeon, One Knife]({{ '/betrayal-shows-up-late-n/' | relative_url }})**  
 *A Google paper says AI agents converge on cooperation. In this dungeon, some of them take the knife instead.* — August 2026
 
 ### Links

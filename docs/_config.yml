@@ -12,7 +12,7 @@ plugins:
   - jekyll-seo-tag
 
 header_pages:
-  - betrayal-shows-up-late.md
+  - betrayal-shows-up-late-n.md
   - research/index.md
 
 # Keep long research notes as GitHub blobs (linked from research/index.md),
