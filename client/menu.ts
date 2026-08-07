@@ -132,7 +132,7 @@ function temperamentOptions(): MenuOption[] {
 function speechOptions(): MenuOption[] {
   return [
     { label: "STANDARD", ok: true, hint: "default English quips in say / why" },
-    { label: "RAW RUSSIAN (16+)", ok: true, hint: "idiomatic 16+ Russian in say + why" },
+    { label: "PROFANE RUSSIAN (16+)", ok: true, hint: "мат / swear-heavy Russian in say + why" },
   ];
 }
 

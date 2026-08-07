@@ -712,7 +712,7 @@ function freshPlay(): Game {
        `${file}: autopilot and AI duo paths present`);
     ok(src.includes("HUMAN + AI"), `${file}: human + AI party option present`);
     ok(src.includes("THE ARCHITECT"), `${file}: architect toggle stub on quest screen`);
-    ok(src.includes("RAW RUSSIAN") && src.includes("STANDARD"),
+    ok(src.includes("PROFANE RUSSIAN") && src.includes("STANDARD"),
        `${file}: speech profile step present`);
     ok(src.includes("speech:") && src.includes("speech2:"),
        `${file}: setup carries speech / speech2`);
@@ -7938,7 +7938,7 @@ function freshPlay(): Game {
      "pickSpeech defaults unknown/missing to standard");
   ok(!isSpeechProfile("pohuy") && !isSpeechProfile("raw-ru-full"),
      "upstream skill name / retired levels are not speech ids");
-  ok(isSpeechProfile("raw-ru"), "raw-ru is the single working raw profile");
+  ok(isSpeechProfile("raw-ru"), "raw-ru is the single working profane-ru profile");
 
   const std = compilePersona("companion", "standard");
   const raw = compilePersona("companion", "raw-ru");
@@ -8075,8 +8075,8 @@ function freshPlay(): Game {
   ok(menu.step === 3 && !menu.pickModel,
      "single-model provider skips model submenu");
   menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // companion temp
-  ok(menu.step === 4 && menuOptions(menu, providers).some(o => o.label.includes("RAW RUSSIAN")),
-     "after temperament, speech step shows RAW RUSSIAN option");
+  ok(menu.step === 4 && menuOptions(menu, providers).some(o => o.label.includes("PROFANE RUSSIAN")),
+     "after temperament, speech step shows PROFANE RUSSIAN option");
   menu.idx = 1; menuConfirm(menu, providers, send, () => {}); // raw-ru
   ok(menu.step === 8, "after speech, autopilot reaches quest");
   menu.idx = 0; menuConfirm(menu, providers, send, () => {}); // classic

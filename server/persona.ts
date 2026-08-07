@@ -18,7 +18,7 @@ export type SpeechProfile = (typeof SPEECH_PROFILES)[number];
 
 export const SPEECH_LABELS: Record<SpeechProfile, string> = {
   standard: "STANDARD",
-  "raw-ru": "RAW RUSSIAN (16+)",
+  "raw-ru": "PROFANE RUSSIAN (16+)",
 };
 
 export type PersonaRole =

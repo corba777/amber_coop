@@ -25,7 +25,7 @@
   <a href="#benchmark">Benchmark</a> ·
   <a href="docs/research/">Research</a> ·
   <a href="reports/">Farm reports</a> ·
-  <a href="https://www.youtube.com/watch?v=9anI3ezSaKo">Gameplay</a>
+  <a href="https://youtu.be/3agajhDuVR8">Gameplay</a>
 </p>
 
 ---
@@ -47,11 +47,11 @@ teammate feel like?"*, and *"when does that trust break?"*
 Two LLM heroes questing together while a human spectates — click a screenshot
 to watch the gameplay video:
 
-[![AI DUO spectator view — two LLM heroes, hearts and thought panel](images/screenshot-1.png)](https://www.youtube.com/watch?v=9anI3ezSaKo)
+[![AI DUO spectator view — two LLM heroes, hearts and thought panel](images/screenshot-1.png)](https://youtu.be/3agajhDuVR8)
 
-[![The duo talks the golem fight through — speech bubbles and plan panel](images/screenshot-2.png)](https://www.youtube.com/watch?v=9anI3ezSaKo)
+[![The duo talks the golem fight through — speech bubbles and plan panel](images/screenshot-2.png)](https://youtu.be/3agajhDuVR8)
 
-▶ **[Watch gameplay on YouTube](https://www.youtube.com/watch?v=9anI3ezSaKo)**
+▶ **[Watch gameplay on YouTube](https://youtu.be/3agajhDuVR8)**
 
 ```
 browser P1 ──ws──┐
@@ -85,7 +85,7 @@ browser P2 ──ws──┘        │
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
   agent joins fights, how close it sticks, and how it weighs rescue and mercy
   decisions. After temperament, pick a **speech**
-  profile (STANDARD, or opt-in RAW RUSSIAN 16+) — it shapes both `say`
+  profile (STANDARD, or opt-in PROFANE RUSSIAN 16+) — it shapes both `say`
   and cover `why`; JSON actions stay English. AI+AI picks speech
   independently per hero.
 - **Thought panel** — the agent's plan and public `why` sit in a strip **below**

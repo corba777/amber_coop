@@ -18,4 +18,4 @@ title: Home
 
 - [GitHub repository](https://github.com/corba777/amber_coop) (MIT)
 - [Research notes]({{ '/research/' | relative_url }})
-- [Gameplay video](https://www.youtube.com/watch?v=9anI3ezSaKo)
+- [Gameplay video](https://youtu.be/3agajhDuVR8)

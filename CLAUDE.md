@@ -110,15 +110,16 @@ test/selftest.ts    the whole safety net (1294 assertions as of last trunk).
 ```
 
 Speech profiles (Persona Composer): menu step after temperament selects
-`standard` | `raw-ru` per AI slot (AI+AI independent). One working raw profile
-(author Artem 2026-07-20 — LITE/FULL/ULTRA collapsed to a single `raw-ru`; the
-tiered overlays mostly produced English anyway). The raw overlay FORCES Russian
-in `say`+`why` and explicitly reframes the upstream skill's "keep public text
-clean" rule — in-game `say`/`why` ARE the chat, not code — which was the cause
-of the English fallback. Identities live in `persona/modules/`; live addenda
-still append in `server/agent.ts`. Telemetry: `personas.jsonl` +
-`speech1`/`speech2` in matches. Menu never names the upstream skill; 16+ Russian
-is opt-in.
+`standard` | `raw-ru` per AI slot (AI+AI independent). Menu label
+**PROFANE RUSSIAN (16+)** — wire id stays `raw-ru` for logs/SPEECH=. One
+working profane profile (author Artem 2026-07-20 — LITE/FULL/ULTRA collapsed
+to a single `raw-ru`; the tiered overlays mostly produced English anyway). The
+profane overlay FORCES Russian in `say`+`why` (мат register) and
+reframes the upstream skill's "keep public text clean" rule — in-game
+`say`/`why` ARE the chat, not code — which was the cause of the English
+fallback. Identities live in `persona/modules/`; live addenda still append in
+`server/agent.ts`. Telemetry: `personas.jsonl` + `speech1`/`speech2` in matches.
+Menu never names the upstream skill; 16+ Russian is opt-in.
 
 ## Iron rules
 
