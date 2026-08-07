@@ -3,8 +3,7 @@ description: Co-op Zelda-like where your partner can be an LLM — and a bench f
 url: "https://corba777.github.io"
 baseurl: "/amber_coop"
 
-author:
-  name: Artem Zvyagintsev
+author: Artem Zvyagintsev
 
 theme: minima
 
@@ -12,7 +11,7 @@ plugins:
   - jekyll-seo-tag
 
 header_pages:
-  - betrayal-shows-up-late-n.md
+  - betrayal-shows-up-late.md
   - research/index.md
 
 # Keep long research notes as GitHub blobs (linked from research/index.md),
