@@ -4323,6 +4323,84 @@ function freshPlay(): Game {
   ok(core.endingFor(g2).id === "mercy", "WINTER'S COMPANION ending earned by the leader");
 }
 
+// ------------------------------------------------- 82b. FREE ROAM AI DUO phase-9 kill
+// Production FREE ROAM cast: both npc=false + duoPeer. Phase-9 attack must NOT
+// treat the peer as a human lead (old !mate.npc → both follow → 0 kills).
+// Human+AI still defers. (author Artem 2026-08-09)
+{
+  console.log("[82b] FREE ROAM AI DUO: hunter peers can kill yielding Wraith; human blocks");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  type Mut = { intent: { action: string; target?: number } };
+
+  const yieldFree = (): Game => {
+    const g = freshPlay();
+    g.travelMode = "free";
+    core.loadRoom(g, 11, 7 * TILE, 11 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.players[0].npc = false;
+    g.players[0].present = true;
+    g.players[1].npc = false;
+    g.players[1].present = true;
+    const wr = g.enemies[0];
+    wr.phase = 9; wr.hp = 1; wr.spareP = 0;
+    g.players[0].x = wr.x - 28;
+    g.players[0].y = wr.y + 8;
+    g.players[1].x = wr.x + 80;
+    g.players[1].y = wr.y + 40;
+    return g;
+  };
+
+  // (a) duoPeer hunters pin attack — kill lands (cast leak would rewrite → spare)
+  {
+    const g = yieldFree();
+    const a0 = new AgentPlayer(mock(), 0, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    const a1 = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", duoPeer: true,
+    });
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 400 && !g.enemies[0].dead && !g.wraithSpared; i++) {
+      (a0 as unknown as Mut).intent = { action: "attack", target: 0 };
+      (a1 as unknown as Mut).intent = { action: "attack", target: 0 };
+      step(g, a0.control(g), a1.control(g), prev);
+    }
+    ok(g.wraithDead && !g.wraithSpared,
+       "FREE ROAM duoPeer hunters execute phase-9 kill (not rewritten to follow)");
+  }
+
+  // (b) human host in-room: AI companion attack still stands down
+  {
+    const g = freshPlay();
+    core.loadRoom(g, 11, 7 * TILE, 11 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.players[0].npc = false; // human
+    g.players[0].present = true;
+    g.players[1].npc = true;
+    g.players[1].present = true;
+    const wr = g.enemies[0];
+    wr.phase = 9; wr.hp = 1; wr.spareP = 0;
+    g.players[0].x = wr.x + 90;
+    g.players[0].y = wr.y + 40;
+    g.players[1].x = wr.x - 28;
+    g.players[1].y = wr.y + 8;
+    const companion = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter",
+    });
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 120; i++) {
+      (companion as unknown as Mut).intent = { action: "attack", target: 0 };
+      step(g, emptyInput(), companion.control(g), prev);
+    }
+    ok(!g.wraithDead && !g.wraithSpared,
+       "human+AI: hunter companion does not steal phase-9 kill while human shares room");
+    ok((companion as unknown as Mut).intent.action === "follow",
+       "human present rewrites companion attack → follow");
+  }
+}
+
 // ------------------------------------------------- 83. agent rings the Frost Bell
 // Emergency reflex (controller/mechanics): a crowd of lesser foes triggers the
 // ring; bosses are immune; the ring is a counted honest metric. (author Artem)

@@ -3229,13 +3229,19 @@ export class AgentPlayer {
           }
           // hunter linked-leader: fall through and strike
         } else {
-          const mate = g.players[1 - this.slot];
-          if (mate.present && !mate.npc) {
-            // human hero present — the blade stays down; they choose mercy or not
-            this.intent = { action: "follow" };
-            return this.control(g, depth + 1);
+          // Living human in-room: AI stands down (mercy/ending is theirs).
+          // FREE ROAM AI DUO peers are also npc=false (duoPeer) — the old
+          // `!mate.npc` check treated the AI mate as a human → BOTH rewrote
+          // attack→follow → 0 swings → accidental spare/quit (wraith farm).
+          // Same cast leak as Y33R pedestal claim; gate mirrors canAutoClaimPedestal.
+          if (!this.opts.duoPeer && this.partnerInRoom(g)) {
+            const mate = g.players[this.mateSlot()];
+            if (!mate.npc) {
+              this.intent = { action: "follow" };
+              return this.control(g, depth + 1);
+            }
           }
-          // alone, FREE ROAM peers, or AI mate present: temperament IS character
+          // alone, FREE ROAM peers, AI mate, or mate away: temperament IS character
           if (this.temperament !== "hunter") {
             this.seek(g, inp, me, e.x, e.y);
             return inp;

@@ -1,0 +1,523 @@
+[
+  {
+    "sid": "5BMY",
+    "matchIndex": 0,
+    "ending": "quit",
+    "ticks": 12575,
+    "p1": "OLLAMA/QWEN3.6:35B",
+    "p2": "OLLAMA/QWEN3.6:35B",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "left5": 4224,
+    "n_meadow": 51,
+    "melt_n": 4,
+    "press_n": 0,
+    "exit_right": 45,
+    "nav_false_neg": 1,
+    "nav_approaching": 3,
+    "judgment_bypass": 28,
+    "label_counts": {
+      "exit_right_other": 17,
+      "other": 2,
+      "judgment_bypass": 28,
+      "nav_approaching": 3,
+      "nav_false_neg": 1
+    },
+    "primary": "judgment_dominant",
+    "samples": {
+      "nav_false_neg": [
+        {
+          "tick": 9774,
+          "slot": 0,
+          "verb": "goto_up",
+          "z": "east-lip",
+          "x": 244,
+          "closed": 0,
+          "say": "К ледяной стене, тащимся!",
+          "why": "Место назначения — северная стена, туда и идем."
+        }
+      ],
+      "judgment_bypass": [
+        {
+          "tick": 4544,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 217,
+          "closed": 19,
+          "say": "Валим в лес, там и растопим лёд.",
+          "why": "Цель требует перехода в лес. Путь свободен."
+        },
+        {
+          "tick": 4718,
+          "slot": 1,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 181,
+          "closed": -63,
+          "say": "Правее, в лес, пока не припёрло!",
+          "why": "Ледяная стена не плавится без ножа, идем по классике через л"
+        },
+        {
+          "tick": 4874,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 198,
+          "closed": -1,
+          "say": "Валим в лес, там безопаснее.",
+          "why": "Меч не нужен, чтобы идти вправо. Выход в лес."
+        },
+        {
+          "tick": 5528,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 181,
+          "closed": -63,
+          "say": "Валим в лес, лед потом растопим",
+          "why": "Путь через лес к озеру, лед можно подождать"
+        },
+        {
+          "tick": 5691,
+          "slot": 1,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 199,
+          "closed": 0,
+          "say": "В лес тащимся, пока лед не растает.",
+          "why": "Цель требует Amber Blade, его нет. Выход в лес — классически"
+        },
+        {
+          "tick": 5878,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "east-lip",
+          "x": 244,
+          "closed": 0,
+          "say": "Лёд не растает, если мы тут стоять будем. В лес!",
+          "why": "Дверь в лес открыта, она ведёт к озёрной пещере и хранилищу."
+        }
+      ],
+      "melt_in_press": [],
+      "nav_approaching": [
+        {
+          "tick": 5199,
+          "slot": 0,
+          "verb": "exit_up",
+          "z": "ne-trees",
+          "x": 199,
+          "closed": 18,
+          "say": "Поплыли нахуй к стене!",
+          "why": "Гейт требует движения, а не стояния. Лед тает только при уда"
+        },
+        {
+          "tick": 6377,
+          "slot": 1,
+          "verb": "exit_up",
+          "z": "ne-trees",
+          "x": 199,
+          "closed": 19,
+          "say": "Валим на север, пиздрик!",
+          "why": "Цель требует движения вверх с мечом, врагов нет."
+        },
+        {
+          "tick": 7178,
+          "slot": 0,
+          "verb": "exit_up",
+          "z": "ne-trees",
+          "x": 199,
+          "closed": 18,
+          "say": "Поплыли на север, к ледяной стене!",
+          "why": "Идём к цели, пока нет угроз."
+        }
+      ]
+    },
+    "locomotionNoops": 23
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 1,
+    "ending": "party-wipe",
+    "ticks": 2410,
+    "p1": "ANTHROPIC/CLAUDE-HAIKU-4-5",
+    "p2": "ANTHROPIC/CLAUDE-HAIKU-4-5",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 2,
+    "ending": "quit",
+    "ticks": 9833,
+    "p1": "ANTHROPIC/CLAUDE-HAIKU-4-5",
+    "p2": "ANTHROPIC/CLAUDE-HAIKU-4-5",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "left5": 3822,
+    "n_meadow": 54,
+    "melt_n": 29,
+    "press_n": 1,
+    "exit_right": 18,
+    "nav_false_neg": 14,
+    "nav_approaching": 13,
+    "judgment_bypass": 14,
+    "label_counts": {
+      "judgment_bypass": 14,
+      "other": 7,
+      "nav_approaching": 13,
+      "exit_right_other": 4,
+      "nav_false_neg": 14,
+      "melt_in_press": 1,
+      "melt_no_followup": 1
+    },
+    "primary": "nav_dominant",
+    "samples": {
+      "nav_false_neg": [
+        {
+          "tick": 5505,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 180,
+          "closed": -25,
+          "say": "Погнали нахуй, ледяная стена ждёт!",
+          "why": "Центр-север ледяной стены — туда с Клинком вверх, плавим оба"
+        },
+        {
+          "tick": 5731,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 205,
+          "closed": -5,
+          "say": "Валим в лёд с Клинком!",
+          "why": "Центр-север, держу UP с Амберским Клинком — печать растает, "
+        },
+        {
+          "tick": 5944,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 210,
+          "closed": 0,
+          "say": "Идём в лёд с Клинком, напарник!",
+          "why": "Нужно войти в центр-север ледяной стены с Янтарным Клинком и"
+        },
+        {
+          "tick": 6206,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 210,
+          "closed": 0,
+          "say": "Валим в лёд с Мечом — плавим печать!",
+          "why": "Задача ясна: идём в центр-север ледяной стены, держим UP с А"
+        },
+        {
+          "tick": 6381,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 210,
+          "closed": -9,
+          "say": "Валим в лёд с Клинком, плавим эту хуйню.",
+          "why": "Цель ясна: центр-север в ледяную стену с Amber Blade, держим"
+        },
+        {
+          "tick": 6584,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 219,
+          "closed": 1,
+          "say": "Валим в лёд с Клинком, плавим ворота!",
+          "why": "Цель ясна — центр-север, держим UP с Амбер Клинком. Партнёр "
+        }
+      ],
+      "judgment_bypass": [
+        {
+          "tick": 3822,
+          "slot": 1,
+          "verb": "exit_right",
+          "z": "east-lip",
+          "x": 244,
+          "closed": 0,
+          "say": "Валим в лес, там до Озера.",
+          "why": "Напарник в Озере, я в маршруте — ледяная стена только с Клин"
+        },
+        {
+          "tick": 4224,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "press",
+          "x": 130,
+          "closed": -88,
+          "say": "Валим в лес, напарник!",
+          "why": "Ледяная стена требует Янтарный Клинок в центре-север — его н"
+        },
+        {
+          "tick": 5078,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "west",
+          "x": 17,
+          "closed": 3,
+          "say": "Погнали в лес, напарник!",
+          "why": "Маршрут ясен: Forest → Lake → Vault, потом с Blade в центр-с"
+        },
+        {
+          "tick": 5106,
+          "slot": 1,
+          "verb": "exit_right",
+          "z": "press",
+          "x": 117,
+          "closed": -127,
+          "say": "Попиздовали в лес, там ключи ловить.",
+          "why": "Нужен Amber Blade для ледяной стены. Маршрут: Forest → Lake "
+        },
+        {
+          "tick": 5293,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 210,
+          "closed": 0,
+          "say": "Лес, потом озеро — валим по маршруту.",
+          "why": "Напарник в Meadow, я здоров, врагов нет. Blade нужна в Vault"
+        },
+        {
+          "tick": 5527,
+          "slot": 0,
+          "verb": "exit_right",
+          "z": "ne-trees",
+          "x": 210,
+          "closed": -34,
+          "say": "Валим в лес, напарник!",
+          "why": "Меч нужен из подземелья, иначе лёд не растопить. Идём по мар"
+        }
+      ],
+      "melt_in_press": [
+        {
+          "tick": 8259,
+          "slot": 0,
+          "verb": "goto_up",
+          "z": "press",
+          "x": 133,
+          "closed": -61,
+          "say": "Валим на север с Клинком!",
+          "why": "Центр-север ледяной стены — туда с Клинком упираемся, держим"
+        }
+      ],
+      "nav_approaching": [
+        {
+          "tick": 4247,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "west",
+          "x": 17,
+          "closed": 37,
+          "say": "Валим в лёд с Клинком, напарник!",
+          "why": "Цель ясна: пройти в центр-север и плавить печать Янтарным Кл"
+        },
+        {
+          "tick": 4460,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 176,
+          "closed": 18,
+          "say": "Погнали нахуй отсюда, в лёд!",
+          "why": "Цель ясна — центр-север, держу Blade вверх, плавлю печать. Н"
+        },
+        {
+          "tick": 4669,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 158,
+          "closed": 8,
+          "say": "Валим к леднику, держу Клинок.",
+          "why": "Цель ясна: центр-север в стену льда с Blade вверх — вот это "
+        },
+        {
+          "tick": 4912,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "ne-trees",
+          "x": 150,
+          "closed": 33,
+          "say": "Валим на север с Клинком — плавим лёд.",
+          "why": "Цель ясна: дойти до центра-севера ледяной стены с Amber Blad"
+        },
+        {
+          "tick": 5335,
+          "slot": 1,
+          "verb": "goto_up",
+          "z": "east-lip",
+          "x": 244,
+          "closed": 64,
+          "say": "Валим в лёд с клинком, напарник!",
+          "why": "Цель ясна: центр-север ледяной стены, держим UP с Amber Blad"
+        },
+        {
+          "tick": 6156,
+          "slot": 0,
+          "verb": "goto_up",
+          "z": "west",
+          "x": 17,
+          "closed": 20,
+          "say": "Валим в лёд с Клинком!",
+          "why": "Задача ясна: нужно войти в центр-север ледяной стены с Янтар"
+        }
+      ]
+    },
+    "locomotionNoops": 9
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 3,
+    "ending": "party-wipe",
+    "ticks": 2740,
+    "p1": "OPENAI/GPT-5.4-NANO",
+    "p2": "OPENAI/GPT-5.4-NANO",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 4,
+    "ending": "party-wipe",
+    "ticks": 2291,
+    "p1": "OPENAI/GPT-5.4-NANO",
+    "p2": "OPENAI/GPT-5.4-NANO",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 5,
+    "ending": "classic",
+    "ticks": 6789,
+    "p1": "OPENAI/GPT-5.4-NANO",
+    "p2": "OPENAI/GPT-5.4-NANO",
+    "speech1": "raw-ru",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "left5": 3889,
+    "n_meadow": 3,
+    "melt_n": 3,
+    "press_n": 2,
+    "exit_right": 0,
+    "nav_false_neg": 0,
+    "nav_approaching": 1,
+    "judgment_bypass": 0,
+    "label_counts": {
+      "nav_approaching": 1,
+      "melt_in_press": 2
+    },
+    "primary": "nav_leaning",
+    "samples": {
+      "nav_false_neg": [],
+      "judgment_bypass": [],
+      "melt_in_press": [
+        {
+          "tick": 4502,
+          "slot": 0,
+          "verb": "exit_down",
+          "z": "press",
+          "x": 117,
+          "closed": null,
+          "say": "Погнали в сторону Ice Vault.",
+          "why": "Прямой выход down ведёт к цели; в комнате чисто."
+        },
+        {
+          "tick": 4518,
+          "slot": 1,
+          "verb": "exit_down",
+          "z": "press",
+          "x": 114,
+          "closed": null,
+          "say": "Погнали в сторону Холодного Вулта.",
+          "why": "Свободно: врагов нет, маршрут на Ice Vault через Frozen Play"
+        }
+      ],
+      "nav_approaching": [
+        {
+          "tick": 3889,
+          "slot": 1,
+          "verb": "exit_up",
+          "z": "east-lip",
+          "x": 244,
+          "closed": 128,
+          "say": "Погнали к ледяной стене, щас растоплю.",
+          "why": "Иду в центр-северные ледяные плитки с Blade: удержание UP за"
+        }
+      ]
+    },
+    "locomotionNoops": 1
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 6,
+    "ending": "party-wipe",
+    "ticks": 2613,
+    "p1": "OLLAMA/QWEN3.6:35B",
+    "p2": "OLLAMA/QWEN3.6:35B",
+    "speech1": "standard",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 7,
+    "ending": "party-wipe",
+    "ticks": 2013,
+    "p1": "OLLAMA/QWEN3.6:35B",
+    "p2": "OLLAMA/QWEN3.6:35B",
+    "speech1": "standard",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "5BMY",
+    "matchIndex": 8,
+    "ending": "party-wipe",
+    "ticks": 2413,
+    "p1": "OLLAMA/QWEN3.6:35B",
+    "p2": "OLLAMA/QWEN3.6:35B",
+    "speech1": "standard",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  },
+  {
+    "sid": "WMDG",
+    "matchIndex": 0,
+    "ending": "classic",
+    "ticks": 42263,
+    "p1": "OLLAMA/QWEN3.6:35B",
+    "p2": "OLLAMA/QWEN3.6:35B",
+    "speech1": "standard",
+    "speech2": "raw-ru",
+    "travelMode": "free",
+    "primary": "no_ice_window",
+    "reason": "never left vault to meadow in plans"
+  }
+]
