@@ -104,7 +104,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1294 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1315 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -325,6 +325,10 @@ temperaments. Coordination-dyad benchmark + substrate for the Architect triangle
   temperament decides mercy or the killing blow; the companion stands back even
   if it is a hunter. Controller fix: `opts.leader` bypasses the old
   `mate.present` defer that blocked duo leaders when the AI mate was present.
+- **FREE ROAM phase-9 kill** ([82b], author Artem 2026-08-09): FREE ROAM AI+AI
+  peers are both `npc=false` + `duoPeer`. Phase-9 attack must not treat the peer
+  as a human lead (old `!mate.npc` → both rewrite attack→follow → 0 kills in the
+  wraith farm). Gate mirrors `canAutoClaimPedestal` (Y33R); human+AI still defers.
 
 *Design notes.* **LINKED anchor deadlock:** with two NPCs and zero humans,
 leadership devolves to slot 0 — `npc=false` (may transition; LINKED drag
