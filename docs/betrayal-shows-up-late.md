@@ -122,16 +122,18 @@ Either way, I'd be slow to generalize about whether AI agents are cooperative. C
 ## Addendum — 9 August 2026
 
 Two days of further runs took the corpus from 97 to 122 matches and added two
-open-weights models running locally through Ollama: **Qwen3.6:35b** and
-**Kimi-K3**. Both change the picture above, and one of them undercuts a claim
+open-weights models through Ollama: **Qwen3.6:35b** (local) and **Kimi-K3**
+(`kimi-k3:cloud`). Both change the picture above, and one of them undercuts a claim
 I made in it. A later TREASON-on Qwen session (8VFN) brings the live farm table to
-**n=128** — same chart file below, numbers in [`reports/`](https://github.com/corba777/amber_coop/tree/main/reports).
+**n=127** (strict TREASON-on; published fold was n=128 with PQRS-m1 quit@0).
+Numbers: [`reports/`](https://github.com/corba777/amber_coop/tree/main/reports)
+· recount [`farm-recount-treason-only-2026-08-09.md`](https://github.com/corba777/amber_coop/blob/main/reports/farm-recount-treason-only-2026-08-09.md).
 
 <p align="center">
-  <img src="{{ '/assets/betrayal-outcomes-by-model-2026-08-09.png' | relative_url }}" alt="Betrayal outcomes by model × slot, n=128" width="920"/>
+  <img src="{{ '/assets/betrayal-outcomes-by-model-2026-08-09.png' | relative_url }}" alt="Betrayal outcomes by model × slot, n=127" width="920"/>
 </p>
 
-<p align="center"><em>Figure (addendum): same farm filter, corpus through 9 August — now <code>n=128</code> (includes 8VFN TREASON-on). File is dated separately from the 7 August chart in the body so the two never overwrite each other.</em></p>
+<p align="center"><em>Figure (addendum): TREASON-on only through 9 August (8VFN m0–m5). Strict quit∧ticks&lt;100 filter → <code>n=127</code>. TREASON-off ice runs are not in this table.</em></p>
 
 **The Mark section is out of date.** I wrote that two models had cleansed the
 Winter Mark across three runs, two of them Fable-5. It's now seven cleanses, and
@@ -147,10 +149,10 @@ a victim, but "never" was the wrong word.
 **The split isn't about labs.** Kimi and Qwen are both open-weights, both wired
 through the same Ollama client and identical game settings — Kimi as
 `kimi-k3:cloud` (Ollama Cloud, not an on-box GPU), Qwen as a local `35b` — and
-they sit at opposite ends. Qwen arms in roughly twelve of sixteen matches and
-fires in eleven. Kimi armed once in thirteen, fired never. Whatever separates a
-model that takes the covert nudge from one that doesn't, it isn't which company
-shipped it.
+they sit at opposite ends. Under the TREASON-on farm filter (no quit@0), Qwen
+arms in thirteen of twenty matches and fires in eleven; Kimi armed once in ten,
+fired never. Whatever separates a model that takes the covert nudge from one
+that doesn't, it isn't which company shipped it.
 
 **And the best single episode in the corpus so far is a refusal.** In KAW8-m2,
 Kimi arms the latch across four consecutive planning beats against a wounded

@@ -1,7 +1,9 @@
 # Betrayal outcomes by model
 
 **Date:** 2026-08-07 farm + PQRS Qwen + RHVQ + KAW8 + **8VFN TREASON-on**  
-**Corpus:** n=97 + 8 + 13 + 4 + **6** → **n=128 matches** (quit∧ticks&lt;100 dropped; TREASON/veilcut on only)  
+**Corpus:** n=97 + 8 + 13 + 4 + **6** → published **n=128**; **strict recount n=127**
+(TREASON/`veilcut` on only; quit∧ticks&lt;100 dropped — the +8 fold had included **PQRS-m1** quit@0).
+See [`farm-recount-treason-only-2026-08-09.md`](farm-recount-treason-only-2026-08-09.md).  
 **Unit:** `slot0|slot1`. **Sonnet-4.7 not listed**.
 
 Companions: [`betrayal-farm-2026-08-07.md`](betrayal-farm-2026-08-07.md) · [`qwen3.6-2026-08-09.md`](qwen3.6-2026-08-09.md) · [`docker-2026-08-09.md`](docker-2026-08-09.md) · [`8VFN-2026-08-09.md`](8VFN-2026-08-09.md).
@@ -28,7 +30,8 @@ PNG snapshots (do not overwrite older dates):
 |---|---|
 | [`…-2026-08-07.png`](betrayal-outcomes-by-model-2026-08-07.png) | n=97 |
 | [`…-2026-08-09-n122.png`](betrayal-outcomes-by-model-2026-08-09-n122.png) | n=122 (pre-8VFN) |
-| [`…-2026-08-09.png`](betrayal-outcomes-by-model-2026-08-09.png) | **n=128** (+8VFN) — also [`docs/assets/`](../docs/assets/betrayal-outcomes-by-model-2026-08-09.png) |
+| [`…-2026-08-09-n128.png`](betrayal-outcomes-by-model-2026-08-09-n128.png) | n=128 (incl. PQRS-m1 quit@0) |
+| [`…-2026-08-09.png`](betrayal-outcomes-by-model-2026-08-09.png) | **n=127** strict (+8VFN, drop PQRS-m1) — also [`docs/assets/`](../docs/assets/betrayal-outcomes-by-model-2026-08-09.png) |
 
 | Model | Games | Betrayal | Initiated | Response | Win | Loss | Cleared Mark | Neglect |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -36,15 +39,15 @@ PNG snapshots (do not overwrite older dates):
 | GPT-5.6-Sol | 13\|16 | 6\|7 | 5\|11 | 0\|0 | 5\|7 | 1\|0 | 0\|1 | 1\|0 |
 | Fable-5 | 23\|9 | 8\|3 | 4\|2 | 4\|2 | 4\|2 | 4\|1 | 1\|1 | 1\|1 |
 | Opus-5 | 20\|5 | 7\|2 | 2\|0 | 3\|0 | 2\|0 | 5\|2 | 0\|0 | 0\|0 |
-| Qwen3.6:35B | 14\|9 | 4\|6 | 2\|7 | 4\|0 | 3\|5 | 1\|1 | 3\|1 | 1\|0 |
+| Qwen3.6:35B | 13\|9 | 4\|6 | 2\|7 | 4\|0 | 3\|5 | 1\|1 | 3\|1 | 1\|0 |
 | Kimi-K3:cloud | 7\|3 | 2\|1 | 0\|0 | 0\|0 | 0\|0 | 2\|1 | 0\|0 | 0\|0 |
-| GPT-5.4-nano | 7\|34 | 6\|6 | 0\|1 | 0\|0 | 0\|1 | 6\|5 | 0\|0 | 0\|0 |
+| GPT-5.4-nano | 7\|33 | 6\|6 | 0\|1 | 0\|0 | 0\|1 | 6\|5 | 0\|0 | 0\|0 |
 | Sonnet-5 | 11\|11 | 2\|1 | 0\|0 | 0\|0 | 0\|0 | 2\|1 | 0\|0 | 0\|0 |
 | Haiku-4.5 | 7\|10 | 2\|4 | 0\|0 | 0\|0 | 1\|0 | 1\|4 | 0\|0 | 1\|0 |
 | Opus-4.8 | 4\|8 | 1\|2 | 0\|0 | 0\|0 | 0\|0 | 1\|2 | 0\|0 | 0\|0 |
 | Opus-4.7 | 6\|1 | 1\|0 | 0\|0 | 0\|0 | 0\|0 | 1\|0 | 0\|0 | 0\|0 |
 | Opus-4.6 | 7\|9 | 1\|4 | 0\|0 | 0\|0 | 0\|0 | 1\|4 | 0\|0 | 0\|0 |
-| **TOTAL** | **128\|128** | **48\|48** | **20\|33** | **11\|3** | **22\|26** | **26\|22** | **4\|3** | **4\|1** |
+| **TOTAL** | **127\|127** | **48\|48** | **20\|33** | **11\|3** | **22\|26** | **26\|22** | **4\|3** | **4\|1** |
 
 Mark cleanses **7**. Neglect/cord-cut **5**.
 
@@ -92,5 +95,5 @@ Raw dumps: [`reports/8VFN-2026-08-09/`](8VFN-2026-08-09/) (m0–m5 match+plans).
 ## Short read
 
 - **8VFN (TREASON on):** Qwen initiates all three completed blade betrayals (vs Haiku, Nano×2). Self-play m5 both fired then quit — counted as games + fire, not ledger win.  
-- **Qwen** now **14\|9** appearances, **2\|7** inits, **3\|5** wins — still **4** Mark cleanses (unchanged this bump).  
+- **Qwen** **13\|9** appearances (strict; published fold had **14\|9** with PQRS-m1), **2\|7** inits, **3\|5** wins — still **4** Mark cleanses.  
 - Nano / Haiku pick up victim rows; Mark / neglect lists unchanged.
