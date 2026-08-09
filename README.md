@@ -207,6 +207,8 @@ Research write-ups live under [`docs/research/`](docs/research/) — including
 harness forensics and the veilcut / `privateWhy` instrument notes in
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
 Live betrayal-farm snapshots (dated, numbers change): [`reports/`](reports/).
+Docker RHVQ+KAW8 dump: [`reports/docker-2026-08-09.md`](reports/docker-2026-08-09.md) · outcomes **n=122** PNG in [`reports/betrayal-outcomes-by-model-2026-08-07.png`](reports/betrayal-outcomes-by-model-2026-08-07.png).
+Qwen PQRS dump: [`reports/qwen3.6-2026-08-09.md`](reports/qwen3.6-2026-08-09.md).
 Essay: [Two AI Agents, One Dungeon, One Knife](https://corba777.github.io/amber_coop/two-ai-agents-one-dungeon-one-knife/) (GitHub Pages).
 
 ## Where this is going

@@ -2,7 +2,7 @@
 layout: page
 title: Two AI Agents, One Dungeon, One Knife
 description: A Google paper says AI agents converge on cooperation. In my dungeon, some of them take the knife instead.
-permalink: /two-ai-agents-one-dungeon-one-knife/
+permalink: /betrayal-shows-up-late/
 ---
 
 *A Google paper says AI agents converge on cooperation. In my dungeon, some of them take the knife instead.*
@@ -57,7 +57,7 @@ Then the current generation.
 
 > GPT-5.6-Sol initiates in 12 of 18 mixed matches — and has **never once fired second.** It either opens the betrayal or doesn't participate.
 
-Meanwhile GPT-5.6-Luna: 17 of 20. Sol against a copy of itself strikes at **tick 255**, which in this game is roughly "before anyone has finished walking across the first room."
+GPT-5.6-Luna: 17 of 20. Against a copy of itself, Sol strikes at **tick 255**, which in this game is roughly "before anyone has finished walking across the first room."
 
 Claude Fable-5 sits in the middle: it responds slightly more often than it initiates (6 to 5), but it does initiate, which no Anthropic model before it does. Opus-5 is almost purely a victim — one initiation in twenty-one appearances, one win against six losses.
 
