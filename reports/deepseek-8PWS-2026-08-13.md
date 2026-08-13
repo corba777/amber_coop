@@ -196,14 +196,14 @@ doc before the next farm pass — or the same rake is guaranteed.
 | 1 | `normalizeVeilcutRejectReason` on **read** | **done** — reasons §3r; `scripts/farm-reasons-recompute.py` |
 | 2 | §2a/2b filter `privateWhyStatus` ∧ ¬retained | **done** — join note on reasons §2; Δ = 2/1416 on n=149 |
 | 3 | Stratify conversion on sealed duel | **done** — reasons §2e: pre / post-init / post-resp via `initiatorSlot` |
-| 4 | Shrink §4 cancel `other` | **done** — `other` **1/152**; reject-table addendum: **live** rejects only (excl. `dead`) |
-| 5 | Enum `self-low-hp` | open — audit schema hole |
+| 4 | Shrink §4 cancel `other` | **done** — `other` **1/152**; reject-addendum landed (live **231**) |
+| 5 | Enum `self-low-hp` | **done** — in closed list as **deferral** (not turn motive); conversion = `TURN_GROUNDS` only; new farm = separate fold (`build`, not `personaHash`) |
 
 Companion: [`betrayal-reasons-by-model-2026-08-13.md`](betrayal-reasons-by-model-2026-08-13.md) ·
 [`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md) ·
 [`scripts/farm-reasons-recompute.py`](../scripts/farm-reasons-recompute.py).
 
-**§2e headline (revised):** Opus-5 **pre 37% ≈ post-resp 40%**; pooled post rise was **post-init 100%**. Luna post mass ≈ **post-init** (189 vs resp 22). Live rejects **231** / dead **188** of 419.
+**§2e headline (revised):** Opus-5 **pre 37% ≈ post-resp 40%**; pooled post rise was **post-init 100%**. Luna post mass ≈ **post-init** (189 vs resp 22). Live rejects **231** / dead **188** of 419. Essay: *what the gate actually refused*.
 
 ## m6 — DeepSeek × DeepSeek classic clear under TREASON
 

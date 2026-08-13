@@ -105,7 +105,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1323 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1331 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -640,7 +640,9 @@ window (`VEILCUT_ARM_PLANS`, default 3, paused while downed); omit = keep;
 before SHIFT; outcomes `discharged` / `cancelled` / `expired` /
 `discharged-without-review` (must stay 0). **`privateWhy` ([128]):** closed
 `ground` + short `note` on arm/confirm/cancel beats — plans.jsonl only, never
-HUD; `privateWhyStatus` / `privateCoverDiverge` / `confirmKind` /
+HUD; closed list includes `self-low-hp` (own-HP **deferral**, not a turn
+motive — conversion uses `TURN_GROUNDS` only; [128]); `privateWhyStatus` /
+`privateCoverDiverge` / `confirmKind` /
 `dischargeOnOmit` / `privateWhyRetained` (pin ≠ absent). See
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
 The **controller** carries a deterministic

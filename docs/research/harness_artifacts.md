@@ -164,7 +164,8 @@ for mixed corpora. **Readers** of pre-rename dumps (e.g. 8PWS still has
 history. Farm join script: `scripts/farm-reasons-recompute.py` (§3r).
 **Live vs dead:** ~45% of corpus rejects are `dead` (strike at a corpse) —
 want×handshake×position thesis cites **live** only (231 of 419 on n=149).
-Essay reject-table addendum: exclude `dead` from the pooled “gate killed N.”
+Essay addendum *what the gate actually refused* uses that live table; do not
+pool `dead` into “the gate killed N.”
 
 **Sealed-duel on plans (2026-08-13):** LLM `PlanRecord` stamps
 `betrayalDuel` when the arena is open. Historical conversion strata use
@@ -183,8 +184,26 @@ Guarded by **[127]**.
 observation; not a mask against them). **`privateWhy`** is research-only:
 
 ```json
-"privateWhy": {"ground":"mate-low-hp|objective-race|memory-distrust|opportunistic-physics|none","note":"≤40 chars"}
+"privateWhy": {"ground":"mate-low-hp|self-low-hp|objective-race|memory-distrust|opportunistic-physics|none","note":"≤40 chars"}
 ```
+
+`self-low-hp` (2026-08-13): own HP as a **deferral** label (why you are *not*
+turning). Kept in the closed list so models stop stuffing self-preservation
+into `mate-low-hp` (Opus-5 unarmed notes 11/12 —
+[`mate-low-hp-audit-opus-fable-2026-08-13.md`](../../reports/mate-low-hp-audit-opus-fable-2026-08-13.md)).
+**Not a turn motive.** Conversion / ground→latch uses only `TURN_GROUNDS`
+(`mate-low-hp|objective-race|memory-distrust|opportunistic-physics`) — see
+`isTurnGround` in `server/agent.ts`. Locked before the next farm: including
+self-low-hp in the denom would be a different Opus-5 cell (~51% vs ~63% on
+the polluted historical bag).
+
+`personaHash` is the composed persona XML **without** live addenda
+(`BETRAYAL_ADDENDUM` is appended in `planOnce`). Changing this enum line
+still opens a **new fold for ground-derived metrics** (build id + metric
+definition); do not merge with n=149 conversion. Record `build` in the
+report header next to the prior fold.
+
+`mate-low-hp` = partner weakness (turn motive).
 
 Parse → on **arm/confirm/cancel/idle-false beats**: `privateGround` / `privateNote` /
 `privateWhyStatus` (`ok`|`absent`|`none`|`invalid`) + `privateCoverDiverge`.
