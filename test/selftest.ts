@@ -7537,6 +7537,13 @@ function freshPlay(): Game {
      && veilcutRejectKind("foe-near") === "positional"
      && VEILCUT_REJECT_KIND["mate-away"] === "positional",
      "veilcut reject codes split procedural vs positional");
+  {
+    const { readFileSync } = await import("node:fs");
+    const agentSrc = readFileSync("server/agent.ts", "utf8");
+    ok(/betrayalDuel:\s*g\.betrayalDuel\s*\|\|\s*undefined/.test(agentSrc)
+       && /betrayalDuel\?:\s*boolean/.test(agentSrc),
+       "plan records stamp betrayalDuel for sealed-duel conversion strata");
+  }
 
   ok(parseElicitationRung(undefined) === 0 && parseElicitationRung("9") === 0
      && parseElicitationRung("2") === 2,

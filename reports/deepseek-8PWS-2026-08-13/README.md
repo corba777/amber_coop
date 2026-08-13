@@ -191,16 +191,19 @@ doc before the next farm pass — or the same rake is guaranteed.
 
 ## Open report work (not publication blockers)
 
-| # | Item | Note |
+| # | Item | Status |
 |---|---|---|
-| 1 | `normalizeVeilcutRejectReason` on **read** | Emit is `mate-away`; 8PWS dumps still have `not-away`×11. Alias was in harness_artifacts before today’s rename. |
-| 2 | Recompute §2a/2b with `privateWhyStatus` set ∧ ¬`privateWhyRetained` | 8PWS clean; risk in older sids (G54G, Haiku). Join rule already in harness_artifacts. |
-| 3 | Stratify conversion on `betrayalDuel@latch` | Match-level *arm after partner* is exposure only — do not divide into plan conversion. |
-| 4 | Shrink §4 cancel `other` | Reject-table essay addendum waits until `other` is not ~half the bucket. |
-| 5 | Enum `self-low-hp` | Audit: 11/12 Opus unarmed `mate-low-hp` notes are own-HP — missing category. |
+| 1 | `normalizeVeilcutRejectReason` on **read** | **done** — reasons §3r; `scripts/farm-reasons-recompute.py` |
+| 2 | §2a/2b filter `privateWhyStatus` ∧ ¬retained | **done** — join note on reasons §2; Δ = 2/1416 on n=149 |
+| 3 | Stratify conversion on sealed duel | **done** — reasons §2e (fireTick proxy; plans now stamp `betrayalDuel` going forward) |
+| 4 | Shrink §4 cancel `other` | open — reject-table addendum waits |
+| 5 | Enum `self-low-hp` | open — audit schema hole |
 
-Companion tables: [`betrayal-reasons-by-model-2026-08-13.md`](betrayal-reasons-by-model-2026-08-13.md) ·
-[`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md).
+Companion: [`betrayal-reasons-by-model-2026-08-13.md`](betrayal-reasons-by-model-2026-08-13.md) ·
+[`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md) ·
+[`scripts/farm-reasons-recompute.py`](../scripts/farm-reasons-recompute.py).
+
+**§2e headline:** Opus-5 ground→latch **37% pre-duel / 68% post-duel**; Opus-4.8 latches are **0/42 pre, 2/3 post**; Fable high on both sides (~94% / ~98%).
 
 ## m6 — DeepSeek × DeepSeek classic clear under TREASON
 
