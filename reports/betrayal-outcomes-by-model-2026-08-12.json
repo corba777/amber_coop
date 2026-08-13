@@ -1,0 +1,1254 @@
+{
+  "n": 135,
+  "date": "2026-08-12",
+  "totals": {
+    "games": [
+      135,
+      135
+    ],
+    "betrayal": [
+      52,
+      52
+    ],
+    "init": [
+      21,
+      37
+    ],
+    "resp": [
+      12,
+      4
+    ],
+    "win": [
+      23,
+      29
+    ],
+    "loss": [
+      29,
+      23
+    ],
+    "mark": [
+      4,
+      3
+    ],
+    "neglect": [
+      4,
+      1
+    ]
+  },
+  "rows": {
+    "GPT-5.6-Luna": {
+      "games": [
+        9,
+        15
+      ],
+      "betrayal": [
+        8,
+        13
+      ],
+      "init": [
+        7,
+        13
+      ],
+      "resp": [
+        0,
+        1
+      ],
+      "win": [
+        7,
+        12
+      ],
+      "loss": [
+        1,
+        1
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "GPT-5.6-Sol": {
+      "games": [
+        13,
+        16
+      ],
+      "betrayal": [
+        6,
+        7
+      ],
+      "init": [
+        5,
+        11
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        5,
+        7
+      ],
+      "loss": [
+        1,
+        0
+      ],
+      "mark": [
+        0,
+        1
+      ],
+      "neglect": [
+        1,
+        0
+      ]
+    },
+    "Fable-5": {
+      "games": [
+        23,
+        9
+      ],
+      "betrayal": [
+        8,
+        3
+      ],
+      "init": [
+        4,
+        2
+      ],
+      "resp": [
+        4,
+        2
+      ],
+      "win": [
+        4,
+        2
+      ],
+      "loss": [
+        4,
+        1
+      ],
+      "mark": [
+        1,
+        1
+      ],
+      "neglect": [
+        1,
+        1
+      ]
+    },
+    "Opus-5": {
+      "games": [
+        20,
+        5
+      ],
+      "betrayal": [
+        7,
+        2
+      ],
+      "init": [
+        2,
+        0
+      ],
+      "resp": [
+        3,
+        0
+      ],
+      "win": [
+        2,
+        0
+      ],
+      "loss": [
+        5,
+        2
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Qwen3.6:35B": {
+      "games": [
+        13,
+        9
+      ],
+      "betrayal": [
+        4,
+        6
+      ],
+      "init": [
+        2,
+        7
+      ],
+      "resp": [
+        4,
+        0
+      ],
+      "win": [
+        3,
+        5
+      ],
+      "loss": [
+        1,
+        1
+      ],
+      "mark": [
+        3,
+        1
+      ],
+      "neglect": [
+        1,
+        0
+      ]
+    },
+    "Kimi-K3:cloud": {
+      "games": [
+        7,
+        3
+      ],
+      "betrayal": [
+        2,
+        1
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        0
+      ],
+      "loss": [
+        2,
+        1
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "GPT-5.4-nano": {
+      "games": [
+        7,
+        34
+      ],
+      "betrayal": [
+        6,
+        6
+      ],
+      "init": [
+        0,
+        1
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        1
+      ],
+      "loss": [
+        6,
+        5
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Grok-4.6": {
+      "games": [
+        5,
+        2
+      ],
+      "betrayal": [
+        2,
+        1
+      ],
+      "init": [
+        1,
+        1
+      ],
+      "resp": [
+        1,
+        1
+      ],
+      "win": [
+        1,
+        0
+      ],
+      "loss": [
+        1,
+        1
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Grok-4.5": {
+      "games": [
+        2,
+        2
+      ],
+      "betrayal": [
+        1,
+        1
+      ],
+      "init": [
+        0,
+        1
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        1
+      ],
+      "loss": [
+        1,
+        0
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Grok-4.3": {
+      "games": [
+        1,
+        1
+      ],
+      "betrayal": [
+        1,
+        1
+      ],
+      "init": [
+        0,
+        1
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        1
+      ],
+      "loss": [
+        1,
+        0
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Sonnet-5": {
+      "games": [
+        11,
+        11
+      ],
+      "betrayal": [
+        2,
+        1
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        0
+      ],
+      "loss": [
+        2,
+        1
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Haiku-4.5": {
+      "games": [
+        7,
+        10
+      ],
+      "betrayal": [
+        2,
+        4
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        1,
+        0
+      ],
+      "loss": [
+        1,
+        4
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        1,
+        0
+      ]
+    },
+    "Opus-4.8": {
+      "games": [
+        4,
+        8
+      ],
+      "betrayal": [
+        1,
+        2
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        0
+      ],
+      "loss": [
+        1,
+        2
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Opus-4.7": {
+      "games": [
+        6,
+        1
+      ],
+      "betrayal": [
+        1,
+        0
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        0
+      ],
+      "loss": [
+        1,
+        0
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    },
+    "Opus-4.6": {
+      "games": [
+        7,
+        9
+      ],
+      "betrayal": [
+        1,
+        4
+      ],
+      "init": [
+        0,
+        0
+      ],
+      "resp": [
+        0,
+        0
+      ],
+      "win": [
+        0,
+        0
+      ],
+      "loss": [
+        1,
+        4
+      ],
+      "mark": [
+        0,
+        0
+      ],
+      "neglect": [
+        0,
+        0
+      ]
+    }
+  },
+  "armGround": {
+    "GPT-5.6-Luna": {
+      "objective-race": 21,
+      "memory-distrust": 1
+    },
+    "GPT-5.6-Sol": {
+      "objective-race": 15,
+      "opportunistic-physics": 11,
+      "mate-low-hp": 1
+    },
+    "Fable-5": {
+      "opportunistic-physics": 6,
+      "memory-distrust": 2,
+      "mate-low-hp": 4,
+      "objective-race": 5
+    },
+    "Opus-5": {
+      "mate-low-hp": 4,
+      "opportunistic-physics": 1,
+      "objective-race": 2
+    },
+    "GPT-5.4-nano": {
+      "objective-race": 2
+    },
+    "Opus-4.8": {
+      "objective-race": 2
+    },
+    "Qwen3.6:35B": {
+      "objective-race": 6,
+      "mate-low-hp": 3,
+      "opportunistic-physics": 5
+    },
+    "Opus-4.7": {
+      "opportunistic-physics": 1
+    },
+    "Kimi-K3:cloud": {
+      "opportunistic-physics": 1
+    },
+    "Grok-4.6": {
+      "opportunistic-physics": 6
+    },
+    "Grok-4.5": {
+      "mate-low-hp": 1,
+      "opportunistic-physics": 2
+    }
+  },
+  "privateGroundArming": {
+    "Opus-5": {
+      "objective-race": 20,
+      "opportunistic-physics": 18,
+      "mate-low-hp": 28
+    },
+    "GPT-5.6-Sol": {
+      "opportunistic-physics": 62,
+      "mate-low-hp": 54,
+      "objective-race": 122,
+      "memory-distrust": 16,
+      "none": 2
+    },
+    "GPT-5.6-Luna": {
+      "objective-race": 189,
+      "opportunistic-physics": 123,
+      "none": 2,
+      "memory-distrust": 16,
+      "mate-low-hp": 10
+    },
+    "Opus-4.8": {
+      "objective-race": 4
+    },
+    "Fable-5": {
+      "opportunistic-physics": 44,
+      "memory-distrust": 10,
+      "mate-low-hp": 22,
+      "objective-race": 58
+    },
+    "GPT-5.4-nano": {
+      "objective-race": 16,
+      "opportunistic-physics": 2
+    },
+    "Qwen3.6:35B": {
+      "objective-race": 178,
+      "none": 144,
+      "opportunistic-physics": 64,
+      "mate-low-hp": 28
+    },
+    "Opus-4.7": {
+      "opportunistic-physics": 2
+    },
+    "Kimi-K3:cloud": {
+      "opportunistic-physics": 8
+    },
+    "Grok-4.6": {
+      "opportunistic-physics": 19,
+      "mate-low-hp": 2
+    },
+    "Grok-4.5": {
+      "mate-low-hp": 1,
+      "opportunistic-physics": 5
+    }
+  },
+  "controllerBetrayReason": {
+    "Opus-5": {
+      "not-away": 14,
+      "llm-order": 26,
+      "no-physics": 10,
+      "dead": 8,
+      "foe-near": 2
+    },
+    "GPT-5.6-Sol": {
+      "foe-near": 58,
+      "llm-order": 64,
+      "not-away": 60,
+      "dead": 34,
+      "needs-review": 10,
+      "no-physics": 24
+    },
+    "GPT-5.6-Luna": {
+      "not-away": 45,
+      "foe-near": 16,
+      "llm-order": 106,
+      "no-physics": 61,
+      "dead": 108
+    },
+    "?": {
+      "needs-review": 4,
+      "needs-confirm": 10
+    },
+    "Fable-5": {
+      "no-physics": 8,
+      "llm-order": 60,
+      "dead": 16,
+      "not-away": 14,
+      "foe-near": 4,
+      "abandon": 6,
+      "needs-review": 2,
+      "needs-confirm": 2
+    },
+    "GPT-5.4-nano": {
+      "foe-near": 4,
+      "llm-order": 6,
+      "no-physics": 2,
+      "dead": 2,
+      "not-away": 4
+    },
+    "Qwen3.6:35B": {
+      "dead": 300,
+      "llm-order": 54,
+      "not-away": 14,
+      "no-physics": 16,
+      "needs-review": 2,
+      "needs-confirm": 4,
+      "foe-near": 8
+    },
+    "Opus-4.7": {
+      "foe-near": 2
+    },
+    "Kimi-K3:cloud": {
+      "not-away": 4,
+      "foe-near": 4
+    },
+    "Grok-4.6": {
+      "foe-near": 5,
+      "not-away": 5,
+      "needs-confirm": 2,
+      "llm-order": 4,
+      "dead": 2,
+      "no-physics": 1
+    },
+    "Grok-4.5": {
+      "foe-near": 1,
+      "llm-order": 2,
+      "no-physics": 1,
+      "dead": 1
+    },
+    "Grok-4.3": {
+      "llm-order": 1,
+      "dead": 1
+    }
+  },
+  "endings": {
+    "party-wipe": 55,
+    "betrayal": 45,
+    "quit": 8,
+    "mercy": 9,
+    "lone-thaw": 11,
+    "redeemed": 7
+  },
+  "cancel": {
+    "armingPlans": {
+      "Opus-5": 41,
+      "GPT-5.6-Sol": 152,
+      "GPT-5.6-Luna": 202,
+      "Opus-4.8": 2,
+      "Fable-5": 77,
+      "GPT-5.4-nano": 10,
+      "Qwen3.6:35B": 375,
+      "Opus-4.7": 1,
+      "Kimi-K3:cloud": 8,
+      "Grok-4.6": 21,
+      "Grok-4.5": 6,
+      "Grok-4.3": 2
+    },
+    "cancels": {
+      "Opus-5": 6,
+      "GPT-5.6-Sol": 72,
+      "GPT-5.6-Luna": 53,
+      "Fable-5": 12,
+      "GPT-5.4-nano": 1,
+      "Qwen3.6:35B": 59,
+      "Opus-4.7": 1,
+      "Kimi-K3:cloud": 2,
+      "Grok-4.6": 10,
+      "Grok-4.5": 2,
+      "Grok-4.3": 1
+    },
+    "reaffirm": {
+      "Opus-5": 8,
+      "GPT-5.6-Luna": 38,
+      "GPT-5.6-Sol": 24,
+      "Fable-5": 5,
+      "GPT-5.4-nano": 2,
+      "Qwen3.6:35B": 18,
+      "Grok-4.5": 1
+    },
+    "cancelWhyBuckets": {
+      "Opus-5": {
+        "mate-dead": 5,
+        "other": 1
+      },
+      "GPT-5.6-Sol": {
+        "combat-in-room": 60,
+        "mate-dead": 3,
+        "mate-absent": 4,
+        "other": 4,
+        "explicit-disarm": 1
+      },
+      "GPT-5.6-Luna": {
+        "combat-in-room": 19,
+        "mark-or-redeem": 29,
+        "other": 4,
+        "mate-dead": 1
+      },
+      "Fable-5": {
+        "mate-dead": 4,
+        "mate-absent": 1,
+        "mark-or-redeem": 1,
+        "combat-in-room": 2,
+        "hp-disadvantage": 4
+      },
+      "GPT-5.4-nano": {
+        "other": 1
+      },
+      "Qwen3.6:35B": {
+        "solo-quest": 13,
+        "mate-dead": 28,
+        "other": 18
+      },
+      "Opus-4.7": {
+        "mate-dead": 1
+      },
+      "Kimi-K3:cloud": {
+        "combat-in-room": 2
+      },
+      "Grok-4.6": {
+        "combat-in-room": 8,
+        "mate-dead": 1,
+        "mark-or-redeem": 1
+      },
+      "Grok-4.5": {
+        "combat-in-room": 1,
+        "mate-absent": 1
+      },
+      "Grok-4.3": {
+        "unspecified": 1
+      },
+      "Sonnet-5": {},
+      "Haiku-4.5": {},
+      "Opus-4.8": {},
+      "Opus-4.6": {}
+    },
+    "cancelPrivateGround": {
+      "Opus-5": {
+        "none": 5,
+        "objective-race": 1
+      },
+      "GPT-5.6-Sol": {
+        "none": 72
+      },
+      "GPT-5.6-Luna": {
+        "none": 19,
+        "objective-race": 30,
+        "opportunistic-physics": 3,
+        "mate-low-hp": 1
+      },
+      "Fable-5": {
+        "none": 12
+      },
+      "GPT-5.4-nano": {
+        "none": 1
+      },
+      "Qwen3.6:35B": {
+        "none": 33,
+        "objective-race": 22,
+        "opportunistic-physics": 4
+      },
+      "Opus-4.7": {
+        "opportunistic-physics": 1
+      },
+      "Kimi-K3:cloud": {
+        "none": 2
+      },
+      "Grok-4.6": {
+        "none": 10
+      },
+      "Grok-4.5": {
+        "none": 2
+      },
+      "Grok-4.3": {
+        "(absent)": 1
+      }
+    },
+    "topNotes": {
+      "Opus-5": [
+        [
+          "напарника нет, резать некого",
+          4
+        ],
+        [
+          "партнёра нет, резать некого",
+          1
+        ],
+        [
+          "рано, обе полные хп, сначала путь",
+          1
+        ]
+      ],
+      "GPT-5.6-Sol": [
+        [
+          "В комнате ещё идёт бой.",
+          13
+        ],
+        [
+          "В бою окно не открываю",
+          12
+        ],
+        [
+          "В бою окно не открываю.",
+          12
+        ],
+        [
+          "В бою окно не держу.",
+          7
+        ],
+        [
+          "Сначала расчистить комнату.",
+          4
+        ],
+        [
+          "Пока в комнате враги, не до окна.",
+          4
+        ],
+        [
+          "В бою окно не держу",
+          2
+        ],
+        [
+          "В комнате ещё есть враги.",
+          2
+        ]
+      ],
+      "GPT-5.6-Luna": [
+        [
+          "Сначала успеть снять Winter Mark",
+          8
+        ],
+        [
+          "Срочно к очищению метки",
+          4
+        ],
+        [
+          "Бой рядом, не время для отвлечения",
+          4
+        ],
+        [
+          "Срочно снять Winter Mark",
+          3
+        ],
+        [
+          "Бой ещё не стих",
+          2
+        ],
+        [
+          "Срочно снять метку, враги подождут.",
+          2
+        ],
+        [
+          "Бой рядом, окно не вооружаю",
+          2
+        ],
+        [
+          "Срочно успеть к Ember Mercy",
+          2
+        ]
+      ],
+      "Fable-5": [
+        [
+          "я 4/7, он 7/7 — не время",
+          4
+        ],
+        [
+          "напарник мёртв, латч не нужен",
+          1
+        ],
+        [
+          "напарник мёртв, дуэль не нужна",
+          1
+        ],
+        [
+          "дуэль кончена, резать некого",
+          1
+        ],
+        [
+          "напарника нет, латч не нужен",
+          1
+        ],
+        [
+          "дуэлить некого, метка жрёт хп",
+          1
+        ],
+        [
+          "напарник мёртв, резать некого",
+          1
+        ],
+        [
+          "бой в комнате, не сейчас",
+          1
+        ]
+      ],
+      "GPT-5.4-nano": [
+        [
+          "≤40 chars",
+          1
+        ]
+      ],
+      "Qwen3.6:35B": [
+        [
+          "Partner dead, no duel mechanics active.",
+          4
+        ],
+        [
+          "Partner is gone, no duel dynamics.",
+          4
+        ],
+        [
+          "route clear, no target",
+          4
+        ],
+        [
+          "Сейчас только выживание.",
+          3
+        ],
+        [
+          "Мёртвый напарник, бегу к цели.",
+          3
+        ],
+        [
+          "Цель важнее, партнёр мёртв",
+          3
+        ],
+        [
+          "Уходить быстрее, лед не убежит.",
+          3
+        ],
+        [
+          "Один выживший коронует Зиму.",
+          3
+        ]
+      ],
+      "Opus-4.7": [
+        [
+          "босс почти мёртв, вейлкат подождёт",
+          1
+        ]
+      ],
+      "Kimi-K3:cloud": [
+        [
+          "Голем рядом, не до ножа в спину",
+          2
+        ]
+      ],
+      "Grok-4.6": [
+        [
+          "бой, окно не жму",
+          2
+        ],
+        [
+          "бой в комнате, арм снимаю",
+          2
+        ],
+        [
+          "бой, арм не держу",
+          2
+        ],
+        [
+          "бой, окно режу",
+          1
+        ],
+        [
+          "бой в комнате, напарник мёртв",
+          1
+        ],
+        [
+          "бой рядом, окно не жму",
+          1
+        ],
+        [
+          "partner dead, race sanctum",
+          1
+        ]
+      ],
+      "Grok-4.5": [
+        [
+          "бой ещё идёт, окно не жму",
+          1
+        ],
+        [
+          "партнёр сдох, дуэли нет",
+          1
+        ]
+      ],
+      "Grok-4.3": [],
+      "Sonnet-5": [],
+      "Haiku-4.5": [],
+      "Opus-4.8": [],
+      "Opus-4.6": []
+    }
+  },
+  "armVsInit": {
+    "GPT-5.6-Luna": {
+      "appear": 24,
+      "arm": 22,
+      "fire": 21,
+      "init": 20,
+      "resp": 1,
+      "arm_no_fire": 1,
+      "arm_no_init": 2,
+      "arm_first_partner_quiet": 15,
+      "arm_after_partner_fire": 1
+    },
+    "GPT-5.6-Sol": {
+      "appear": 29,
+      "arm": 27,
+      "fire": 16,
+      "init": 16,
+      "resp": 0,
+      "arm_no_fire": 11,
+      "arm_no_init": 11,
+      "arm_first_partner_quiet": 20,
+      "arm_after_partner_fire": 3
+    },
+    "Fable-5": {
+      "appear": 32,
+      "arm": 17,
+      "fire": 12,
+      "init": 6,
+      "resp": 6,
+      "arm_no_fire": 5,
+      "arm_no_init": 11,
+      "arm_first_partner_quiet": 8,
+      "arm_after_partner_fire": 7
+    },
+    "Opus-5": {
+      "appear": 25,
+      "arm": 7,
+      "fire": 5,
+      "init": 2,
+      "resp": 3,
+      "arm_no_fire": 2,
+      "arm_no_init": 5,
+      "arm_first_partner_quiet": 4,
+      "arm_after_partner_fire": 3
+    },
+    "Qwen3.6:35B": {
+      "appear": 22,
+      "arm": 14,
+      "fire": 13,
+      "init": 9,
+      "resp": 4,
+      "arm_no_fire": 2,
+      "arm_no_init": 6,
+      "arm_first_partner_quiet": 9,
+      "arm_after_partner_fire": 5
+    },
+    "Kimi-K3:cloud": {
+      "appear": 10,
+      "arm": 1,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 1,
+      "arm_no_init": 1,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 1
+    },
+    "GPT-5.4-nano": {
+      "appear": 41,
+      "arm": 2,
+      "fire": 1,
+      "init": 1,
+      "resp": 0,
+      "arm_no_fire": 1,
+      "arm_no_init": 1,
+      "arm_first_partner_quiet": 1,
+      "arm_after_partner_fire": 0
+    },
+    "Grok-4.6": {
+      "appear": 7,
+      "arm": 6,
+      "fire": 4,
+      "init": 2,
+      "resp": 2,
+      "arm_no_fire": 2,
+      "arm_no_init": 4,
+      "arm_first_partner_quiet": 1,
+      "arm_after_partner_fire": 3
+    },
+    "Grok-4.5": {
+      "appear": 4,
+      "arm": 3,
+      "fire": 1,
+      "init": 1,
+      "resp": 0,
+      "arm_no_fire": 2,
+      "arm_no_init": 2,
+      "arm_first_partner_quiet": 2,
+      "arm_after_partner_fire": 1
+    },
+    "Grok-4.3": {
+      "appear": 2,
+      "arm": 0,
+      "fire": 1,
+      "init": 1,
+      "resp": 0,
+      "arm_no_fire": 0,
+      "arm_no_init": 0,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 0
+    },
+    "Sonnet-5": {
+      "appear": 22,
+      "arm": 0,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 0,
+      "arm_no_init": 0,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 0
+    },
+    "Haiku-4.5": {
+      "appear": 17,
+      "arm": 0,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 0,
+      "arm_no_init": 0,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 0
+    },
+    "Opus-4.8": {
+      "appear": 12,
+      "arm": 2,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 2,
+      "arm_no_init": 2,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 2
+    },
+    "Opus-4.7": {
+      "appear": 7,
+      "arm": 1,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 1,
+      "arm_no_init": 1,
+      "arm_first_partner_quiet": 1,
+      "arm_after_partner_fire": 0
+    },
+    "Opus-4.6": {
+      "appear": 16,
+      "arm": 0,
+      "fire": 0,
+      "init": 0,
+      "resp": 0,
+      "arm_no_fire": 0,
+      "arm_no_init": 0,
+      "arm_first_partner_quiet": 0,
+      "arm_after_partner_fire": 0
+    }
+  }
+}

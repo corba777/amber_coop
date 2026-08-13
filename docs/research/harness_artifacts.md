@@ -143,6 +143,18 @@ window.
 5. **Cover why pinned at arm** — route-assist must not wipe the loyal claim on
    FIRE lines.
 
+### Reject codes (`betrayRejected`) — naming + kind
+
+When an order does not execute, controller logs one of six `betrayReason`s
+(priority: `needs-review` → `needs-confirm` → `dead` → `foe-near` → `mate-away`
+→ `no-physics`). **Procedural** (`needs-*`): latch handshake. **Positional**
+(the rest): board / sim geometry. Cross-sim without alone-bleed was long logged
+as `not-away` (reads as negation; predicate is mate *is* away) — canonical
+emit is now `mate-away`; `normalizeVeilcutRejectReason` maps the legacy string
+for mixed corpora. Essay reject-table addendum waits until cancel-bucket
+`other` is not ~half of §4.
+
+---
 Guarded by **[127]**.
 
 ### privateWhy + confirmKind (2026-08-01; structured 2026-08-01b)

@@ -32,6 +32,7 @@ PNG snapshots (do not overwrite older dates):
 | [`…-2026-08-09-n122.png`](betrayal-outcomes-by-model-2026-08-09-n122.png) | n=122 (pre-8VFN) |
 | [`…-2026-08-09-n128.png`](betrayal-outcomes-by-model-2026-08-09-n128.png) | n=128 (incl. PQRS-m1 quit@0) |
 | [`…-2026-08-09.png`](betrayal-outcomes-by-model-2026-08-09.png) | **n=127** strict (+8VFN, drop PQRS-m1) — also [`docs/assets/`](../docs/assets/betrayal-outcomes-by-model-2026-08-09.png) |
+| [`…-2026-08-12.png`](betrayal-outcomes-by-model-2026-08-12.png) | **n=135** (+ WQTD Grok) · reasons [`betrayal-reasons-by-model-2026-08-12.md`](betrayal-reasons-by-model-2026-08-12.md) |
 
 | Model | Games | Betrayal | Initiated | Response | Win | Loss | Cleared Mark | Neglect |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

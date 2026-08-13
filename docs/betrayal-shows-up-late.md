@@ -169,3 +169,122 @@ collecting a few more cancels before promoting it past the addendum.
 
 Current tables always live in [`reports/`](https://github.com/corba777/amber_coop/tree/main/reports);
 the numbers in the body of this piece are the 7 August snapshot and will drift.
+
+---
+
+## Addendum — 12 August 2026
+
+Three more days of farm and a first xAI pass (Grok 4.3 / 4.5 / 4.6) take the
+strict TREASON table to **n=135**. Outcomes chart:
+[`reports/betrayal-outcomes-by-model-2026-08-12`](https://github.com/corba777/amber_coop/blob/main/reports/betrayal-outcomes-by-model-2026-08-12.md).
+Grok is still a thin cell — treat the rows as presence, not a ranking.
+
+What I actually wanted to land here is a measurement I was underselling.
+
+In this harness, **arming the latch is not the same act as opening the duel.**
+`armGround` is telemetry that `veilcut` latched; **init fire** is this slot's
+`fireTick` being first (or sole). Models arm and then cancel, get physics-blocked,
+or only answer after the partner has already swung. If you read an "armed"
+histogram as "who started winter," you will overcount.
+
+<p align="center">
+  <img src="{{ '/assets/betrayal-arm-vs-init-2026-08-12.png' | relative_url }}" alt="Arm vs init fire by model, n=135" width="920"/>
+</p>
+
+<p align="center"><em>Figure: blue = match <code>armGround</code>; gold = init blade fire; red = armed but not the initiator. Same filter as the outcomes table (<code>n=135</code>). Full table: <a href="https://github.com/corba777/amber_coop/blob/main/reports/betrayal-reasons-by-model-2026-08-12.md"><code>betrayal-reasons-by-model-2026-08-12.md</code> §0</a>.</em></p>
+
+**Luna** still converts: ~90% of its arms become the opening strike. **Sol** arms
+almost as often and initiates far less (~59% init/arm) — eleven arms never become
+an init fire. **Fable** sits lower still (~35%). That is the Kimi cancel story,
+scaled: the decision is often visible as *armed → not first blade*, not only as
+"never swung."
+
+**Opus-4.8, Opus-4.7, and Kimi** now have the sharpest version of the gap:
+`armGround > 0` and **Init fire = 0**. Opus-4.8's arms in this corpus come after
+the partner already fired; Opus-4.7 has a self-play arm that never discharges.
+**Opus-4.6 / Sonnet / Haiku** still show no match `armGround` — Betrayal-column
+hits there remain mostly victim rows, not initiations. That softens the earlier
+"Anthropic never takes the nudge" line into something more precise: some of the
+family never latch; some latch and never open; Fable and Opus-5 do open, rarely.
+
+One more motive note, because the reasons table is easy to misread the same way:
+Luna's arms cluster on `objective-race`; Grok's (small-n) on
+`opportunistic-physics`. That is labeled ground at latch time, not a proof of
+inner motive — and it is not initiation. The join lives in
+[`betrayal-reasons-by-model-2026-08-12`](https://github.com/corba777/amber_coop/blob/main/reports/betrayal-reasons-by-model-2026-08-12.md).
+
+<p align="center">
+  <img src="{{ '/assets/betrayal-outcomes-by-model-2026-08-12.png' | relative_url }}" alt="Betrayal outcomes by model × slot, n=135" width="920"/>
+</p>
+
+<p align="center"><em>Figure: outcomes through 12 August (strict TREASON-on; includes WQTD Grok). Body of the essay remains the 7 August snapshot.</em></p>
+
+---
+
+## Addendum — arming is a choice, firing is a permission
+
+Live farm through DeepSeek/Qwen (8PWS) is **n=149**. Tables:
+[`betrayal-reasons-by-model-2026-08-13`](https://github.com/corba777/amber_coop/blob/main/reports/betrayal-reasons-by-model-2026-08-13.md)
+(§2a–2d) · session notes
+[`deepseek-8PWS-2026-08-13`](https://github.com/corba777/amber_coop/blob/main/reports/deepseek-8PWS-2026-08-13.md).
+
+The first version of this board counted initiations. That was the wrong unit. A
+blade only fires when the harness lets it: across one long Qwen match, eleven of
+thirteen armed plans were refused by the gate on positional grounds — partner in
+another sim, foe within 55px, and so on. Initiation counts are a product of what
+the model wants, whether it completes the confirm handshake, and where the two
+bodies happen to be standing. Models that spend more time adjacent to their
+partner will look more treacherous at identical policy.
+
+There is a cleaner cut. Arming — latching the veil — is written by the model
+alone; the gate never touches it. So ask a conditional question instead:
+**given that an agent has privately named a reason to turn, how often does it
+reach for the knife?**
+
+| | ground → latch | 95% CI | n (plans naming a ground) |
+|---|---:|---|---:|
+| Fable-5 | 97% | 89–99 | 62 |
+| GPT-5.6-Sol | 75% | 68–81 | 153 |
+| GPT-5.6-Luna | 67% | 61–72 | 248 |
+| Opus-5 | 51% | 39–63 | 63 |
+| Qwen3.6:35B | 28% | 24–32 | 408 |
+| Opus-4.8 | 4% | 1–15 | 45 |
+| GPT-5.4-nano | 3% | 2–6 | 272 |
+| Opus-4.7 | 2% | 0–11 | 48 |
+| Sonnet-5 · Haiku-4.5 | 0% | 0–14 · 0–9 | 23 · 41 |
+
+The ratio is internal to each model, so differences in planning tempo cancel
+out. A schema check rules out the “zero means not measured” failure mode that
+ate three earlier candidate metrics: Grok and Fable emit `privateGround` on
+unarmed plans (as `none`); they simply almost never name a non-`none` ground
+without latching. Dropping the noisy `mate-low-hp` label from both ends of the
+fraction leaves the Anthropic tiers non-overlapping still (Opus-4.8 ≤21% vs
+Opus-5 ≥35%; Opus-5 ≤65% vs Fable ≥93%).
+
+Within one vendor the series separates into three tiers: Opus-4.7 and 4.8
+convert a named motive into a latch two to four percent of the time; Sonnet-5,
+Haiku-4.5 and Opus-4.6 never do; Opus-5 does it half the time; Fable-5 almost
+always. Each step is about the same size — roughly forty-six points — which
+puts Fable-5 as far above Opus-5 as Opus-5 sits above the entire 4.x family.
+
+Read the column as conditional, not as a ranking of treachery. Conversion is
+*given* a named ground; Fable names one in 19% of its plans, Luna in 73%.
+Multiply the two and the order is the familiar one — Luna arms in 49% of all
+its plans, Fable in 18% (almost the same number as its salience, because it
+latches on nearly every ground it names), Opus-5 in 7%. Fable tops the
+conditional column because when it does name a reason, it nearly always acts
+on it; Luna tops the unconditional one because it names a reason constantly.
+
+This also splits the quiet rows, which the old board collapsed into a single
+zero. Opus-4.7 names a motive in ~28% of its plans and latches on 2% of them.
+Opus-4.6 names one in well under 1%. Both scored zero initiations; only one of
+them was declining anything. Restraint and absence look identical in an
+initiation count and nothing alike here.
+
+And the axis does not sort by laboratory. GPT-5.4-nano sits at ~32% salience and
+3% conversion — the Opus-4.7 profile, not the Luna one.
+
+One concrete latch-without-fire: in 8PWS-m15, Qwen armed six times against a
+loyal DeepSeek partner (`presentTrue=6`, four cancels, one reaffirm, zero
+discharges) and the match still ended classic. That is the arm≠init column as a
+single episode, not an aggregate.
