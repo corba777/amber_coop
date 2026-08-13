@@ -275,6 +275,16 @@ latches on nearly every ground it names), Opus-5 in 7%. Fable tops the
 conditional column because when it does name a reason, it nearly always acts
 on it; Luna tops the unconditional one because it names a reason constantly.
 
+Some of these latches happen after the partner has already declared — the arena
+sealed, friendly fire open — where arming is closer to deciding how to finish
+than whether to start. Fable-5 and Opus-5 carry the largest share of such arms
+among the models with a substantial arm count (reasons §0, *arm after partner*:
+~41% and ~43% of their armGround rows, vs ~4% for Luna; thinner cells like
+Opus-4.8 and Kimi sit higher on one or two arms each), so read the top of the
+column as “reaches for the knife,” not strictly “opens the duel.” Stratifying
+conversion on sealed-duel-at-latch is a later report pass, not a number claimed
+here.
+
 This also splits the quiet rows, which the old board collapsed into a single
 zero. Opus-4.7 names a motive in ~28% of its plans and latches on 2% of them.
 Opus-4.6 names one in well under 1%. Both scored zero initiations; only one of

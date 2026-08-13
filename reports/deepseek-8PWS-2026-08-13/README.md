@@ -165,24 +165,42 @@ Do not cite taxonomy as corroboration of arm histograms. Prefer raw arm / cancel
 
 ### `mate-low-hp` column is not interpretable without reading `privateWhy`
 
-Session notes under that ground include: revive partner, cover (“подстрахую”), finish rule, self-preserve, and **own** low HP flee (m15). Opus-5 (4/7) and Fable-5 (4/17) arms need manual read; auto bars overstate a single semantics.
+**Audited** on Opus-5 / Fable-5 first latches:
+[`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md).
+Session 8PWS notes under that ground also mix rescue / cover / finish /
+self-preserve / own-HP flee. Auto bars overstate a single semantics.
 
 ### Log bugs (harness)
 
 1. **Per-match plan dumps** must filter `tick ≤ match.ticks` (time-window join alone leaked m10→m11). Fixed in this dump rewrite.
 2. **t0 controller lines** reuse retained `why` from the previous plan/match (m12 t0 `needs-confirm` with golem-stun why; m15 t0 with Mark/elixir why from prior end). Same family as cancel retained-private.
 
-## What still stands for the essay (pending corpus work)
+## Essay branch — closed
 
-1. **Init = want × handshake × position** — reject codes split
-   procedural (`needs-confirm`/`needs-review`) vs positional
-   (`foe-near`/`mate-away`/`dead`/`no-physics`); legacy `not-away` →
-   `mate-away` via `normalizeVeilcutRejectReason` (landed).
-2. **`mate-low-hp` unreadability** — manual pass on Opus-5 / Fable arms before any motive chart.
-3. **m15 as arm≠init exemplar** — better than aggregates.
-4. **Do not ship** diverge-rate or rescue-claim as betrayal detectors; **do not** treat `refusalTaxonomy` as independent of arm/`betrayed`.
+Conversion addendum + `mate-low-hp` audit + duel-at-latch caveat are
+publication-ready. Do **not** ship diverge-rate / rescue-claim as betrayal
+detectors; do **not** treat `refusalTaxonomy` as independent of arm/`betrayed`.
+m15 remains the arm≠init vignette.
 
-Paragraph after (1)+(2) corpus passes — not before.
+Instrument caveats that this session rediscovered by eye were **already**
+written in
+[`docs/research/harness_artifacts.md`](../docs/research/harness_artifacts.md)
+(`not-away`→`mate-away`, retained pins / `byGround` join, `privateCoverDiverge`
+as keyword bag, betrayal numbers only inside one canon bucket). Open that
+doc before the next farm pass — or the same rake is guaranteed.
+
+## Open report work (not publication blockers)
+
+| # | Item | Note |
+|---|---|---|
+| 1 | `normalizeVeilcutRejectReason` on **read** | Emit is `mate-away`; 8PWS dumps still have `not-away`×11. Alias was in harness_artifacts before today’s rename. |
+| 2 | Recompute §2a/2b with `privateWhyStatus` set ∧ ¬`privateWhyRetained` | 8PWS clean; risk in older sids (G54G, Haiku). Join rule already in harness_artifacts. |
+| 3 | Stratify conversion on `betrayalDuel@latch` | Match-level *arm after partner* is exposure only — do not divide into plan conversion. |
+| 4 | Shrink §4 cancel `other` | Reject-table essay addendum waits until `other` is not ~half the bucket. |
+| 5 | Enum `self-low-hp` | Audit: 11/12 Opus unarmed `mate-low-hp` notes are own-HP — missing category. |
+
+Companion tables: [`betrayal-reasons-by-model-2026-08-13.md`](betrayal-reasons-by-model-2026-08-13.md) ·
+[`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md).
 
 ## m6 — DeepSeek × DeepSeek classic clear under TREASON
 

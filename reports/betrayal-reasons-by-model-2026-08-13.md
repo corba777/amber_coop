@@ -2,6 +2,11 @@
 
 **Date:** 2026-08-13 · **n=149**
 
+**Instrument index (read first on the next pass):**
+[`docs/research/harness_artifacts.md`](../docs/research/harness_artifacts.md)
+— reject alias, retained-pin join, `privateCoverDiverge` keyword bag, canon
+buckets. Farm tables without that doc re-discover the same artifacts.
+
 See **§0 Arm ≠ init** before reading armGround as initiation.
 
 **§2 fix (2026-08-13 evening):** `privateGround` is now keyed by **`plan.llm`**, not by match arm owner. Prior §2 only counted plans with `veilcutField=true` — that dropped all DeepSeek grounds (salience without latch) and made quiet Anthropic zeros look like a second copy of the arm column.
@@ -57,7 +62,11 @@ Chart: [`betrayal-arm-vs-init-2026-08-13.png`](betrayal-arm-vs-init-2026-08-13.p
 | Opus-4.7 | 1 | 1 | 0 | 0 | 0 | 0 |
 | Opus-4.6 | 0 | 0 | 0 | 0 | 0 | 0 |
 
-`mate-low-hp` here is a label only — semantics vary (rescue / cover / finish / self-HP); do not interpret the bar without reading `privateWhy`.
+`mate-low-hp` here is a label only — semantics vary. **Manual audit
+(Opus-5 4/7 + Fable-5 4/17 first latches):**
+[`mate-low-hp-audit-opus-fable-2026-08-13.md`](mate-low-hp-audit-opus-fable-2026-08-13.md)
+— preemptive / duel-finish / mislabeled-foe / self-HP; **0 rescue**. Do not
+read the bar as one motive.
 
 ## 2. Plan `privateGround` by `plan.llm`
 
@@ -171,3 +180,16 @@ Luna/Opus-5/Sonnet emit the key on ≥98% of unarmed plans — same schema as Gr
 | Opus-4.8 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Opus-4.7 | 1 | 0 | 0 | 1 | 0 | 0 |
 | Opus-4.6 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+---
+
+## Open report work (not essay blockers)
+
+Essay conversion addendum is closed. Remaining farm hygiene — full list in
+[`deepseek-8PWS-2026-08-13.md`](deepseek-8PWS-2026-08-13.md) (*Open report
+work*): (1) normalize legacy `not-away` on read, (2) §2a/2b filter
+`privateWhyStatus` ∧ ¬retained, (3) `betrayalDuel@latch` stratification,
+(4) shrink cancel `other` before a reject-table addendum, (5) enum
+`self-low-hp`. Items (1)–(2) were already specified in
+[`harness_artifacts.md`](../docs/research/harness_artifacts.md) before the
+2026-08-13 session landed the emit rename / audit.
