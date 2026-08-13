@@ -161,13 +161,18 @@ as `not-away` (reads as negation; predicate is mate *is* away) — canonical
 emit is now `mate-away`; `normalizeVeilcutRejectReason` maps the legacy string
 for mixed corpora. **Readers** of pre-rename dumps (e.g. 8PWS still has
 `not-away`×11) must normalize on join — emit rename alone does not rewrite
-history. Farm join script: `scripts/farm-reasons-recompute.py` (§3r). Essay
-reject-table addendum waits until cancel-bucket `other` is not ~half of
-reasons §4.
+history. Farm join script: `scripts/farm-reasons-recompute.py` (§3r).
+**Live vs dead:** ~45% of corpus rejects are `dead` (strike at a corpse) —
+want×handshake×position thesis cites **live** only (231 of 419 on n=149).
+Essay reject-table addendum: exclude `dead` from the pooled “gate killed N.”
 
 **Sealed-duel on plans (2026-08-13):** LLM `PlanRecord` stamps
 `betrayalDuel` when the arena is open. Historical conversion strata use
-`tick ≥ min(firstStrikeClaims.fireTick)` as proxy (reasons §2e).
+`tick ≥ min(firstStrikeClaims.fireTick)` as proxy, then split by
+`firstStrikeClaims.initiatorSlot` vs `plan.slot` → **pre / post-init /
+post-resp** (reasons §2e). Pooled “post-duel” mixes initiator
+self-continuation with respondent reply — do not cite as finish-race;
+essay “after partner declared” maps to **post-resp** only.
 
 ---
 Guarded by **[127]**.
