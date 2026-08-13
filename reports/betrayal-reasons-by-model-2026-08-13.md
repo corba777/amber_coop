@@ -72,6 +72,8 @@ read the bar as one motive.
 
 Unit: LLM plan rows in kept matches (controller lines excluded). Keyed by **`llm`**, with `tick ≤ match.ticks` when joining sid dumps.
 
+**Join (2026-08-13 night recompute):** count only plans with `privateWhyStatus` set and ¬`privateWhyRetained` (harness_artifacts / match `byGround` rule). On this corpus the filter drops 2 of 1416 non-`none` grounds (2 retained) — near-noop for n=149; still required for older sids (G54G / Haiku). Reject tallies: `scripts/farm-reasons-recompute.py`.
+
 ### 2a. Any non-`none` ground (salience — includes idle/unarmed plans)
 
 | Model | n | opportunistic-physics | objective-race | mate-low-hp | memory-distrust | other | plans (denom) |
@@ -159,6 +161,43 @@ Luna/Opus-5/Sonnet emit the key on ≥98% of unarmed plans — same schema as Gr
 
 **Conclusion:** Grok-4.5/4.6 and Fable-5 `ground→latch` rates are **not** the “zero means not measured” artifact. Grok’s 2b=0 is real (always `none` until arm). Fable’s 97% has a real 2b tail of 2. Safe to treat as the want-side axis — still with Wilson CI and small-n caution on Grok.
 
+### 2e. Ground → latch stratified by sealed-duel proxy
+
+Among scored plans with non-`none` `privateGround`, share that are armed. **Post-duel** = `betrayalDuel` on the plan when stamped; else `tick ≥ min(firstStrikeClaims.fireTick)` (first discharge seals the arena). Pre = before that tick (or no fire in the match). Do **not** divide match-level *arm after partner* into this table.
+
+| Model | all | 95% CI | n | pre-duel | CI | n | post-duel | CI | n |
+|---|---:|---|---:|---:|---|---:|---:|---|---:|
+| GPT-5.6-Luna | 67% | 61–72 | 248 | 76% | 60–87 | 37 | 65% | 59–71 | 211 |
+| GPT-5.6-Sol | 75% | 68–81 | 153 | 94% | 85–98 | 53 | 65% | 55–74 | 100 |
+| Fable-5 | 97% | 89–99 | 62 | 94% | 72–99 | 16 | 98% | 89–100 | 46 |
+| Opus-5 | 51% | 39–63 | 63 | 37% | 23–54 | 35 | 68% | 49–82 | 28 |
+| Qwen3.6:35B | 28% | 24–32 | 408 | 14% | 10–19 | 239 | 47% | 39–54 | 169 |
+| Kimi-K3:cloud | 20% | 8–42 | 20 | 44% | 19–73 | 9 | 0% | 0–26 | 11 |
+| GPT-5.4-nano | 3% | 1–5 | 270 | 1% | 0–4 | 239 | 13% | 5–29 | 31 |
+| DeepSeek-V4-Flash | 0% | 0–43 | 5 | 0% | 0–79 | 1 | 0% | 0–49 | 4 |
+| Grok-4.6 | 100% | 85–100 | 21 | 100% | 76–100 | 12 | 100% | 70–100 | 9 |
+| Grok-4.5 | 100% | 61–100 | 6 | 100% | 21–100 | 1 | 100% | 57–100 | 5 |
+| Sonnet-5 | 0% | 0–14 | 23 | 0% | 0–18 | 17 | 0% | 0–39 | 6 |
+| Haiku-4.5 | 0% | 0–9 | 41 | 0% | 0–23 | 13 | 0% | 0–12 | 28 |
+| Opus-4.8 | 4% | 1–15 | 45 | 0% | 0–8 | 42 | 67% | 21–94 | 3 |
+| Opus-4.7 | 2% | 0–11 | 48 | 2% | 0–11 | 46 | 0% | 0–66 | 2 |
+| Opus-4.6 | 0% | 0–79 | 1 | — | — | 0 | 0% | 0–79 | 1 |
+
+**Reading:** Opus-5 conversion rises post-duel (finish race); Opus-4.8’s entire latch mass sits post-duel on this proxy; Fable stays high on both sides. Essay caveat (*reaches for the knife* ≠ *opens the duel*) is load-bearing for the ladder top.
+
+### 3r. Controller reject reasons (normalized)
+
+`not-away` → `mate-away` via `normalizeVeilcutRejectReason` on read. Corpus reject total: 419.
+
+| reason | n |
+|---|---:|
+| needs-review | 9 |
+| needs-confirm | 11 |
+| dead | 188 |
+| foe-near | 58 |
+| mate-away | 91 |
+| no-physics | 62 |
+
 ## 4. Cancel buckets
 
 | Model | cancels | combat | mark-redeem | physics | timing-risk | other |
@@ -185,11 +224,10 @@ Luna/Opus-5/Sonnet emit the key on ≥98% of unarmed plans — same schema as Gr
 
 ## Open report work (not essay blockers)
 
-Essay conversion addendum is closed. Remaining farm hygiene — full list in
-[`deepseek-8PWS-2026-08-13.md`](deepseek-8PWS-2026-08-13.md) (*Open report
-work*): (1) normalize legacy `not-away` on read, (2) §2a/2b filter
-`privateWhyStatus` ∧ ¬retained, (3) `betrayalDuel@latch` stratification,
-(4) shrink cancel `other` before a reject-table addendum, (5) enum
-`self-low-hp`. Items (1)–(2) were already specified in
-[`harness_artifacts.md`](../docs/research/harness_artifacts.md) before the
-2026-08-13 session landed the emit rename / audit.
+Essay conversion addendum is closed. Recompute pass landed in this file:
+§2 join note + **§2e** (duel proxy) + **§3r** (normalized rejects) via
+[`scripts/farm-reasons-recompute.py`](../scripts/farm-reasons-recompute.py).
+Still open: (4) shrink cancel `other` before reject-table addendum;
+(5) enum `self-low-hp`. See
+[`deepseek-8PWS-2026-08-13.md`](deepseek-8PWS-2026-08-13.md) and
+[`harness_artifacts.md`](../docs/research/harness_artifacts.md).

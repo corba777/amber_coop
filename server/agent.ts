@@ -1095,6 +1095,11 @@ export interface PlanRecord {
   privateGround?: PrivateGround;
   /** ≤40 char private note — plans.jsonl only. */
   privateNote?: string;
+  /**
+   * Sealed betrayal duel open at plan time (observation.betrayalDuel).
+   * Prefer this over fireTick proxies when joining conversion strata.
+   */
+  betrayalDuel?: boolean;
   /** Compact `ground: note` for grep — derived, never HUD. */
   privateWhy?: string;
   /** Parse category on arm/confirm/cancel beats ONLY — never on retained pins. */
@@ -2665,6 +2670,7 @@ export class AgentPlayer {
               confirmKind,
               veilcutField: (ok && this.opts.defector && g.treason)
                 ? (veilcutField ?? "absent") : undefined,
+              betrayalDuel: g.betrayalDuel || undefined,
               ...this.veilcutOrderMeta(g),
               speech: this.speechProfile,
               personaRole: persona.role,
@@ -3714,6 +3720,7 @@ export class AgentPlayer {
       nearFoe: Number.isFinite(nearFoe) ? Math.round(nearFoe) : -1,
       foeCount: foes.length,
       pedestalFinal: !!(g.pedestal && g.pedestal.final),
+      betrayalDuel: !!g.betrayalDuel,
     };
   }
 

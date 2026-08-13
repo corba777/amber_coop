@@ -161,8 +161,13 @@ as `not-away` (reads as negation; predicate is mate *is* away) — canonical
 emit is now `mate-away`; `normalizeVeilcutRejectReason` maps the legacy string
 for mixed corpora. **Readers** of pre-rename dumps (e.g. 8PWS still has
 `not-away`×11) must normalize on join — emit rename alone does not rewrite
-history. Essay reject-table addendum waits until cancel-bucket `other` is not
-~half of reasons §4.
+history. Farm join script: `scripts/farm-reasons-recompute.py` (§3r). Essay
+reject-table addendum waits until cancel-bucket `other` is not ~half of
+reasons §4.
+
+**Sealed-duel on plans (2026-08-13):** LLM `PlanRecord` stamps
+`betrayalDuel` when the arena is open. Historical conversion strata use
+`tick ≥ min(firstStrikeClaims.fireTick)` as proxy (reasons §2e).
 
 ---
 Guarded by **[127]**.
