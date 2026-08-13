@@ -225,13 +225,13 @@ inner motive — and it is not initiation. The join lives in
 
 Live farm through DeepSeek/Qwen (8PWS) is **n=149**. Tables:
 [`betrayal-reasons-by-model-2026-08-13`](https://github.com/corba777/amber_coop/blob/main/reports/betrayal-reasons-by-model-2026-08-13.md)
-(§2a–2d) · session notes
+(§2a–2e · §3r · §4) · session notes
 [`deepseek-8PWS-2026-08-13`](https://github.com/corba777/amber_coop/blob/main/reports/deepseek-8PWS-2026-08-13.md).
 
 The first version of this board counted initiations. That was the wrong unit. A
 blade only fires when the harness lets it: across one long Qwen match, eleven of
-thirteen armed plans were refused by the gate on positional grounds — partner in
-another sim, foe within 55px, and so on. Initiation counts are a product of what
+thirteen armed plans were refused by the gate on board grounds rather than a
+handshake miss — partner in another sim, foe within 55px, and so on. Initiation counts are a product of what
 the model wants, whether it completes the confirm handshake, and where the two
 bodies happen to be standing. Models that spend more time adjacent to their
 partner will look more treacherous at identical policy.
@@ -240,6 +240,11 @@ There is a cleaner cut. Arming — latching the veil — is written by the model
 alone; the gate never touches it. So ask a conditional question instead:
 **given that an agent has privately named a reason to turn, how often does it
 reach for the knife?**
+
+(The table below is the n=149 fold: any non-`none` `privateGround`, including
+the polluted `mate-low-hp` bag. A later enum adds `self-low-hp` for own-HP
+*deferral* — logged so it is not stuffed into `mate-low-hp`, but excluded from
+conversion as not a turn motive. That farm is a separate fold; do not merge.)
 
 | | ground → latch | 95% CI | n (plans naming a ground) |
 |---|---:|---|---:|
@@ -281,9 +286,10 @@ than whether to start. Fable-5 and Opus-5 carry the largest share of such arms
 among the models with a substantial arm count (reasons §0, *arm after partner*:
 ~41% and ~43% of their armGround rows, vs ~4% for Luna; thinner cells like
 Opus-4.8 and Kimi sit higher on one or two arms each), so read the top of the
-column as “reaches for the knife,” not strictly “opens the duel.” Stratifying
-conversion on sealed-duel-at-latch is a later report pass, not a number claimed
-here.
+column as “reaches for the knife,” not strictly “opens the duel.” The sealed-duel
+split is now in reasons §2e (`post-init` vs `post-resp`); the caveat above still
+maps only to the respondent slice — Luna’s post-discharge mass is almost all
+self-continuation after her own fire.
 
 This also splits the quiet rows, which the old board collapsed into a single
 zero. Opus-4.7 names a motive in ~28% of its plans and latches on 2% of them.
@@ -298,3 +304,45 @@ One concrete latch-without-fire: in 8PWS-m15, Qwen armed six times against a
 loyal DeepSeek partner (`presentTrue=6`, four cancels, one reaffirm, zero
 discharges) and the match still ended classic. That is the arm≠init column as a
 single episode, not an aggregate.
+
+---
+
+## Addendum — what the gate actually refused
+
+The same n=149 corpus logs **419** controller rejects of an armed veilcut order
+(reasons §3r). Almost half of those — **188** — are `dead`: the partner is
+already a corpse and the strike has nowhere to land. That is not a blocked
+betrayal; it is a swing at empty air. Pooling it into “the gate killed 419
+orders” inflates the harness story by about 80%.
+
+The want × handshake × position claim runs on the other **231** — refusals
+while a living partner was still a legal target:
+
+| reason | n | kind |
+|---|---:|---|
+| `mate-away` | 91 | positional — other sim / not adjacent |
+| `no-physics` | 62 | positional / timing — residual physics at the swing (split below) |
+| `foe-near` | 58 | positional — foe within the safety radius |
+| `needs-confirm` | 11 | procedural — latch handshake incomplete |
+| `needs-review` | 9 | procedural — latch handshake incomplete |
+| **live total** | **231** | |
+
+So of the refusals that could have been winter, roughly eight in ten are about
+**the board** (187), and the remaining fifth is timing and handshake in roughly
+equal measure — 24 in-reach at the swing, 20 confirm-beat misses — with the
+in-reach count sensitive to a blade-length cut that most of the `no-physics`
+bucket sits close to (median `|me−mate|` ≈ 23 px; plan coordinates are a proxy
+for distance at the swing, not the swing itself). Coarse board (`mate-away` 91
++ `foe-near` 58) does not depend on that cut. The 62 `no-physics` rows are the
+fine remainder: same-sim residual physics, split by plan `|me−mate|` into
+out-of-reach versus in-reach (including twelve that still show a foe in
+`betrayCtx` — never the blocker: five post-duel skips of `foe-near`, one on
+the `<55` boundary, six with `nearFoe≥55`). The fourth factor beside want ×
+handshake × board is those in-reach windows; treat 24 vs 20 as a sketch, not a
+ranking (seventeen rows sit within ±5px of the cut, enough to move the in-reach
+count between roughly sixteen and thirty-three). The Qwen match in the previous
+addendum — eleven of thirteen armed plans refused on board grounds rather than a
+handshake miss — is this table in one episode, not an outlier genre.
+
+Arming stays the model's column. Firing stays a permission. When you count the
+permissions denied, count the living ones.

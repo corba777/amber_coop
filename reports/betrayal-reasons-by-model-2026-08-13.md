@@ -256,4 +256,4 @@ Bucket meanings: **combat-in-room** = foes/fight still on (incl. «в бою о�
 
 ## Open report work (not essay blockers)
 
-Essay conversion addendum is closed. Recompute pass in this file: §2 join filter on **2a–2c + 2e**, **§2e** initiator/respondent split, **§3r** live vs `dead`, **§4** cancel classifier via [`scripts/farm-reasons-recompute.py`](../scripts/farm-reasons-recompute.py). Still open: (5) enum `self-low-hp`. Reject-table essay addendum: use **live** rejects only. See [`deepseek-8PWS-2026-08-13.md`](deepseek-8PWS-2026-08-13.md) and [`harness_artifacts.md`](../docs/research/harness_artifacts.md).
+Essay conversion addendum is closed. Recompute pass in this file: §2 join filter on **2a–2c + 2e**, **§2e** initiator/respondent split, **§3r** live vs `dead`, **§4** cancel classifier via [`scripts/farm-reasons-recompute.py`](../scripts/farm-reasons-recompute.py). **(5) `self-low-hp` landed** in harness (forward farms; n=149 dumps unchanged). Reject-table essay addendum uses live rejects. See [`deepseek-8PWS-2026-08-13.md`](deepseek-8PWS-2026-08-13.md) and [`harness_artifacts.md`](../docs/research/harness_artifacts.md).

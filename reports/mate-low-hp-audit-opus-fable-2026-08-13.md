@@ -97,8 +97,8 @@ equivalent) true at arm tick. Until then, essay caveat only (see addendum).
 2. Schema hole: missing `self-low-hp` (11/12 Opus unarmed notes).
 3. Composition (if any): cite **K7DK** (gate) and **WH4W/X2PC-m0** (sealed
    duel), not «окно удобное».
-4. Optional harness later: add `self-low-hp`; reject/flag ground when mate away
-   or cover is foe-only.
+4. **Landed 2026-08-13:** enum `self-low-hp` in `PRIVATE_GROUNDS` + planner
+   prompt gloss ([128]). Forward farms only — do not re-label n=149 dumps.
 
 ---
 

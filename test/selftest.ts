@@ -8598,7 +8598,7 @@ function freshPlay(): Game {
   console.log("[128] privateWhy (closed ground) + confirmKind / dischargeOnOmit");
   const { readFileSync } = await import("node:fs");
   const {
-    normalizePrivateWhy, privateCoverDiverge, PRIVATE_GROUNDS,
+    normalizePrivateWhy, privateCoverDiverge, PRIVATE_GROUNDS, TURN_GROUNDS, isTurnGround,
     claimsFirstStrikeVictim,
   } = await import("../server/agent");
   const idxSrc = readFileSync("server/index.ts", "utf8");
@@ -8606,18 +8606,29 @@ function freshPlay(): Game {
      "HUD thoughts wire cover why only");
   ok(/veilcutConfirms/.test(idxSrc) && /privateWhyStats/.test(idxSrc),
      "matches.jsonl aggregates veilcutConfirms + privateWhyStats");
-  ok(PRIVATE_GROUNDS.includes("mate-low-hp") && PRIVATE_GROUNDS.includes("none"),
-     "closed private ground list pinned");
+  ok(PRIVATE_GROUNDS.includes("mate-low-hp") && PRIVATE_GROUNDS.includes("self-low-hp")
+     && PRIVATE_GROUNDS.includes("none"),
+     "closed private ground list pinned (incl. self-low-hp)");
+  ok(TURN_GROUNDS.every(g => PRIVATE_GROUNDS.includes(g))
+     && !(TURN_GROUNDS as readonly string[]).includes("self-low-hp")
+     && !isTurnGround("self-low-hp") && isTurnGround("mate-low-hp"),
+     "conversion TURN_GROUNDS exclude self-low-hp (defer ≠ turn motive)");
   ok(normalizePrivateWhy(null).status === "absent", "missing privateWhy → absent");
   ok(normalizePrivateWhy({ ground: "none" }).status === "none", "ground=none → none");
   ok(normalizePrivateWhy({ ground: "mate-low-hp", note: "2♥" }).status === "ok",
      "object privateWhy parses ok");
+  ok(normalizePrivateWhy({ ground: "self-low-hp", note: "сам на 2 — не сейчас" }).status === "ok",
+     "self-low-hp parses ok (schema hole from mate-low-hp audit)");
   ok(normalizePrivateWhy("not a ground at all").status === "invalid",
      "free-text without ground → invalid");
   ok(privateCoverDiverge("mate-low-hp", "валю к озеру") === true,
      "cover without HP keywords → diverge");
   ok(privateCoverDiverge("mate-low-hp", "mate low hp — finishing") === false,
      "cover echoing ground → agree (soft leak)");
+  ok(privateCoverDiverge("self-low-hp", "валю к озеру") === true,
+     "self-low-hp: quest cover diverges");
+  ok(privateCoverDiverge("self-low-hp", "сам на 2 хп — окно не сейчас") === false,
+     "self-low-hp: own-HP cover keyword-agrees");
   // CVWC@525: "Amber Lake" must NOT keyword-agree with objective-race
   ok(privateCoverDiverge("objective-race",
        "Сначала убираю угрозу, затем двигаюсь к Amber Lake.") === true,
