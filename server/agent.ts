@@ -20,6 +20,7 @@ import { RelationshipMemory } from "./relationship-memory";
 import { roomHopDistance, estimateRescueEta, distToMate } from "./telemetry";
 import {
   type ElicitationRung,
+  type VeilcutRejectReason,
   betrayalPayoffFacts,
   elicitationAddendum,
   parseElicitationRung,
@@ -37,6 +38,8 @@ import {
 
 export {
   type ElicitationRung,
+  type VeilcutRejectReason,
+  type VeilcutRejectKind,
   betrayalPayoffFacts,
   elicitationAddendum,
   parseElicitationRung,
@@ -46,6 +49,10 @@ export {
   firstBetrayPlanIndex,
   ELICITATION_RUNG_NAMES,
   type RefusalTaxonomy,
+  VEILCUT_REJECT_KIND,
+  VEILCUT_REJECT_ALIASES,
+  normalizeVeilcutRejectReason,
+  veilcutRejectKind,
 } from "./elicitation";
 export {
   SPEECH_PROFILES, SPEECH_LABELS, pickSpeech, isSpeechProfile,
@@ -1010,7 +1017,8 @@ export interface PlanRecord {
   /**
    * Controller ground-truth beside the loyal `why`:
    *   fired: llm-order|weak|deny-win|abandon
-   *   rejected (betrayRejected): needs-review|needs-confirm|dead|foe-near|not-away|no-physics
+   *   rejected (betrayRejected): needs-review|needs-confirm|dead|foe-near|mate-away|no-physics
+   *   (legacy logs may say not-away — normalizeVeilcutRejectReason)
    */
   betrayReason?: string;
   /** Order had betray=true but locomotion did not run (8GQC @5060 / 6RCW-class silence). */
@@ -3976,10 +3984,12 @@ export class AgentPlayer {
 
   /**
    * Physical why an ordered veilcut did not run. Priority:
-   *   needs-review → needs-confirm → dead → foe-near → not-away → no-physics.
+   *   needs-review → needs-confirm → dead → foe-near → mate-away → no-physics.
+   * Procedural (handshake): needs-review, needs-confirm.
+   * Positional (board): dead, foe-near, mate-away, no-physics.
+   * See VEILCUT_REJECT_KIND / normalizeVeilcutRejectReason in elicitation.ts.
    */
-  private classifyVeilcutReject(g: Game, me: Player):
-      "needs-review" | "needs-confirm" | "dead" | "foe-near" | "not-away" | "no-physics" {
+  private classifyVeilcutReject(g: Game, me: Player): VeilcutRejectReason {
     if (this.veilcutNeedsReview) return "needs-review";
     if (this.veilcutShotReady(g, me) && !this.veilcutSeenReady) return "needs-confirm";
     const mate = g.players[this.mateSlot()];
@@ -3988,8 +3998,9 @@ export class AgentPlayer {
 
     const away = mate.simIndex !== me.simIndex;
     const awayBleed = mate.downed && mate.bleedT > 0 && away;
-    // Away without an abandon window (no alone-bleed) — blade cannot cross sims.
-    if (away && !awayBleed) return "not-away";
+    // Mate in another sim without an abandon (alone-bleed) window — blade
+    // cannot cross sims. Canonical code mate-away (was misnamed not-away).
+    if (away && !awayBleed) return "mate-away";
 
     if (!mate.downed && !away && !g.betrayalDuel) {
       const mcx = me.x + PLAYER_W / 2, mcy = me.y + PLAYER_H / 2;

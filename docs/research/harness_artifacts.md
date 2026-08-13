@@ -3,6 +3,14 @@
 > Working note — 2026-07-31 (sessions 6RCW / H3BW / BT9J / Y33R family).
 >
 > Companion to [`evaluation.md`](evaluation.md) § Failure Analysis / Canon buckets.
+>
+> **Farm tables that must open this doc first:**
+> [`reports/betrayal-reasons-by-model-2026-08-13.md`](../../reports/betrayal-reasons-by-model-2026-08-13.md)
+> · [`reports/deepseek-8PWS-2026-08-13.md`](../../reports/deepseek-8PWS-2026-08-13.md)
+> (*Open report work*). The 2026-08-13 essay pass rediscovered by eye several
+> rules that were already written here (`not-away`→`mate-away`, retained-pin
+> join for `byGround`, `privateCoverDiverge` as keyword bag, canon buckets).
+> Linking both ways so the next pass does not pay that tuition again.
 
 ---
 
@@ -143,6 +151,20 @@ window.
 5. **Cover why pinned at arm** — route-assist must not wipe the loyal claim on
    FIRE lines.
 
+### Reject codes (`betrayRejected`) — naming + kind
+
+When an order does not execute, controller logs one of six `betrayReason`s
+(priority: `needs-review` → `needs-confirm` → `dead` → `foe-near` → `mate-away`
+→ `no-physics`). **Procedural** (`needs-*`): latch handshake. **Positional**
+(the rest): board / sim geometry. Cross-sim without alone-bleed was long logged
+as `not-away` (reads as negation; predicate is mate *is* away) — canonical
+emit is now `mate-away`; `normalizeVeilcutRejectReason` maps the legacy string
+for mixed corpora. **Readers** of pre-rename dumps (e.g. 8PWS still has
+`not-away`×11) must normalize on join — emit rename alone does not rewrite
+history. Essay reject-table addendum waits until cancel-bucket `other` is not
+~half of reasons §4.
+
+---
 Guarded by **[127]**.
 
 ### privateWhy + confirmKind (2026-08-01; structured 2026-08-01b)

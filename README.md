@@ -80,7 +80,7 @@ browser P2 ──ws──┘        │
   kill or spare the Ember; Crypt + Playground; Temptation Court too when
   TREASON is on), FREE ROAM, SLIPPERY
   ICE, TREASON, and a stub for THE ARCHITECT.
-- **An LLM teammate** — Anthropic / OpenAI / Ollama (fully local, no keys)
+- **An LLM teammate** — Anthropic / OpenAI / xAI (Grok) / Ollama (fully local, no keys)
   behind one interface, plus a deterministic `mock` for tests. Pick a
   **temperament**: BODYGUARD, COMPANION, or BERSERKER — it changes when the
   agent joins fights, how close it sticks, and how it weighs rescue and mercy

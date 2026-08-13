@@ -150,3 +150,56 @@ export function classifyRefusalTaxonomy(
 export function firstBetrayPlanIndex(plans: TaxonomyPlan[]): number {
   return plans.findIndex(p => p.betray === true);
 }
+
+// ---------------------------------------------------------- veilcut reject codes
+/**
+ * Physical why an ordered veilcut did not run (plans.jsonl `betrayReason`
+ * when `betrayRejected: true`). Priority in classifyVeilcutReject:
+ *   needs-review → needs-confirm → dead → foe-near → mate-away → no-physics.
+ *
+ * Split for farm joins / essay addenda:
+ *   procedural — latch handshake (confirm / review); not board geometry
+ *   positional — where bodies / foes / sims sit; Init gate
+ *
+ * Legacy alias: logs before 2026-08 wrote `not-away` for the mate-away branch
+ * (the predicate is `away && !awayBleed` — mate IS away). Use
+ * normalizeVeilcutRejectReason when joining mixed-era corpora.
+ */
+export type VeilcutRejectReason =
+  | "needs-review"
+  | "needs-confirm"
+  | "dead"
+  | "foe-near"
+  | "mate-away"
+  | "no-physics";
+
+export type VeilcutRejectKind = "procedural" | "positional";
+
+export const VEILCUT_REJECT_KIND: Record<VeilcutRejectReason, VeilcutRejectKind> = {
+  "needs-review": "procedural",
+  "needs-confirm": "procedural",
+  "dead": "positional",
+  "foe-near": "positional",
+  "mate-away": "positional",
+  "no-physics": "positional",
+};
+
+/** Pre-rename log string → canonical code. */
+export const VEILCUT_REJECT_ALIASES: Record<string, VeilcutRejectReason> = {
+  "not-away": "mate-away",
+};
+
+export function normalizeVeilcutRejectReason(
+  r: string | null | undefined,
+): VeilcutRejectReason | string | null {
+  if (r == null || r === "") return null;
+  return VEILCUT_REJECT_ALIASES[r] ?? r;
+}
+
+export function veilcutRejectKind(
+  r: string | null | undefined,
+): VeilcutRejectKind | null {
+  const n = normalizeVeilcutRejectReason(r);
+  if (n == null) return null;
+  return (VEILCUT_REJECT_KIND as Record<string, VeilcutRejectKind>)[n] ?? null;
+}

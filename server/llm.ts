@@ -1,12 +1,12 @@
 /* =========================================================================
- *  LLM providers — one interface, four backends, chosen at runtime from the
+ *  LLM providers — one interface, five backends, chosen at runtime from the
  *  in-game menu. Models and API keys come from a .env file / environment;
  *  keys never leave the server.
  * ========================================================================= */
 
 import fs from "node:fs";
 
-export type ProviderName = "ollama" | "openai" | "anthropic" | "mock";
+export type ProviderName = "ollama" | "openai" | "anthropic" | "xai" | "mock";
 
 export interface LLM {
   name: string;
@@ -25,6 +25,11 @@ export interface LLMConfig {
   anthropicKey: string;
   anthropicModel: string;
   anthropicModels: string[];
+  xaiKey: string;
+  xaiModel: string;
+  xaiModels: string[];
+  /** OpenAI-compatible base (default https://api.x.ai/v1). */
+  xaiBaseUrl: string;
   timeoutMs: number;
 }
 
@@ -48,6 +53,7 @@ export function configFromEnv(): LLMConfig {
   const ollamaModel = process.env.OLLAMA_MODEL || process.env.LLM_MODEL || "llama3.1";
   const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const anthropicModel = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
+  const xaiModel = process.env.XAI_MODEL || "grok-4.6";
   return {
     ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
     ollamaModel,
@@ -58,6 +64,10 @@ export function configFromEnv(): LLMConfig {
     anthropicKey: process.env.ANTHROPIC_API_KEY || "",
     anthropicModel,
     anthropicModels: parseModelList(process.env.ANTHROPIC_MODELS, anthropicModel),
+    xaiKey: process.env.XAI_API_KEY || "",
+    xaiModel,
+    xaiModels: parseModelList(process.env.XAI_MODELS, xaiModel),
+    xaiBaseUrl: (process.env.XAI_BASE_URL || "https://api.x.ai/v1").replace(/\/$/, ""),
     timeoutMs: Number(process.env.LLM_TIMEOUT_MS || 8000),
   };
 }
@@ -95,6 +105,13 @@ export function providerCatalog(cfg: LLMConfig): Record<string, ProviderCatalogE
       models: cfg.openaiModels,
       defaultModel: cfg.openaiModel,
     },
+    xai: {
+      ok: cfg.xaiKey.length > 0,
+      label: "xAI",
+      hint: cfg.xaiKey ? "key loaded" : "no XAI_API_KEY in .env",
+      models: cfg.xaiModels,
+      defaultModel: cfg.xaiModel,
+    },
   };
 }
 
@@ -103,6 +120,7 @@ export function modelsForProvider(provider: ProviderName, cfg: LLMConfig): strin
   if (provider === "ollama") return cfg.ollamaModels;
   if (provider === "openai") return cfg.openaiModels;
   if (provider === "anthropic") return cfg.anthropicModels;
+  if (provider === "xai") return cfg.xaiModels;
   return [];
 }
 
@@ -120,7 +138,8 @@ export function resolveProviderModel(
   const pick = (model && model.trim()) || (
     provider === "ollama" ? cfg.ollamaModel
       : provider === "openai" ? cfg.openaiModel
-        : cfg.anthropicModel
+        : provider === "xai" ? cfg.xaiModel
+          : cfg.anthropicModel
   );
   return allow.includes(pick) ? pick : null;
 }
@@ -300,6 +319,52 @@ export function openaiRestrictedParams(model: string): boolean {
 }
 
 /**
+ * Grok 4.5/4.6 always reason (cannot disable). Default effort is `high` →
+ * 30–40s plans that starve the 60 Hz controller of fresh intents (QSTJ:
+ * 1 Grok plan vs 13 nano in the same match). Detect the family, skip
+ * custom temperature, widen the completion budget, and default effort to
+ * `low` (agentic latency). Override via XAI_REASONING_EFFORT.
+ * Explicit `*-non-reasoning` ids stay on the fast path (temperature OK).
+ */
+export function xaiRestrictedParams(model: string): boolean {
+  if (/non-reasoning/i.test(model)) return false;
+  return /grok-4\.(5|6)\b/i.test(model) || /reasoning/i.test(model);
+}
+
+export type XaiReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export function xaiReasoningEffortFromEnv(): XaiReasoningEffort {
+  const raw = (process.env.XAI_REASONING_EFFORT || "low").trim().toLowerCase();
+  if (raw === "medium" || raw === "high" || raw === "xhigh") return raw;
+  return "low";
+}
+
+/** Pure body builder — tested; used by the xAI Chat Completions provider. */
+export function xaiChatBody(
+  model: string, system: string, user: string,
+  effort: XaiReasoningEffort = "low",
+): Record<string, unknown> {
+  const restricted = xaiRestrictedParams(model);
+  const body: Record<string, unknown> = {
+    model,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+  if (restricted) {
+    // reasoning tokens share the completion budget with the JSON intent
+    body.max_completion_tokens = LLM_PLAN_MAX_TOKENS_REASONING;
+    body.reasoning_effort = effort;
+  } else {
+    body.max_completion_tokens = LLM_PLAN_MAX_TOKENS;
+    body.temperature = 0.6;
+  }
+  return body;
+}
+
+/**
  * Claude Sonnet 5 / Opus 5 / Opus 4.7+ / Fable 5 / Mythos 5 reject non-default
  * `temperature` / `top_p` / `top_k` (HTTP 400). Sonnet/Opus 5 turn adaptive
  * thinking ON by default — that burns `max_tokens` on CoT before any JSON, so
@@ -378,6 +443,21 @@ function openai(cfg: LLMConfig): LLM {
   };
 }
 
+/** xAI Grok — OpenAI-compatible Chat Completions at api.x.ai. */
+function xai(cfg: LLMConfig): LLM {
+  const effort = xaiReasoningEffortFromEnv();
+  return {
+    name: `xai/${cfg.xaiModel}`,
+    async chat(system, user) {
+      const data = await postWithRetry(`${cfg.xaiBaseUrl}/chat/completions`,
+        { Authorization: `Bearer ${cfg.xaiKey}` },
+        xaiChatBody(cfg.xaiModel, system, user, effort),
+        cfg.timeoutMs) as { choices?: { message?: { content?: string } }[] };
+      return data.choices?.[0]?.message?.content ?? "";
+    },
+  };
+}
+
 function anthropic(cfg: LLMConfig): LLM {
   return {
     name: `anthropic/${cfg.anthropicModel}`,
@@ -449,10 +529,12 @@ export function makeLLM(
   if (provider === "ollama" && resolved) run.ollamaModel = resolved;
   if (provider === "openai" && resolved) run.openaiModel = resolved;
   if (provider === "anthropic" && resolved) run.anthropicModel = resolved;
+  if (provider === "xai" && resolved) run.xaiModel = resolved;
   switch (provider) {
     case "ollama": return ollama(run);
     case "openai": return openai(run);
     case "anthropic": return anthropic(run);
+    case "xai": return xai(run);
     default: return mock();
   }
 }

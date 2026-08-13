@@ -88,6 +88,9 @@ Physical spare = stand close ~1.25s (`spareP≥75`); physical kill = strike agai
 
 ## Notes
 
+- Filter note (2026-08-09): betrayal-farm claims use **TREASON on only**. This
+  table still lists throne reaches with TREASON off (8VFN-m7+) for ice-gate /
+  kill-gate context — do not fold those into betrayal n.
 - **No kill resolutions** in this dump set — mostly a **controller cast leak**, not model inability.
   FREE ROAM AI+AI casts both `npc=false` + `duoPeer`; phase-9 used `!mate.npc` as “human present”
   → both rewrote `attack`→`follow` → 0 swings → mercy/esc. Fixed **[82b]** (2026-08-09);

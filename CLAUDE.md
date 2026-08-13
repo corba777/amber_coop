@@ -37,7 +37,8 @@ git checkout az_dev && git fetch origin && git merge origin/main
 ```
 
 `.env` (see `.env.example`): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`OLLAMA_URL`/`OLLAMA_MODEL`, `PLAN_MS`, `PORT`. Keys live server-side only.
+`XAI_API_KEY`, `OLLAMA_URL`/`OLLAMA_MODEL`, `PLAN_MS`, `PORT`. Keys live
+server-side only.
 
 **Tree integrity check** (Docker flow: build locally, deploy dist to prod):
 a clean tree passes the exact assertion count in the test suite. If the count is
@@ -92,7 +93,7 @@ server/telemetry.ts joinability: plan context, bleed-episode classifier,
 server/scenarios.ts replayable social-reasoning forks (`MODE=scenario`): scripted
                     partner, seeded situation; identical forks per provider for
                     "as deviation from baseline". EXP-001/002/003 ([95]–[97]).
-server/llm.ts       providers: anthropic / openai / ollama / mock. mock is the
+server/llm.ts       providers: anthropic / openai / xai / ollama / mock. mock is the
                     deterministic harness driver — keep it dependency-free.
 client/client.ts    2D pixel client. client/client3d.ts — HD-2D (three.js).
 client/menu.ts      shared menu state machine — imported by BOTH clients; test
@@ -104,7 +105,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1315 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1323 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```

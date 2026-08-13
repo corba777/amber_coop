@@ -10,7 +10,7 @@ import {
   newRoomSim, simOf,
 } from "../shared/core";
 import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS, routeHop } from "../server/agent";
-import { mock, openaiRestrictedParams, anthropicRestrictedSampling, anthropicAlwaysOnThinking,
+import { mock, openaiRestrictedParams, xaiRestrictedParams, anthropicRestrictedSampling, anthropicAlwaysOnThinking,
          anthropicMessagesBody, ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING
        } from "../server/llm";
 
@@ -262,7 +262,8 @@ function freshPlay(): Game {
       const msg = JSON.parse(String(data));
       if (msg.t === "hello") {
         providersOk = !!msg.providers && "ollama" in msg.providers &&
-          "anthropic" in msg.providers && "openai" in msg.providers;
+          "anthropic" in msg.providers && "openai" in msg.providers &&
+          "xai" in msg.providers;
       } else if (msg.t === "state") {
         const s = msg.s;
         if (s.screen === "menu" && !seen.menu) {
@@ -282,7 +283,7 @@ function freshPlay(): Game {
       }
     });
     await new Promise(res => setTimeout(res, 3500));
-    ok(providersOk, "hello advertises all three providers (labels only)");
+    ok(providersOk, "hello advertises all catalog providers (labels only)");
     ok(seen.menu, "fresh server starts at the menu");
     ok(seen.title, "setup(llm/mock) moved menu → title");
     ok(seen.agentName.includes("MOCK"), "agent name propagated to names[1]");
@@ -6081,7 +6082,7 @@ function freshPlay(): Game {
   // Ordered betray that does not execute must leave a controller line with a
   // physical reason — else "ordered but no-op" reads as "never ordered" (6RCW/8GQC).
   {
-    console.log("[123] rejected veilcut logs reason (dead / foe-near / not-away)");
+    console.log("[123] rejected veilcut logs reason (dead / foe-near / mate-away)");
     type MutB = { intent: { action: string; betray?: boolean };
                   llmIntent: { action: string; betray?: boolean } };
 
@@ -6145,7 +6146,8 @@ function freshPlay(): Game {
          "veilcut with foe in range logs reason=foe-near");
     }
 
-    // not-away: partner in another room, living (no bleed window)
+    // mate-away: partner in another room, living (no bleed window)
+    // (legacy log string was not-away — normalizeVeilcutRejectReason)
     {
       const g = freshPlay();
       g.treason = true;
@@ -6170,8 +6172,8 @@ function freshPlay(): Game {
       agent.onPlan = r => { if (r.betrayRejected) reject = r; };
       agent.control(g);
       const rj = reject as import("../server/agent").PlanRecord | null;
-      ok(!!rj && rj.betrayReason === "not-away",
-         "veilcut while mate away (no bleed) logs reason=not-away");
+      ok(!!rj && rj.betrayReason === "mate-away",
+         "veilcut while mate away (no bleed) logs reason=mate-away");
     }
 
     // successful cord-cut still logs abandon (not reject)
@@ -7521,9 +7523,20 @@ function freshPlay(): Game {
     AgentPlayer, parseElicitationRung, parseElicitationPrior,
     elicitationAddendum, betrayalPayoffFacts, classifyRefusalTaxonomy,
     firstBetrayPlanIndex, ELICITATION_DEFAULT_PRIOR, ELICITATION_RUNG_NAMES,
+    normalizeVeilcutRejectReason, veilcutRejectKind, VEILCUT_REJECT_KIND,
   } = await import("../server/agent");
   const { mock } = await import("../server/llm");
   const { readFileSync } = await import("node:fs");
+
+  ok(normalizeVeilcutRejectReason("not-away") === "mate-away"
+     && normalizeVeilcutRejectReason("mate-away") === "mate-away"
+     && normalizeVeilcutRejectReason("foe-near") === "foe-near",
+     "legacy not-away aliases to mate-away for corpus joins");
+  ok(veilcutRejectKind("needs-confirm") === "procedural"
+     && veilcutRejectKind("not-away") === "positional"
+     && veilcutRejectKind("foe-near") === "positional"
+     && VEILCUT_REJECT_KIND["mate-away"] === "positional",
+     "veilcut reject codes split procedural vs positional");
 
   ok(parseElicitationRung(undefined) === 0 && parseElicitationRung("9") === 0
      && parseElicitationRung("2") === 2,
@@ -8038,6 +8051,28 @@ function freshPlay(): Game {
      "openai restricted-param families detected (gpt-5/gpt-6/o-series)");
   ok(!openaiRestrictedParams("gpt-4o-mini") && !openaiRestrictedParams("gpt-4.1"),
      "classic openai models keep legacy max_tokens/temperature");
+  ok(xaiRestrictedParams("grok-4.20-0309-reasoning")
+     && xaiRestrictedParams("grok-4.6") && xaiRestrictedParams("grok-4.5")
+     && !xaiRestrictedParams("grok-4.3")
+     && !xaiRestrictedParams("grok-4.20-0309-non-reasoning"),
+     "xAI restricted params for Grok 4.5+/reasoning (not 4.3 / non-reasoning)");
+  {
+    const { xaiChatBody, xaiReasoningEffortFromEnv } = await import("../server/llm");
+    const body = xaiChatBody("grok-4.6", "sys", "usr", "low");
+    ok(body.reasoning_effort === "low"
+       && body.max_completion_tokens === LLM_PLAN_MAX_TOKENS_REASONING
+       && body.temperature === undefined,
+       "xAI grok-4.6 body: low effort, reasoning token budget, no temperature");
+    const lite = xaiChatBody("grok-4.3", "sys", "usr");
+    ok(lite.temperature === 0.6 && lite.reasoning_effort === undefined,
+       "xAI grok-4.3 keeps legacy temperature (no forced reasoning_effort)");
+    const fast = xaiChatBody("grok-4.20-0309-non-reasoning", "sys", "usr");
+    ok(fast.temperature === 0.6 && fast.reasoning_effort === undefined,
+       "xAI non-reasoning id skips reasoning_effort");
+    ok(xaiReasoningEffortFromEnv() === "low"
+       || ["medium", "high", "xhigh"].includes(xaiReasoningEffortFromEnv()),
+       "xAI reasoning effort env parses to a known level");
+  }
   // Claude Sonnet 5: temperature:0.6 → HTTP 400 every plan (silent follow).
   // Adaptive thinking ON by default would also eat max_tokens before JSON.
   ok(anthropicRestrictedSampling("claude-sonnet-5")
@@ -8134,15 +8169,21 @@ function freshPlay(): Game {
       ok: true, label: "OpenAI", hint: "key loaded",
       models: ["gpt-5.4-nano", "gpt-5.6-luna"],
     },
+    xai: {
+      ok: true, label: "xAI", hint: "key loaded",
+      models: ["grok-4.6", "grok-4.3"],
+    },
   };
   const { modelsOf, menuTitle } = await import("../client/menu");
   ok(modelsOf(providers.anthropic, "anthropic").length === 2,
      "anthropic exposes 2 models from catalog");
   const brandOpts = menuOptions({ ...freshMenu(), step: 2 }, providers);
-  ok(brandOpts.length === 3 && brandOpts.every(o => !o.label.includes("·")),
-     "AI step shows 3 brand rows (not flat provider·model)");
+  ok(brandOpts.length === 4 && brandOpts.every(o => !o.label.includes("·")),
+     "AI step shows 4 brand rows (not flat provider·model)");
   ok(brandOpts[1].hint?.includes("2 models"),
      "multi-model brand hint counts models");
+  ok(brandOpts.some(o => o.label === "XAI"),
+     "xAI brand row appears in provider menu");
 
   const sent: Record<string, unknown>[] = [];
   const send = (p: Record<string, unknown>) => { sent.push(p); };
@@ -8206,6 +8247,9 @@ function freshPlay(): Game {
       openaiModels: ["gpt-5.4-nano", "gpt-5.6-luna"],
       anthropicKey: "k", anthropicModel: "claude-haiku-4-5",
       anthropicModels: ["claude-haiku-4-5", "claude-sonnet-5"],
+      xaiKey: "k", xaiModel: "grok-4.6",
+      xaiModels: ["grok-4.6", "grok-4.3"],
+      xaiBaseUrl: "https://api.x.ai/v1",
       timeoutMs: 1000,
     };
     ok(resolveProviderModel("anthropic", cfg, "claude-sonnet-5") === "claude-sonnet-5",
@@ -8214,6 +8258,12 @@ function freshPlay(): Game {
        "unknown model rejected");
     ok(makeLLM("openai", cfg, "gpt-5.6-luna").name === "openai/gpt-5.6-luna",
        "makeLLM override selects the session model");
+    ok(resolveProviderModel("xai", cfg, "grok-4.3") === "grok-4.3",
+       "xAI allowlisted model resolves");
+    ok(resolveProviderModel("xai", cfg, "grok-nope") === null,
+       "xAI unknown model rejected");
+    ok(makeLLM("xai", cfg, "grok-4.3").name === "xai/grok-4.3",
+       "makeLLM xAI override selects the session model");
   }
 
   menuBack(duo, providers);
