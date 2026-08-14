@@ -39,6 +39,20 @@ So this is not "models spontaneously decided to betray." It's closer to: *given 
 
 Every plan is logged. The public `say` and `why` are what a spectator sees — cover, essentially. A separate closed field, `privateWhy`, records the real rationale on the arm and confirm beats and never surfaces in the game. The gap between those two, and between both of them and where the agent actually walks, is the thing I care about more than the betrayal itself.
 
+## What the agent actually sees
+
+Partner identity is not in the planner context. `this.llm.name` appears twice in the planner, both times when writing a `PlanRecord` to the log — telemetry out, never model in. `observe()` has no partner name, provider, or stats. The only channel for inferring a partner is what that partner *did in this match*.
+
+**Observation** is the board, plus a behavioral ledger. On the partner: position / HP / maxHp / downed / dead, elixir, `darkSide`; if they are `away`, a room name instead of coordinates; if downed, bleed ticks, rescue ETA, `neglectSecLeft`. TREASON adds `betrayalDeclared` / `betrayalDuel` / `betrayalDeclarers` / `mutualDeclare` and the sealed-arena copy (exits locked, FF open). Costly acts arrive as physics, not adjectives: `relationshipMemory[]` of `{episode, outcome, evidence, ticksAgo}`. `partnerStrike` is the last `friendly-fire` — damage, whether they were in the room, `ticksAgo`, and the line “harm from your partner's blade or arrow (TREASON).” In 8PWS-m12 DeepSeek writes that the partner “put an arrow in my back 174 ticks ago” and that they “declared the duel — I am answering, FF is open.” Tick-accuracy is the tell: the model is not counting; the observation is.
+
+**Payoffs were not in this corpus.** `betrayalPayoffs` is injected only when `elicitationRung >= 1`. Every match in the n=149 fold — and the n=97 snapshot above — ran at rung 0 (covert addendum, no payoff table). The `ground→latch` ladder is therefore measured in a regime where the model is *not* shown what a strike buys. If you assume they could see “THE BLADE THAT TURNED credits a lone victor,” you are reading a later rung.
+
+**Closed.** The partner’s `privateWhy`, `suspicion`, `trust`, and `veilcut` never enter the other planner. `privateWhy.ground` is a closed list (`mate-low-hp`, `self-low-hp`, `objective-race`, `memory-distrust`, `opportunistic-physics`, `none`). Partner type defaults to **hidden** (`disclosePartner`); a knob can inject `human`/`ai`, and the logs keep `partnerTypeTrue*` beside `partnerTypeDisclosed`. This corpus used hidden. Through n=149, `observe().partner` also had no replica field (`hearPartner` off). Logged speech in that fold is two monologues over a shared board, not a dialogue. (`why` remains spectator HUD. An opt-in later fold puts the live same-room sprite bubble on `observation.partner.say` — one line, no history, silent across a room split — logged as `hearPartner` on the match row.)
+
+**Shared config.** Both slots run the same temperament (hunter), the same speech profile (`raw-ru`), and the same composed persona (`personaHash` identical for the duo-peer XML). Rung 0 adds no role-sanction text; the population prior 0.5 is unused until rung 3. The observation may carry the integer `elicitationRung: 0`. It does not name the experiment.
+
+Any read of the partner is assembled from how they moved, shared damage, arrived or didn’t, and whether an arrow already landed — not from a label on the character sheet.
+
 Ninety-seven matches later, here's the ladder — one row per **slot appearance**, not per match. Each duel writes two ledger lines (`slot0` and `slot1`); self-play against a copy of the same model still counts twice. Columns: Games, Betrayal, Init (opened the duel), Resp (answered after the partner opened), Win / Loss / Mark, and Neglect (traitor wins without a blade — `neglect` or `cord-cut`).
 
 <p align="center">

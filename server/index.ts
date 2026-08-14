@@ -8,6 +8,8 @@
  *  env: PORT, LOG_DIR, HARD_GATE (default for new sessions),
  *       P2 / LLM_PROVIDER (headless bypass: auto-setup for new sessions),
  *       PLAN_MS, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1),
+ *       HEAR_PARTNER (same-room live say in observation; default on —
+ *       set HEAR_PARTNER=0 for the deaf n=149-style fold),
  *       plus provider config via .env (see .env.example)
  * ========================================================================= */
 
@@ -20,7 +22,7 @@ import {
   TravelMode, endingFor,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, type SpeechProfile } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, SAY_DISPLAY_TICKS, type SpeechProfile } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog, resolveProviderModel,
@@ -47,6 +49,12 @@ const ELICITATION_PRIOR = parseElicitationPrior(process.env.ELICITATION_PRIOR);
 const HARD_GATE_DEFAULT = process.env.HARD_GATE === "1";
 /** Opt-in: inject observation.locomotion.stuck (confounds routeAgree — default off). */
 const STALL_FEEDBACK = process.env.STALL_FEEDBACK === "1";
+/** Same-room live partner.say in planner observation (default on; HEAR_PARTNER=0 = deaf). */
+const HEAR_PARTNER = (() => {
+  const v = process.env.HEAR_PARTNER;
+  if (v === undefined || v === "") return true;
+  return v === "1" || v === "true";
+})();
 const LOG_DIR = process.env.LOG_DIR || "./logs";
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
 /** sync — Esc/refresh must not race the process out from under a buffered write */
@@ -114,6 +122,7 @@ class Session {
   personaHashes: [string | null, string | null] = [null, null];
   episodeTrackers: [EpisodeTracker | null, EpisodeTracker | null] = [null, null];
   disclosePartner: PartnerDisclosure = "hidden";
+  hearPartner = true;
   emptySince = 0;   // ms timestamp when the last human left (0 = occupied)
   pendingStart = false;   // a "start" message: synthesized START edge
   /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
@@ -186,6 +195,7 @@ class Session {
       architect?: boolean;
       slick?: boolean;
       treason?: boolean;
+      hearPartner?: boolean;
       disclosePartner?: PartnerDisclosure;
       hostName?: string;
       model?: string;
@@ -198,6 +208,7 @@ class Session {
     this.game.treason = !!extra?.treason;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.disclosePartner = extra?.disclosePartner ?? "hidden";
+    this.hearPartner = extra?.hearPartner ?? HEAR_PARTNER;
     this.leaderAgent = null;
     this.providerFailAbort = null;
     this.apiGuard.reset();
@@ -242,6 +253,7 @@ class Session {
       elicitationRung: ELICITATION_RUNG,
       elicitationPrior: ELICITATION_PRIOR,
       stallFeedback: STALL_FEEDBACK,
+      hearPartner: this.hearPartner,
       ...base,
     });
 
@@ -608,6 +620,7 @@ class Session {
       partnerTypeTrue0: this.leaderAgent ? partnerTypeTrue(this, 0) : null,
       partnerTypeTrue1: this.agent ? partnerTypeTrue(this, 1) : null,
       partnerTypeDisclosed: this.disclosePartner,
+      hearPartner: this.hearPartner,
       brain: BRAIN,
       elicitationRung: ELICITATION_RUNG,
       elicitationRungName: ELICITATION_RUNG_NAMES[ELICITATION_RUNG],
@@ -669,7 +682,7 @@ class Session {
         const quip0 = this.leaderAgent.takeSay();
         if (quip0) {
           this.game.players[0].say = quip0;
-          this.game.players[0].sayT = 180;
+          this.game.players[0].sayT = SAY_DISPLAY_TICKS;
         }
       } else if (this.leaderAgent && this.game.players[0].dead) {
         this.rawInputs[0] = emptyInput();
@@ -681,7 +694,7 @@ class Session {
         const quip = this.agent.takeSay();
         if (quip) {
           this.game.players[1].say = quip;
-          this.game.players[1].sayT = 180;
+          this.game.players[1].sayT = SAY_DISPLAY_TICKS;
         }
       } else if (this.agent && this.game.players[1].dead) {
         this.rawInputs[1] = emptyInput();
@@ -997,6 +1010,7 @@ wss.on("connection", (ws, req) => {
             provider2: msg.provider2, temperament2: msg.temperament2,
             speech: msg.speech, speech2: msg.speech2,
             architect: msg.architect, slick: msg.slick, treason: msg.treason,
+            hearPartner: typeof msg.hearPartner === "boolean" ? msg.hearPartner : undefined,
             hostName: msg.hostName,
             model: typeof msg.model === "string" ? msg.model : undefined,
             model2: typeof msg.model2 === "string" ? msg.model2 : undefined,

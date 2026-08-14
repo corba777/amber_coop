@@ -728,6 +728,8 @@ function freshPlay(): Game {
     ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
     ok(src.includes("SLIPPERY ICE"), `${file}: slippery-ice toggle present`);
     ok(src.includes("TREASON"), `${file}: treason (friendly-fire) toggle present`);
+    ok(src.includes("HEAR PARTNER") && src.includes("hearPartner:"),
+       `${file}: hearPartner setup + quest toggle`);
     ok(src.includes("PROVIDER SILENCE") && src.includes("api-abort"),
        `${file}: live API-abort gameover banner (credits/auth)`);
     ok(src.includes('mode: "auto"') && src.includes("hardGate"), `${file}: autopilot setup carries hardGate`);
@@ -775,6 +777,14 @@ function freshPlay(): Game {
     ok(src.includes('id="pip"'), `${file}: partner scry mirror lives outside the game frame`);
     ok(src.includes('id="thoughts"') && src.includes("syncThoughtPanel"),
        `${file}: AI thought strip lives outside the game frame`);
+    ok(src.includes('id="chat"') && src.includes("syncChatPanel"),
+       `${file}: partner say chat log lives outside the game frame`);
+    ok(src.includes("drawSpeechCue") && src.includes("tickSayChat"),
+       `${file}: tiny speech cue + chat ingest wired`);
+    ok(src.includes("white-space: nowrap") && src.includes("#chat .cline"),
+       `${file}: chat lines stay one visual line (no clip-under-frame wrap)`);
+    ok(src.includes("Math.round(x + 5 - tw / 2)"),
+       `${file}: speech bubble snaps to integer pixels (crisp when scaled)`);
     ok(src.includes("formatThoughtLines"),
        `${file}: thought strip uses shared formatThoughtLines`);
     ok(src.includes("[x] FREE ROAM") || src.includes("FREE ROAM"),
@@ -963,6 +973,48 @@ function freshPlay(): Game {
   const yl = wrapText(fakeCtx, yieldMsg, 256 - 28);
   ok(yl.every(ln => ln.length * 5 <= 256 - 28), "the mercy prompt fits too");
   ok(wrapText(fakeCtx, "short", 200).length === 1, "short messages stay one line");
+  const { layoutSpeechBubble, SAY_BUBBLE_MAX_W, speechCueText, SAY_CUE_MAX_CHARS } =
+    await import("../client/textutil");
+  const longSay = "Ты меня уже четыре раза пиздил, сука! Хватит! Теперь я тебя ебану в ответ!";
+  const bub = layoutSpeechBubble(fakeCtx, longSay);
+  ok(bub.lines.length === 1, "sprite bubble is one line (full say lives in #chat)");
+  ok(bub.tw <= SAY_BUBBLE_MAX_W, "one-line bubble width stays inside SAY_BUBBLE_MAX_W");
+  ok(bub.lines[0].endsWith("…"), "over-wide say is ellipsized, not wrapped");
+  ok(Number.isInteger(bub.tw) && Number.isInteger(bub.th),
+     "bubble size is integer pixels (avoids subpixel blur when scaled)");
+  const cue = speechCueText(longSay);
+  ok(cue.length <= SAY_CUE_MAX_CHARS, "over-hero cue is truncated to SAY_CUE_MAX_CHARS");
+  ok(cue.endsWith("…") && cue.length < longSay.length, "cue ellipsis marks the off-frame rest");
+  const { ingestSayChat, CHAT_MAX_LINES } = await import("../client/saychat");
+  let chat = ingestSayChat([], ["", ""], [
+    { say: longSay, present: true },
+    { say: "погнали", present: true },
+  ], ["LUNA", "QWEN"]);
+  ok(chat.lines.length === 2 && chat.lines[0].text === longSay,
+     "chat log stores full say, not the cue");
+  chat = ingestSayChat(chat.lines, chat.lastSay, [
+    { say: longSay, present: true },
+    { say: "погнали", present: true },
+  ], ["LUNA", "QWEN"]);
+  ok(chat.lines.length === 2, "unchanged say does not duplicate chat lines");
+  chat = ingestSayChat(chat.lines, chat.lastSay, [
+    { say: "новый ход", present: true },
+    { say: "погнали", present: true },
+  ], ["LUNA", "QWEN"]);
+  ok(chat.lines.length === 2 && chat.lines[1].text === "новый ход",
+     "new say appends and drops older lines past CHAT_MAX_LINES=2");
+  ok(CHAT_MAX_LINES === 2, "chat strip keeps only the last two say lines");
+  let st = ingestSayChat([], ["", ""], [
+    { say: "seed", present: true },
+    { say: "", present: true },
+  ], ["A", "B"]);
+  for (let i = 0; i < CHAT_MAX_LINES + 5; i++) {
+    st = ingestSayChat(st.lines, st.lastSay, [
+      { say: `line-${i}`, present: true },
+      { say: "", present: true },
+    ], ["A", "B"]);
+  }
+  ok(st.lines.length === CHAT_MAX_LINES, "chat log caps at CHAT_MAX_LINES");
 }
 
 // ------------------------------------------------- 20. shield inertia
@@ -9307,6 +9359,129 @@ function freshPlay(): Game {
   }
   ok(emptyPrivateWhyStats().byGround.none === 0,
      "emptyPrivateWhyStats seeds byGround");
+}
+
+// ------------------------------------------------- 137. hearPartner: same-room live say (no history)
+{
+  console.log("[137] hearPartner: same-room live bubble in observation (no history / no away)");
+  const { readFileSync } = await import("node:fs");
+  const { newRoomSim } = await import("../shared/core");
+  const src = readFileSync("server/agent.ts", "utf8");
+  const idxSrc = readFileSync("server/index.ts", "utf8");
+  ok(/HEAR_PARTNER_ADDENDUM/.test(src)
+     && /observation\.partner\.say/.test(src)
+     && /No transcript, no history/.test(src)
+     && /conversational reply/.test(src),
+     "hear addendum names the live bubble and prefers a conversational reply");
+  ok(/hearPartner: this\.hearPartner/.test(idxSrc),
+     "matches.jsonl records hearPartner for A/B filter");
+  ok(/if \(v === undefined \|\| v === ""\) return true/.test(idxSrc),
+     "server HEAR_PARTNER unset defaults ON");
+  ok(/hearPartner: true/.test(readFileSync("client/menu.ts", "utf8")),
+     "menu freshMenu defaults HEAR PARTNER on");
+  ok(!/heardWhy/.test(src), "why stays off the planner observation");
+  ok(/SAY_MAX_CHARS = 100/.test(src) && /slice\(0, SAY_MAX_CHARS\)/.test(src),
+     "say hard-cap is SAY_MAX_CHARS=100 (was slogan 40)");
+  ok(/WHY_MAX_CHARS = 100/.test(src) && /slice\(0, WHY_MAX_CHARS\)/.test(src),
+     "why hard-cap is WHY_MAX_CHARS=100 (was mid-cut 60)");
+  ok(!/why\.slice\(0,\s*60\)/.test(src),
+     "no leftover why.slice(0, 60) — HUD/plans were truncating mid-word");
+  ok(/SAY_DISPLAY_TICKS/.test(idxSrc),
+     "live bubble uses SAY_DISPLAY_TICKS (longer than old 3s)");
+  ok(/≤100|<=100/.test(readFileSync("persona/modules/output_rules/amber-json.md", "utf8"))
+     && /≤100/.test(readFileSync("persona/modules/speech/raw-ru.md", "utf8")),
+     "persona prompts raise say budget to ≤100");
+  ok(/SAME language/.test(readFileSync("persona/modules/output_rules/amber-json.md", "utf8"))
+     && /не копируй/.test(readFileSync("persona/modules/speech/raw-ru.md", "utf8")),
+     "prompts forbid Russian say + English why split");
+
+  const g = freshPlay();
+  g.players[1].say = "Погнали к озеру";
+  g.players[1].sayT = 180;
+  type PartnerSay = { say?: string; away?: boolean };
+  const deaf = new AgentPlayer(mock(), 0, { planMs: 9e9, hearPartner: false });
+  ok(JSON.parse(deaf.observe(g)).partner.say === undefined,
+     "hearPartner false: bubble omitted (deaf A/B / n=149 fold)");
+
+  // Default (unset) = ON — new farm fold hears without an explicit flag.
+  const defaultOn = new AgentPlayer(mock(), 0, { planMs: 9e9 });
+  ok(JSON.parse(defaultOn.observe(g)).partner.say === "Погнали к озеру",
+     "hearPartner unset defaults ON");
+
+  const listener = new AgentPlayer(mock(), 0, { planMs: 9e9, hearPartner: true });
+  const here = JSON.parse(listener.observe(g)) as { partner: PartnerSay };
+  ok(here.partner.say === "Погнали к озеру",
+     "same-room live bubble is a string on partner.say");
+  ok(typeof here.partner.say === "string" && !("ticksLeft" in (here.partner as object)),
+     "no ticksAgo / ticksLeft on the replica");
+
+  g.players[1].sayT = 0;
+  const faded = JSON.parse(listener.observe(g)) as { partner: PartnerSay };
+  ok(faded.partner.say === undefined, "faded bubble (sayT=0) is omitted — HUD physics");
+
+  g.travelMode = "free";
+  g.sims.push(newRoomSim());
+  g.sims[1].room = 1;
+  g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+  g.players[1].simIndex = 1;
+  g.players[1].say = "Хватаю элик";
+  g.players[1].sayT = 90;
+  const away = JSON.parse(listener.observe(g)) as { partner: PartnerSay };
+  ok(away.partner.away === true && away.partner.say === undefined,
+     "away partner: speech channel breaks with the room split");
+
+  g.players[1].simIndex = 0;
+  g.players[1].dead = true;
+  g.players[1].downed = true;
+  g.players[1].hp = 0;
+  g.players[1].sayT = 90;
+  const cut = JSON.parse(listener.observe(g)) as { partner: PartnerSay | string };
+  ok(typeof cut.partner === "object" && cut.partner !== null
+     && !("say" in cut.partner),
+     "dead partner object has no say");
+}
+
+// ------------------------------------------------- 138. rematch clears stale activeErrand (DGKB abortedTick NPE)
+{
+  console.log("[138] rematch clears stale activeErrand (no finishErrand abortedTick NPE)");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.golemDead = true;
+  g.amberClaimed = true;
+  g.gateMelted = true;
+  g.hasBow = false;
+  // Both heroes same room — reunited path calls finishErrand.
+  g.players[0].present = true;
+  g.players[1].present = true;
+  g.players[0].simIndex = 0;
+  g.players[1].simIndex = 0;
+  const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "hunter" });
+  type ErrandMut = {
+    activeErrand: { goal: string; targetRoom: number; startedTick: number;
+      say: string; why: string } | null;
+  };
+  const mut = agent as unknown as ErrandMut;
+  mut.activeErrand = {
+    goal: "bow", targetRoom: 6, startedTick: 0, say: "bow", why: "bow",
+  };
+  agent.errandLog.push({
+    goal: "bow", room: 6, declaredTick: 0, heroDownsDuring: 0,
+  });
+  // Rematch hygiene (Session calls this) — used to wipe the log only.
+  agent.resetMatchTelemetry();
+  ok(agent.errandLog.length === 0, "resetMatchTelemetry empties errandLog");
+  ok(mut.activeErrand == null,
+     "resetMatchTelemetry also clears activeErrand (DGKB tick storm)");
+
+  // Hardening: even if activeErrand is planted with an empty log, control
+  // must clear it without throwing (pre-fix / test mutation path).
+  mut.activeErrand = {
+    goal: "bow", targetRoom: 6, startedTick: 0, say: "bow", why: "bow",
+  };
+  ok(agent.errandLog.length === 0, "empty log + stale activeErrand planted");
+  agent.control(g);
+  ok(mut.activeErrand == null,
+     "finishErrand reunited clears stale activeErrand without abortedTick NPE");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

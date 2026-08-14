@@ -7,6 +7,7 @@ import {
   PartnerView, TILE, COLS, ROWS, W, H, PLAYER_W, PLAYER_H,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
+import { drawSpeechCue } from "./textutil";
 
 const PIP_SCALE = 0.35;
 const PIP_W = Math.round(W * PIP_SCALE);
@@ -161,11 +162,7 @@ export function drawPartnerPip(
 
   if (p.say && p.sayT > 0) {
     ctx.font = "7px monospace";
-    const tw = ctx.measureText(p.say).width + 8;
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillRect(p.x - 2, p.y - 16, tw, 11);
-    ctx.fillStyle = "#1b1b2b";
-    ctx.fillText(p.say, p.x + 2, p.y - 8);
+    drawSpeechCue(ctx, p.say, p.x, p.y, W, 1);
   }
 
   ctx.restore();
