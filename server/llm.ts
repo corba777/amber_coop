@@ -1,12 +1,13 @@
 /* =========================================================================
- *  LLM providers — one interface, five backends, chosen at runtime from the
+ *  LLM providers — one interface, six backends, chosen at runtime from the
  *  in-game menu. Models and API keys come from a .env file / environment;
- *  keys never leave the server.
+ *  keys never leave the server. Vertex uses Google SA JSON / ADC / gcloud.
  * ========================================================================= */
 
 import fs from "node:fs";
+import { googleAuthConfigured, googleAuthHeaders } from "./google-auth";
 
-export type ProviderName = "ollama" | "openai" | "anthropic" | "xai" | "mock";
+export type ProviderName = "ollama" | "openai" | "anthropic" | "xai" | "vertex" | "mock";
 
 export interface LLM {
   name: string;
@@ -30,6 +31,13 @@ export interface LLMConfig {
   xaiModels: string[];
   /** OpenAI-compatible base (default https://api.x.ai/v1). */
   xaiBaseUrl: string;
+  /** GCP project for Vertex AI / Model Garden (OpenAI-compatible endpoint). */
+  vertexProject: string;
+  vertexLocation: string;
+  /** Endpoint id: `openapi` for Gemini / MaaS, or a deployed Model Garden endpoint. */
+  vertexEndpoint: string;
+  vertexModel: string;
+  vertexModels: string[];
   timeoutMs: number;
 }
 
@@ -54,6 +62,7 @@ export function configFromEnv(): LLMConfig {
   const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const anthropicModel = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5";
   const xaiModel = process.env.XAI_MODEL || "grok-4.6";
+  const vertexModel = process.env.VERTEX_MODEL || "google/gemini-3.5-flash-lite";
   return {
     ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434",
     ollamaModel,
@@ -68,6 +77,19 @@ export function configFromEnv(): LLMConfig {
     xaiModel,
     xaiModels: parseModelList(process.env.XAI_MODELS, xaiModel),
     xaiBaseUrl: (process.env.XAI_BASE_URL || "https://api.x.ai/v1").replace(/\/$/, ""),
+    vertexProject: process.env.VERTEX_PROJECT
+      || process.env.GOOGLE_CLOUD_PROJECT
+      || process.env.GCLOUD_PROJECT
+      || "si-p-dl-mlops-compute",
+    vertexLocation: (process.env.VERTEX_LOCATION || "global").trim() || "global",
+    vertexEndpoint: (process.env.VERTEX_ENDPOINT || "openapi").trim() || "openapi",
+    vertexModel,
+    vertexModels: parseModelList(
+      process.env.VERTEX_MODELS
+        || "google/gemini-3.5-flash-lite,anthropic/claude-opus-4-6,"
+          + "google/gemini-3.1-pro-preview,google/gemini-3.7-flash,google/gemini-2.5-flash",
+      vertexModel,
+    ),
     timeoutMs: Number(process.env.LLM_TIMEOUT_MS || 8000),
   };
 }
@@ -112,6 +134,17 @@ export function providerCatalog(cfg: LLMConfig): Record<string, ProviderCatalogE
       models: cfg.xaiModels,
       defaultModel: cfg.xaiModel,
     },
+    vertex: {
+      ok: cfg.vertexProject.length > 0 && googleAuthConfigured(),
+      label: "Vertex",
+      hint: !cfg.vertexProject
+        ? "no VERTEX_PROJECT"
+        : googleAuthConfigured()
+          ? `${cfg.vertexProject} · ${cfg.vertexLocation}`
+          : "no SA JSON / ADC (./google_account)",
+      models: cfg.vertexModels,
+      defaultModel: cfg.vertexModel,
+    },
   };
 }
 
@@ -121,6 +154,7 @@ export function modelsForProvider(provider: ProviderName, cfg: LLMConfig): strin
   if (provider === "openai") return cfg.openaiModels;
   if (provider === "anthropic") return cfg.anthropicModels;
   if (provider === "xai") return cfg.xaiModels;
+  if (provider === "vertex") return cfg.vertexModels;
   return [];
 }
 
@@ -139,7 +173,8 @@ export function resolveProviderModel(
     provider === "ollama" ? cfg.ollamaModel
       : provider === "openai" ? cfg.openaiModel
         : provider === "xai" ? cfg.xaiModel
-          : cfg.anthropicModel
+          : provider === "vertex" ? cfg.vertexModel
+            : cfg.anthropicModel
   );
   return allow.includes(pick) ? pick : null;
 }
@@ -458,6 +493,120 @@ function xai(cfg: LLMConfig): LLM {
   };
 }
 
+/**
+ * Vertex AI OpenAI-compatible chat URL (Gemini + OpenAI-compat Garden models).
+ * location=global → host aiplatform.googleapis.com (no region prefix).
+ */
+export function vertexChatUrl(cfg: Pick<LLMConfig,
+  "vertexProject" | "vertexLocation" | "vertexEndpoint"
+>): string {
+  const loc = cfg.vertexLocation.trim() || "global";
+  const endpoint = (cfg.vertexEndpoint || "openapi").replace(/^\/+|\/+$/g, "");
+  const host = loc === "global"
+    ? "https://aiplatform.googleapis.com"
+    : `https://${loc}-aiplatform.googleapis.com`;
+  return `${host}/v1/projects/${cfg.vertexProject}/locations/${loc}` +
+    `/endpoints/${endpoint}/chat/completions`;
+}
+
+/**
+ * Claude-on-Vertex uses Anthropic `rawPredict`, not the OpenAI openapi endpoint.
+ * Model id is the bare Claude id (no anthropic/ publisher prefix in the path).
+ */
+export function vertexAnthropicUrl(cfg: Pick<LLMConfig, "vertexProject" | "vertexLocation">,
+                                   model: string): string {
+  const loc = cfg.vertexLocation.trim() || "global";
+  const host = loc === "global"
+    ? "https://aiplatform.googleapis.com"
+    : `https://${loc}-aiplatform.googleapis.com`;
+  const id = vertexModelId(model).replace(/^anthropic\//, "");
+  return `${host}/v1/projects/${cfg.vertexProject}/locations/${loc}` +
+    `/publishers/anthropic/models/${encodeURIComponent(id)}:rawPredict`;
+}
+
+/** True when the Vertex model is Claude (partner Anthropic rawPredict). */
+export function vertexIsClaudeModel(model: string): boolean {
+  const m = model.trim().toLowerCase();
+  return m.startsWith("anthropic/") || m.startsWith("claude-");
+}
+
+/**
+ * Normalize Model Garden / Gemini / Claude ids.
+ * Bare `gemini-*` → `google/gemini-*`; bare `claude-*` → `anthropic/claude-*`.
+ */
+export function vertexModelId(model: string): string {
+  const m = model.trim();
+  if (!m) return m;
+  if (m.includes("/")) return m;
+  if (/^gemini[-.]/i.test(m)) return `google/${m}`;
+  if (/^claude[-.]/i.test(m)) return `anthropic/${m}`;
+  return m;
+}
+
+/** Pure body builder — OpenAI-compat Vertex chat (Gemini / MaaS). */
+export function vertexChatBody(
+  model: string, system: string, user: string,
+): Record<string, unknown> {
+  return {
+    model: vertexModelId(model),
+    response_format: { type: "json_object" },
+    max_tokens: LLM_PLAN_MAX_TOKENS,
+    temperature: 0.6,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+}
+
+/** Pure body builder — Claude-on-Vertex Anthropic Messages (rawPredict). */
+export function vertexAnthropicBody(
+  system: string, user: string,
+): Record<string, unknown> {
+  return {
+    anthropic_version: "vertex-2023-10-16",
+    max_tokens: LLM_PLAN_MAX_TOKENS,
+    temperature: 0.6,
+    system,
+    messages: [{ role: "user", content: user }],
+  };
+}
+
+function vertexAnthropicText(data: {
+  content?: { type: string; text?: string }[];
+}): string {
+  return (data.content ?? [])
+    .filter(b => b.type === "text")
+    .map(b => b.text ?? "")
+    .join("");
+}
+
+/** Vertex AI / Model Garden via Google OAuth (SA JSON, ADC, or gcloud). */
+function vertex(cfg: LLMConfig): LLM {
+  return {
+    name: `vertex/${cfg.vertexModel}`,
+    async chat(system, user) {
+      const headers = await googleAuthHeaders(cfg.vertexProject);
+      if (vertexIsClaudeModel(cfg.vertexModel)) {
+        const data = await postWithRetry(
+          vertexAnthropicUrl(cfg, cfg.vertexModel),
+          headers,
+          vertexAnthropicBody(system, user),
+          cfg.timeoutMs,
+        ) as { content?: { type: string; text?: string }[] };
+        return vertexAnthropicText(data);
+      }
+      const data = await postWithRetry(
+        vertexChatUrl(cfg),
+        headers,
+        vertexChatBody(cfg.vertexModel, system, user),
+        cfg.timeoutMs,
+      ) as { choices?: { message?: { content?: string } }[] };
+      return data.choices?.[0]?.message?.content ?? "";
+    },
+  };
+}
+
 function anthropic(cfg: LLMConfig): LLM {
   return {
     name: `anthropic/${cfg.anthropicModel}`,
@@ -530,11 +679,13 @@ export function makeLLM(
   if (provider === "openai" && resolved) run.openaiModel = resolved;
   if (provider === "anthropic" && resolved) run.anthropicModel = resolved;
   if (provider === "xai" && resolved) run.xaiModel = resolved;
+  if (provider === "vertex" && resolved) run.vertexModel = resolved;
   switch (provider) {
     case "ollama": return ollama(run);
     case "openai": return openai(run);
     case "anthropic": return anthropic(run);
     case "xai": return xai(run);
+    case "vertex": return vertex(run);
     default: return mock();
   }
 }

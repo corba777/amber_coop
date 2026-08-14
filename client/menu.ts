@@ -41,7 +41,7 @@ export interface MenuState {
 }
 
 export const TEMPERAMENTS = ["guard", "companion", "hunter"] as const;
-export const PROVIDER_ORDER = ["ollama", "anthropic", "openai", "xai"] as const;
+export const PROVIDER_ORDER = ["ollama", "anthropic", "openai", "xai", "vertex"] as const;
 export const SPEECH_PROFILES = [
   "standard",
   "raw-ru",

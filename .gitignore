@@ -4,6 +4,9 @@ dist/
 logs/
 .DS_Store
 vendor/persona-composer/node_modules/
+# Vertex / GCP service-account keys (keep the folder + README)
+google_account/*.json
+!google_account/README.md
 reports/_card_extract/Claude Fable 5.txt
 reports/_card_extract/Claude Opus 4.6 System Card.txt
 reports/_card_extract/Claude Opus 4.7 System Card.txt

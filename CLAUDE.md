@@ -93,8 +93,9 @@ server/telemetry.ts joinability: plan context, bleed-episode classifier,
 server/scenarios.ts replayable social-reasoning forks (`MODE=scenario`): scripted
                     partner, seeded situation; identical forks per provider for
                     "as deviation from baseline". EXP-001/002/003 ([95]–[97]).
-server/llm.ts       providers: anthropic / openai / xai / ollama / mock. mock is the
-                    deterministic harness driver — keep it dependency-free.
+server/llm.ts       providers: anthropic / openai / xai / ollama / vertex / mock.
+                    vertex = Model Garden OpenAI-compat + SA JSON / ADC / gcloud.
+                    mock is the deterministic harness driver — keep it dependency-free.
 client/client.ts    2D pixel client. client/client3d.ts — HD-2D (three.js).
 client/menu.ts      shared menu state machine — imported by BOTH clients; test
                     [15] checks built bundles for anchors.
@@ -105,7 +106,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1331 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1341 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```

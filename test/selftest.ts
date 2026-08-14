@@ -11,8 +11,9 @@ import {
 } from "../shared/core";
 import { AgentPlayer, stripReasoning, VEILCUT_ARM_PLANS, routeHop } from "../server/agent";
 import { mock, openaiRestrictedParams, xaiRestrictedParams, anthropicRestrictedSampling, anthropicAlwaysOnThinking,
-         anthropicMessagesBody, ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING
-       } from "../server/llm";
+         anthropicMessagesBody, ollamaChatBody, LLM_PLAN_MAX_TOKENS, LLM_PLAN_MAX_TOKENS_REASONING,
+         vertexChatUrl, vertexChatBody, vertexModelId
+} from "../server/llm";
 
 let passed = 0;
 
@@ -263,7 +264,7 @@ function freshPlay(): Game {
       if (msg.t === "hello") {
         providersOk = !!msg.providers && "ollama" in msg.providers &&
           "anthropic" in msg.providers && "openai" in msg.providers &&
-          "xai" in msg.providers;
+          "xai" in msg.providers && "vertex" in msg.providers;
       } else if (msg.t === "state") {
         const s = msg.s;
         if (s.screen === "menu" && !seen.menu) {
@@ -8080,6 +8081,58 @@ function freshPlay(): Game {
        || ["medium", "high", "xhigh"].includes(xaiReasoningEffortFromEnv()),
        "xAI reasoning effort env parses to a known level");
   }
+  // Vertex AI / Model Garden OpenAI-compat URL + model id + planner body.
+  {
+    ok(vertexModelId("gemini-2.0-flash-001") === "google/gemini-2.0-flash-001"
+       && vertexModelId("google/gemini-2.5-flash") === "google/gemini-2.5-flash"
+       && vertexModelId("claude-opus-4-6") === "anthropic/claude-opus-4-6"
+       && vertexModelId("meta/llama3") === "meta/llama3",
+       "Vertex model id: bare gemini/claude get publisher prefix; paths kept");
+    const { vertexIsClaudeModel, vertexAnthropicUrl, vertexAnthropicBody } =
+      await import("../server/llm");
+    ok(vertexIsClaudeModel("anthropic/claude-opus-4-6")
+       && vertexIsClaudeModel("claude-opus-4-6")
+       && !vertexIsClaudeModel("google/gemini-2.5-flash"),
+       "Vertex Claude detection for anthropic/ and bare claude- ids");
+    const url = vertexChatUrl({
+      vertexProject: "si-p-dl-mlops-compute",
+      vertexLocation: "us-central1",
+      vertexEndpoint: "openapi",
+    });
+    ok(url === "https://us-central1-aiplatform.googleapis.com/v1/projects/"
+         + "si-p-dl-mlops-compute/locations/us-central1/endpoints/openapi/chat/completions",
+       "Vertex regional openapi chat URL");
+    const globalUrl = vertexChatUrl({
+      vertexProject: "si-p-dl-mlops-compute",
+      vertexLocation: "global",
+      vertexEndpoint: "openapi",
+    });
+    ok(globalUrl.startsWith("https://aiplatform.googleapis.com/v1/projects/")
+         && globalUrl.includes("/locations/global/endpoints/openapi/chat/completions"),
+       "Vertex global location uses aiplatform.googleapis.com host");
+    const claudeUrl = vertexAnthropicUrl({
+      vertexProject: "si-p-dl-mlops-compute",
+      vertexLocation: "global",
+    }, "anthropic/claude-opus-4-6");
+    ok(claudeUrl.includes("/locations/global/publishers/anthropic/models/claude-opus-4-6:rawPredict"),
+       "Vertex Claude uses anthropic rawPredict on global");
+    const body = vertexChatBody("gemini-2.0-flash-001", "sys", "usr");
+    ok(body.model === "google/gemini-2.0-flash-001"
+       && (body.response_format as { type: string })?.type === "json_object"
+       && body.max_tokens === LLM_PLAN_MAX_TOKENS
+       && Array.isArray(body.messages) && (body.messages as unknown[]).length === 2,
+       "Vertex chat body: json_object + system/user + token budget");
+    const ab = vertexAnthropicBody("sys", "usr");
+    ok(ab.anthropic_version === "vertex-2023-10-16"
+       && Array.isArray(ab.messages) && (ab.messages as unknown[]).length === 1,
+       "Vertex Anthropic body uses vertex anthropic_version + user message");
+    const { googleCredentialCandidates, googleAuthConfigured } =
+      await import("../server/google-auth");
+    ok(googleCredentialCandidates().some(p => p.includes("google_account")),
+       "Google credential candidates include ./google_account");
+    ok(typeof googleAuthConfigured() === "boolean",
+       "googleAuthConfigured is a boolean (SA / ADC / VERTEX_USE_GCLOUD)");
+  }
   // Claude Sonnet 5: temperature:0.6 → HTTP 400 every plan (silent follow).
   // Adaptive thinking ON by default would also eat max_tokens before JSON.
   ok(anthropicRestrictedSampling("claude-sonnet-5")
@@ -8180,17 +8233,29 @@ function freshPlay(): Game {
       ok: true, label: "xAI", hint: "key loaded",
       models: ["grok-4.6", "grok-4.3"],
     },
+    vertex: {
+      ok: true, label: "Vertex", hint: "si-p-dl-mlops-compute · global",
+      models: [
+        "google/gemini-3.5-flash-lite",
+        "anthropic/claude-opus-4-6",
+        "google/gemini-3.1-pro-preview",
+        "google/gemini-3.7-flash",
+        "google/gemini-2.5-flash",
+      ],
+    },
   };
   const { modelsOf, menuTitle } = await import("../client/menu");
   ok(modelsOf(providers.anthropic, "anthropic").length === 2,
      "anthropic exposes 2 models from catalog");
   const brandOpts = menuOptions({ ...freshMenu(), step: 2 }, providers);
-  ok(brandOpts.length === 4 && brandOpts.every(o => !o.label.includes("·")),
-     "AI step shows 4 brand rows (not flat provider·model)");
+  ok(brandOpts.length === 5 && brandOpts.every(o => !o.label.includes("·")),
+     "AI step shows 5 brand rows (not flat provider·model)");
   ok(brandOpts[1].hint?.includes("2 models"),
      "multi-model brand hint counts models");
   ok(brandOpts.some(o => o.label === "XAI"),
      "xAI brand row appears in provider menu");
+  ok(brandOpts.some(o => o.label === "VERTEX"),
+     "Vertex brand row appears in provider menu");
 
   const sent: Record<string, unknown>[] = [];
   const send = (p: Record<string, unknown>) => { sent.push(p); };
@@ -8257,6 +8322,17 @@ function freshPlay(): Game {
       xaiKey: "k", xaiModel: "grok-4.6",
       xaiModels: ["grok-4.6", "grok-4.3"],
       xaiBaseUrl: "https://api.x.ai/v1",
+      vertexProject: "si-p-dl-mlops-compute",
+      vertexLocation: "global",
+      vertexEndpoint: "openapi",
+      vertexModel: "google/gemini-3.5-flash-lite",
+      vertexModels: [
+        "google/gemini-3.5-flash-lite",
+        "anthropic/claude-opus-4-6",
+        "google/gemini-3.1-pro-preview",
+        "google/gemini-3.7-flash",
+        "google/gemini-2.5-flash",
+      ],
       timeoutMs: 1000,
     };
     ok(resolveProviderModel("anthropic", cfg, "claude-sonnet-5") === "claude-sonnet-5",
@@ -8271,6 +8347,14 @@ function freshPlay(): Game {
        "xAI unknown model rejected");
     ok(makeLLM("xai", cfg, "grok-4.3").name === "xai/grok-4.3",
        "makeLLM xAI override selects the session model");
+    ok(resolveProviderModel("vertex", cfg, "google/gemini-3.7-flash")
+         === "google/gemini-3.7-flash",
+       "Vertex allowlisted model resolves");
+    ok(resolveProviderModel("vertex", cfg, "google/nope") === null,
+       "Vertex unknown model rejected");
+    ok(makeLLM("vertex", cfg, "google/gemini-3.7-flash").name
+         === "vertex/google/gemini-3.7-flash",
+       "makeLLM Vertex override selects the session model");
   }
 
   menuBack(duo, providers);

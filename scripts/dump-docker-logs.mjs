@@ -1,15 +1,26 @@
 #!/usr/bin/env node
-/** Dump ALL matches (+ plans / dialogue windows) from Docker logs/matches.jsonl. */
+/** Dump ALL matches (+ plans / dialogue windows) from Docker logs/matches.jsonl.
+ *
+ *   LOG_DIR=logs/docker-YYYY-MM-DD/raw OUT_DIR=logs/docker-YYYY-MM-DD node scripts/dump-docker-logs.mjs
+ *
+ * Defaults: LOG_DIR=logs  OUT_DIR=/tmp/docker-dump
+ */
 import fs from "node:fs";
+import path from "node:path";
+
+const logDir = process.env.LOG_DIR || "logs";
+const outDir = process.env.OUT_DIR || "/tmp/docker-dump";
+const matchesPath = path.join(logDir, "matches.jsonl");
+const plansPath = path.join(logDir, "plans.jsonl");
 
 const matches = fs
-  .readFileSync("logs/matches.jsonl", "utf8")
+  .readFileSync(matchesPath, "utf8")
   .trim()
   .split("\n")
   .filter(Boolean)
   .map((l, i) => ({ _line: i, ...JSON.parse(l) }));
 const plans = fs
-  .readFileSync("logs/plans.jsonl", "utf8")
+  .readFileSync(plansPath, "utf8")
   .trim()
   .split("\n")
   .filter(Boolean)
@@ -19,7 +30,6 @@ const bySid = {};
 for (const m of matches) (bySid[m.sid] ||= []).push(m);
 for (const sid of Object.keys(bySid)) bySid[sid].sort((a, b) => a.t.localeCompare(b.t));
 
-const outDir = "/tmp/docker-dump";
 fs.mkdirSync(outDir, { recursive: true });
 const index = [];
 
@@ -31,9 +41,9 @@ for (const sid of Object.keys(bySid)) {
     const endPad = new Date(new Date(m.t).getTime() + 5000).toISOString();
     const mp = plans.filter((p) => p.sid === m.sid && p.t > prevT && p.t <= endPad);
     const tag = `session-${sid}-m${m.matchIndex}`;
-    fs.writeFileSync(`${outDir}/${tag}-match.json`, JSON.stringify(m, null, 2));
+    fs.writeFileSync(path.join(outDir, `${tag}-match.json`), JSON.stringify(m, null, 2));
     fs.writeFileSync(
-      `${outDir}/${tag}-plans.jsonl`,
+      path.join(outDir, `${tag}-plans.jsonl`),
       mp.map((p) => JSON.stringify(p)).join("\n") + (mp.length ? "\n" : ""),
     );
     const dial = mp
@@ -56,7 +66,7 @@ for (const sid of Object.keys(bySid)) {
         mate: p.mate,
       }));
     fs.writeFileSync(
-      `${outDir}/${tag}-dialogue.jsonl`,
+      path.join(outDir, `${tag}-dialogue.jsonl`),
       dial.map((p) => JSON.stringify(p)).join("\n") + (dial.length ? "\n" : ""),
     );
     index.push({
@@ -106,18 +116,24 @@ for (const sid of Object.keys(bySid)) {
     });
   }
 }
-fs.writeFileSync(`${outDir}/index.json`, JSON.stringify(index, null, 2));
+fs.writeFileSync(path.join(outDir, "index.json"), JSON.stringify(index, null, 2));
 console.log(
   JSON.stringify(
-    index.map((x) => ({
-      tag: x.tag,
-      ending: x.ending,
-      cause: x.betrayalCause,
-      ticks: x.ticks,
-      p1: x.p1name,
-      p2: x.partner,
-      plans: x.planLines,
-    })),
+    {
+      logDir,
+      outDir,
+      matches: index.length,
+      games: index.map((x) => ({
+        tag: x.tag,
+        ending: x.ending,
+        cause: x.betrayalCause,
+        ticks: x.ticks,
+        p1: x.p1name,
+        p2: x.partner,
+        providers: [x.provider1, x.provider2].filter(Boolean),
+        plans: x.planLines,
+      })),
+    },
     null,
     2,
   ),
