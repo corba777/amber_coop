@@ -13,8 +13,11 @@ import {
   Snapshot, Input, emptyInput, GameEvent, SOLID, BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
-import { drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel } from "./hud";
-import { wrapText } from "./textutil";
+import {
+  drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel,
+  emptySayChat, tickSayChat, syncChatPanel, type SayChatState,
+} from "./hud";
+import { wrapText, drawSpeechCue } from "./textutil";
 import { Pred, freshPred, stepPred, reconcile, recordInput } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor } from "./audio";
 import { drawPartnerPip, partnerPipCanvasSize, partnerPipOrigin } from "./partnerpip";
@@ -416,6 +419,8 @@ if (pipCanvas) {
   if (pipCtx) pipCtx.imageSmoothingEnabled = false;
 }
 const thoughtsEl = document.getElementById("thoughts");
+const chatEl = document.getElementById("chat");
+let sayChat: SayChatState = emptySayChat();
 
 function drawPartnerMirror(s: Snapshot): void {
   if (!pipCanvas || !pipCtx) return;
@@ -863,7 +868,9 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 }
 
 function drawHud(s: Snapshot): void {
-  // Off-frame thought strip — sync before any early return so BETRAYED still updates it
+  // Off-frame chat + thought strips — sync before early returns (BETRAYED etc.)
+  sayChat = tickSayChat(sayChat, s, names);
+  syncChatPanel(chatEl, sayChat.lines, s.screen === "play");
   syncThoughtPanel(thoughtsEl, formatThoughtLines(s), showThought, s.screen === "play");
   const me = s.players[mySlot];
   // TREASON: your own partner cut the cord — dead, but the run goes on without you.
@@ -1157,6 +1164,8 @@ function render(): void {
   requestAnimationFrame(render);
   uictx.clearRect(0, 0, W, H);
   if (!snap) {
+    sayChat = emptySayChat();
+    syncChatPanel(chatEl, [], false);
     syncThoughtPanel(thoughtsEl, [], showThought, false);
     uictx.fillStyle = "#0d0c14"; uictx.fillRect(0, 0, W, H);
     centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
@@ -1412,15 +1421,7 @@ function render(): void {
       if (p.sayT > 0 && p.say) {
         const [sx, sy] = project(wx, 1.7, wz);
         uictx.font = "7px monospace";
-        const tw = uictx.measureText(p.say).width + 8;
-        const bx = Math.max(2, Math.min(W - tw - 2, sx - tw / 2));
-        const by = Math.max(2, sy - 10);
-        uictx.globalAlpha = Math.min(1, p.sayT / 20);
-        uictx.fillStyle = "rgba(255,255,255,0.92)";
-        uictx.fillRect(bx, by, tw, 11);
-        uictx.fillStyle = "#1b1b2b";
-        uictx.fillText(p.say, bx + 4, by + 8);
-        uictx.globalAlpha = 1;
+        drawSpeechCue(uictx, p.say, sx - 5, sy + 8, W, Math.min(1, p.sayT / 20));
       }
     });
     drawHud(s);

@@ -1,7 +1,7 @@
 /* =========================================================================
  *  Agent player — two-level control:
  *    · PLANNER  (slow):  the LLM sees a compact observation every ~1.5 s
- *                        and returns a high-level intent + a short quip.
+ *                        and returns a high-level intent + a partner say.
  *    · CONTROLLER (60 Hz): turns the current intent into button presses —
  *                        walking, facing, sword timing, bow lines, kiting.
  *  LLM latency never blocks the game loop: while a plan is in flight the
@@ -36,6 +36,12 @@ import {
   type CompiledPersona,
 } from "./persona";
 
+/** Public partner bubble cap. Was 40 (slogan-length); raised so hear can carry a reply. */
+export const SAY_MAX_CHARS = 100;
+/** Public cover `why` (HUD + plans.jsonl). Was 60 — mid-word cuts on raw-ru / chatty builds. */
+export const WHY_MAX_CHARS = 100;
+/** HUD / hear window for a live say (ticks @ 60 Hz). Longer lines need more than 3s. */
+export const SAY_DISPLAY_TICKS = 300;
 export {
   type ElicitationRung,
   type VeilcutRejectReason,
@@ -603,8 +609,7 @@ If observation.partnerStrike (or relationshipMemory "friendly-fire") shows harm 
 you MAY protect yourself with EXISTING actions — keep distance (flee / goto away), withhold aid
 (do not revive / feather), strike back (hold SHIFT while attacking; TREASON is symmetric),
 exit / FREE ROAM flee, or race the prize alone. Which answer, and whether — YOUR judgment.
-Mechanics never force payback or forgiveness. You MAY "say" a short question or accusation;
-partners may answer in "say" — that dialogue is part of the game.
+Mechanics never force payback or forgiveness. You MAY "say" a short question or accusation.
 
 SEALED DUEL (observation.betrayalDuel — both heroes learn immediately):
 - Exits are locked; FF is open without SHIFT; mobs cannot hurt you (Judge shield).
@@ -613,6 +618,13 @@ SEALED DUEL (observation.betrayalDuel — both heroes learn immediately):
 - observation.betrayalDeclarers names who has declared. If BOTH are true, the winner takes Winter Mark.
 - If only they declared and you win without declaring → ordinary SOLO, no Mark.
 - Cord-cut (SHIFT at a downed body) and neglect remain separate — this arena is living vs living.`;
+
+/** Same-room live bubble — only when AgentOptions.hearPartner. Prompt matches observation. */
+const HEAR_PARTNER_ADDENDUM = `
+PARTNER SPEECH (observation.partner.say):
+Their live sprite bubble while you SHARE A ROOM — same window as the HUD.
+Absent = they are not speaking, or they are in another room. You do not hear "why".
+When the bubble is present, prefer a conversational reply in "say" (answer, agree, argue, warn) — not only a route slogan. They hear your "say" the same way. No transcript, no history.`;
 
 export function normalizeSuspicion(v: unknown): SuspicionLevel | undefined {
   if (typeof v !== "string") return undefined;
@@ -660,6 +672,12 @@ export interface AgentOptions {
    * Env: STALL_FEEDBACK=1. stuckAtPlan still logs on every PlanRecord either way.
    */
   stallFeedback?: boolean;
+  /**
+   * Same-room live partner.say in observation (HUD bubble, sayT>0). Default OFF.
+   * Default ON (HEAR_PARTNER unset/1). HEAR_PARTNER=0 / hearPartner:false = deaf.
+   * Logged on the match row for A/B vs the n=149 fold.
+   */
+  hearPartner?: boolean;
 }
 
 export type RouteHop = { kind: "exit"; dir: string } | { kind: "cave"; x: number; y: number } | null;
@@ -1224,6 +1242,11 @@ export class AgentPlayer {
     this.lastRescueClaimDist = null;
     this.betrayDecisionLogged = false;
     this.errandLog.length = 0;
+    // Rematch keeps AgentPlayer (H3BW). A mid-errand wipe must not leave
+    // activeErrand with an emptied log — finishErrand then NPE on abortedTick
+    // every tick (DGKB docker farm 2026-08-13).
+    this.activeErrand = null;
+    this.errandHeroWasDown = false;
   }
   /** Controller noop lines this match (stuck plan with no reject). */
   public locomotionNoops = 0;
@@ -1623,12 +1646,16 @@ export class AgentPlayer {
   private finishErrand(g: Game, reason: "fetched" | "reunited", fetched?: string): void {
     if (!this.activeErrand) return;
     const rec = this.errandLog[this.errandLog.length - 1];
-    if (reason === "fetched") {
-      rec.completedTick = g.ticks;
-      rec.fetched = fetched;
-    } else {
-      rec.abortedTick = g.ticks;
-      rec.abortReason = reason;
+    // Guard like abortErrand: rematch can clear the log while activeErrand
+    // was still set (pre-fix); never throw out of the 60 Hz tick.
+    if (rec && rec.abortedTick == null && rec.completedTick == null) {
+      if (reason === "fetched") {
+        rec.completedTick = g.ticks;
+        rec.fetched = fetched;
+      } else {
+        rec.abortedTick = g.ticks;
+        rec.abortReason = reason;
+      }
     }
     this.activeErrand = null;
     this.errandHeroWasDown = false;
@@ -1680,7 +1707,10 @@ export class AgentPlayer {
       } else if (mate.downed) {
         // Honest telemetry only — aborting the errand to rescue is the planner's
         // call. Mechanics do not force "rescue failsafe" (author Artem 2026-07-14).
-        if (!this.errandHeroWasDown) { rec.heroDownsDuring++; this.errandHeroWasDown = true; }
+        if (rec && !this.errandHeroWasDown) {
+          rec.heroDownsDuring++;
+          this.errandHeroWasDown = true;
+        }
       } else {
         this.errandHeroWasDown = false;
       }
@@ -1702,6 +1732,7 @@ export class AgentPlayer {
     const spec = ROOMS[g.room];
     const mateHere = this.partnerInRoom(g);
     const mateSim = mate.present ? simOf(g, this.mateSlot()) : null;
+    const heard = this.partnerSayFact(mate, mateHere);
     const obs = {
       room: spec.name,
       travelMode: g.travelMode,
@@ -1749,6 +1780,7 @@ export class AgentPlayer {
           hp: mate.hp, maxHp: mate.maxHp, downed: mate.downed, dead: false, elixir: mate.elixir,
           darkSide: mate.darkSide, darkFallen: mate.darkFallen,
           redemptionSec: mate.darkFallen ? Math.ceil(mate.redemptionT / 60) : null,
+          ...(heard ? { say: heard } : {}),
           ...(mate.downed ? {
             note: this.downedPartnerNote(g, false),
             ...this.rescueEtaFacts(g),
@@ -1765,6 +1797,7 @@ export class AgentPlayer {
           hp: mate.hp, maxHp: mate.maxHp, downed: mate.downed, dead: false, elixir: mate.elixir,
           darkSide: mate.darkSide, darkFallen: mate.darkFallen,
           redemptionSec: mate.darkFallen ? Math.ceil(mate.redemptionT / 60) : null,
+          ...(heard ? { say: heard } : {}),
           ...(mate.downed && mate.bleedT > 0
             ? {
                 bleedTicksLeft: mate.bleedT,
@@ -2167,6 +2200,15 @@ export class AgentPlayer {
     return undefined;
   }
 
+  /** Live HUD bubble only (sayT>0), same room; default ON (undefined). String — no ticksAgo. */
+  private partnerSayFact(mate: Player, mateHere: boolean): string | undefined {
+    if (this.opts.hearPartner === false) return undefined;
+    if (!mateHere || !mate.present || mate.dead) return undefined;
+    if (mate.sayT <= 0) return undefined;
+    const text = String(mate.say || "").trim();
+    return text || undefined;
+  }
+
   /** v2.4 C senses: latest friendly-fire attributed to partner — bare physics for the planner */
   private buildPartnerStrikeObs(g: Game): Record<string, unknown> | undefined {
     const mem = this.relationshipMemory.memoryForObservation(g.ticks);
@@ -2552,6 +2594,7 @@ export class AgentPlayer {
         : "")
       + (!solo ? SUSPICION_ADDENDUM : "")
       + (g.treason && !solo ? VICTIM_ADDENDUM : "")
+      + (this.opts.hearPartner !== false && !solo ? HEAR_PARTNER_ADDENDUM : "")
       + "\n" + TEMPERAMENT_DOCTRINE[this.temperament];
     const t0 = Date.now();
     const bleedWindow = this.inCordCutBleedWindow(g);
@@ -2679,7 +2722,7 @@ export class AgentPlayer {
       rec = { t: new Date().toISOString(), llm: this.llm.name, ms: Date.now() - t0,
               ok, action: live.action, dir: live.dir,
               say: ok ? intent.say : undefined,
-              why: ok && typeof intent.why === "string" ? intent.why.slice(0, 60) : undefined,
+              why: ok && typeof intent.why === "string" ? intent.why.slice(0, WHY_MAX_CHARS) : undefined,
               ...pwFields,
               suspicion: ok ? intent.suspicion : undefined,
               suspicionWhy: ok ? intent.suspicionWhy : undefined,
@@ -2977,7 +3020,11 @@ export class AgentPlayer {
       if (trust !== undefined) obj.trust = trust;
       else delete obj.trust;
       if (obj.say && typeof obj.say === "string") {
-        this.sayQueue = obj.say.slice(0, 40);
+        this.sayQueue = obj.say.slice(0, SAY_MAX_CHARS);
+        obj.say = this.sayQueue;
+      }
+      if (obj.why && typeof obj.why === "string") {
+        obj.why = obj.why.slice(0, WHY_MAX_CHARS);
       }
       return { intent: obj, ok: true, veilcutCancel, veilcutField };
     } catch (e) {
@@ -3808,10 +3855,10 @@ export class AgentPlayer {
     this.veilcutRejectLogged = false;
     this.betrayDecisionLogged = false;
     this.veilcutLastConfirmKind = undefined;
-    if (cover?.why) this.veilcutCoverWhy = cover.why.slice(0, 60);
-    else if (this.llmIntent.why) this.veilcutCoverWhy = String(this.llmIntent.why).slice(0, 60);
-    if (cover?.say) this.veilcutCoverSay = cover.say.slice(0, 40);
-    else if (this.llmIntent.say) this.veilcutCoverSay = String(this.llmIntent.say).slice(0, 40);
+    if (cover?.why) this.veilcutCoverWhy = cover.why.slice(0, WHY_MAX_CHARS);
+    else if (this.llmIntent.why) this.veilcutCoverWhy = String(this.llmIntent.why).slice(0, WHY_MAX_CHARS);
+    if (cover?.say) this.veilcutCoverSay = cover.say.slice(0, SAY_MAX_CHARS);
+    else if (this.llmIntent.say) this.veilcutCoverSay = String(this.llmIntent.say).slice(0, SAY_MAX_CHARS);
     if (cover?.privateGround) {
       this.veilcutPrivateGround = cover.privateGround;
       this.veilcutPrivateNote = cover.privateNote?.slice(0, 40);
