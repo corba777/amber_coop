@@ -10,8 +10,11 @@ import {
   BLEED_TICKS, REDEMPTION_TICKS,
 } from "../shared/core";
 import { SPR, HEROES, TILES } from "./sprites";
-import { drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel } from "./hud";
-import { wrapText } from "./textutil";
+import {
+  drawDuoSpectatorHud, drawHearts, formatThoughtLines, syncThoughtPanel,
+  emptySayChat, tickSayChat, syncChatPanel, type SayChatState,
+} from "./hud";
+import { wrapText, drawSpeechCue } from "./textutil";
 import { Pred, freshPred, stepPred, reconcile, recordInput } from "./predict";
 import { ensureAudio, playSfx, music, musicModeFor, actx } from "./audio";
 import { drawPartnerPip, partnerPipCanvasSize, partnerPipOrigin } from "./partnerpip";
@@ -424,6 +427,8 @@ if (pipCanvas) {
   if (pipCtx) pipCtx.imageSmoothingEnabled = false;
 }
 const thoughtsEl = document.getElementById("thoughts");
+const chatEl = document.getElementById("chat");
+let sayChat: SayChatState = emptySayChat();
 
 function drawPartnerMirror(s: Snapshot): void {
   if (!pipCanvas || !pipCtx) return;
@@ -540,15 +545,7 @@ function drawHero(p: SnapPlayer, idx: number, x: number, y: number): void {
 function drawSpeech(p: SnapPlayer, x: number, y: number): void {
   if (p.sayT <= 0 || !p.say) return;
   ctx.font = "7px monospace";
-  const tw = ctx.measureText(p.say).width + 8;
-  const bx = Math.max(2, Math.min(W - tw - 2, x + 5 - tw / 2));
-  const by = Math.max(2, y - 22);
-  ctx.globalAlpha = Math.min(1, p.sayT / 20);
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.fillRect(bx, by, tw, 11);
-  ctx.fillStyle = "#1b1b2b";
-  ctx.fillText(p.say, bx + 4, by + 8);
-  ctx.globalAlpha = 1;
+  drawSpeechCue(ctx, p.say, x, y, W, Math.min(1, p.sayT / 20));
 }
 
 function drawEnemy(e: SnapEnemy, ticks: number, x: number, y: number): void {
@@ -672,7 +669,9 @@ function centerText(lines: [string, number, string][], baseY: number): void {
 }
 
 function drawUI(s: Snapshot): void {
-  // Off-frame thought strip — sync before any early return so BETRAYED still updates it
+  // Off-frame chat + thought strips — sync before early returns (BETRAYED etc.)
+  sayChat = tickSayChat(sayChat, s, names);
+  syncChatPanel(chatEl, sayChat.lines, s.screen === "play");
   syncThoughtPanel(thoughtsEl, formatThoughtLines(s), showThought, s.screen === "play");
   const me = s.players[mySlot];
   // TREASON: your own partner cut the cord. You are dead, but the run goes on
@@ -808,6 +807,8 @@ function render(): void {
   ctx.fillStyle = "#0d0c14";
   ctx.fillRect(0, 0, W, H);
   if (!snap) {
+    sayChat = emptySayChat();
+    syncChatPanel(chatEl, [], false);
     syncThoughtPanel(thoughtsEl, [], showThought, false);
     centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
       disconnected ? "#e8384f" : "#9a93b8"]], 110);

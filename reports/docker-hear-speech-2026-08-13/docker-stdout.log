@@ -1,0 +1,51 @@
+AMBER COOP up on http://0.0.0.0:8080 — multi-session — build 2608132226-8w2h
+  providers from .env: ollama✓ anthropic✓ openai✓ xai✓
+  pixel client: /   ·   HD-2D client: /3d   ·   leaderboard: /stats
+  join a specific game with ?room=CODE (code shown in the menu)
+[8CG5] session created (1 live)
+[8CG5] join slot 0
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=deepseek-v4-flash:cloud model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=deepseek-v4-flash:cloud model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=kimi-k3:cloud model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=deepseek-v4-flash:cloud model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=deepseek-v4-flash:cloud model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=deepseek-v4-flash:cloud model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=gpt-5.6-luna hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=gpt-5.4-nano hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=gpt-5.6-sol hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-sol model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.4-nano model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=deepseek-v4-flash:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=kimi-k3:cloud hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=openai model=gpt-5.6-luna model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free
+[8CG5] setup mode=duo provider=ollama model=qwen3.6:35b model2=qwen3.6:35b hardGate=false travel=free

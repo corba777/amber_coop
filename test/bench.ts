@@ -26,7 +26,7 @@
  *  Env: PROVIDERS, N, PLAN_TICKS, MAX_TICKS, TEMPERAMENT, TEMPERAMENTS,
  *       MODE (arena|rink|duo|quest|scenario), SCENARIO, BRAIN (llm|baseline),
  *       DEFECTOR, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1, rung 3),
- *       TRAVEL (free|linked), HARD_GATE, TREASON, SPEECH, QUEST_MAX_TICKS,
+ *       TRAVEL (free|linked), HARD_GATE, TREASON, HEAR_PARTNER, SPEECH, QUEST_MAX_TICKS,
  *       QUEST_STOP_ON_BETRAY (default 1)
  *       BENCH_ABORT_ON_FATAL (default 1) — exit on credits/auth or sustained 429
  *       BENCH_ABORT_AFTER_429 (default 20), LLM_RETRY_MAX / LLM_RETRY_BASE_MS
@@ -75,6 +75,7 @@ function envFlag(name: string, defaultOn: boolean): boolean {
 }
 const HARD_GATE = envFlag("HARD_GATE", true);
 const TREASON = envFlag("TREASON", true);
+const HEAR_PARTNER = envFlag("HEAR_PARTNER", true);
 const QUEST_STOP_ON_BETRAY = envFlag("QUEST_STOP_ON_BETRAY", true);
 /** Persist per-plan action/why/room into episode + logs/quest-plans.jsonl (default on). */
 const QUEST_LOG_PLANS = envFlag("QUEST_LOG_PLANS", true);
@@ -118,6 +119,7 @@ interface QuestEpisode {
   bleedout: boolean;
   hardGate: boolean;
   treason: boolean;
+  hearPartner: boolean;
   /** Core FF / duel / cord-cut — same as treason; named for farm filters. */
   betrayAffordance: boolean;
   /** Planner veilcut channel (treason ∧ ≥1 defector). */
@@ -253,6 +255,7 @@ async function arenaEpisode(provider: ProviderName): Promise<ArenaEpisode> {
     1, {
       planMs: 0, temperament: TEMPERAMENT,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
@@ -293,6 +296,7 @@ export async function rinkEpisode(provider: ProviderName, maxTicks = RINK_MAX_TI
     1, {
       planMs: 0, temperament: TEMPERAMENT,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
@@ -330,12 +334,14 @@ export async function duoEpisode(
     {
       planMs: 0, temperament: t[0], leader: true, defector: DEFECTOR,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const mate = new AgentPlayer(
     p[1] === "mock" ? mock() : makeLLM(p[1], cfg), 1,
     {
       planMs: 0, temperament: t[1], defector: DEFECTOR,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
 
@@ -426,6 +432,7 @@ export async function questEpisode(
       planMs: 0, temperament: t[0], leader: !free, duoPeer: free,
       defector: armed, brain: BRAIN, speechProfile: speech,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const a1 = new AgentPlayer(
     p[1] === "mock" ? mock() : makeLLM(p[1], cfg), 1,
@@ -433,6 +440,7 @@ export async function questEpisode(
       planMs: 0, temperament: t[1], duoPeer: free,
       defector: armed, brain: BRAIN, speechProfile: speech,
       elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
     });
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   let ticks = 0;
@@ -506,6 +514,7 @@ export async function questEpisode(
     bleedout: g.bleedoutLoss,
     hardGate: g.hardGate,
     treason: g.treason,
+    hearPartner: HEAR_PARTNER,
     betrayAffordance: g.treason,
     veilcutEnabled: g.treason && (a0.defector || a1.defector),
     defector0: a0.defector,
@@ -671,7 +680,7 @@ async function runQuest(): Promise<void> {
   const armed = questArmed();
   console.log(
     `AMBER BENCH · quest farm · ${N} episodes · ${p[0]}[${t[0]}] + ${p[1]}[${t[1]}] · ` +
-    `travel=${TRAVEL} hardGate=${HARD_GATE} treason=${TREASON} defector=${armed} ` +
+    `travel=${TRAVEL} hardGate=${HARD_GATE} treason=${TREASON} hearPartner=${HEAR_PARTNER} defector=${armed} ` +
     `speech=${SPEECH} brain=${BRAIN} rung=${ELICITATION_RUNG} · ` +
     `plan every ${PLAN_TICKS} ticks · cap ${QUEST_MAX_TICKS}` +
     (QUEST_STOP_ON_BETRAY ? " · stop-on-betray" : "") +
@@ -772,6 +781,7 @@ async function runScenarioBench(): Promise<void> {
         sc.subjectSlot, {
           planMs: 0, temperament: TEMPERAMENT, brain: BRAIN, defector: DEFECTOR,
           elicitationRung: ELICITATION_RUNG, elicitationPrior: ELICITATION_PRIOR,
+      hearPartner: HEAR_PARTNER,
         });
       const { plans, result } = await runScenario(sc, subject);
       for (const p of plans) apiGuard.notePlan(p);

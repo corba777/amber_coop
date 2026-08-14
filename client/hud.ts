@@ -114,3 +114,44 @@ export function syncThoughtPanel(
     el.append(row);
   }
 }
+
+/** Partner `say` scroll panel — full text off-frame (logic in saychat.ts). */
+export type { ChatLine, SayChatState } from "./saychat";
+export { CHAT_MAX_LINES, ingestSayChat, emptySayChat, tickSayChat } from "./saychat";
+import type { ChatLine } from "./saychat";
+
+/**
+ * Sync the DOM chat strip below `#frame` (above thoughts).
+ * Full `say` text lives here — sprites only show speechCueText.
+ */
+export function syncChatPanel(
+  el: HTMLElement | null,
+  lines: ChatLine[],
+  playing: boolean,
+): void {
+  if (!el) return;
+  if (!playing || lines.length === 0) {
+    el.style.display = "none";
+    el.replaceChildren();
+    delete el.dataset.key;
+    return;
+  }
+  el.style.display = "block";
+  const key = lines.map(l => `${l.slot}|${l.name}|${l.text}`).join("\n");
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.replaceChildren();
+  for (const cl of lines) {
+    const row = document.createElement("div");
+    row.className = "cline";
+    row.dataset.slot = String(cl.slot);
+    const name = document.createElement("span");
+    name.className = "cname";
+    name.textContent = cl.name;
+    const body = document.createElement("span");
+    body.className = "cbody";
+    body.textContent = cl.text;
+    row.append(name, body);
+    el.append(row);
+  }
+}
