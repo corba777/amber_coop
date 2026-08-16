@@ -1,7 +1,8 @@
 /** Telemetry joinability — plan records carry game context; bleed episodes get
  *  machine-classified causes. Pure, DOM-free, testable (the episode classifier
  *  is the same counterfactual Relationship Memory reuses). */
-import { BLEED_TICKS, Game, PLAYER_W, ROOMS, simOf, TILE, WINTER_MARK_PERIOD } from "../shared/core";
+import { BLEED_TICKS, Game, PLAYER_W, ROOMS, simOf, TILE, WINTER_MARK_PERIOD,
+         canPhysicallyRevive, ticksSinceDowned } from "../shared/core";
 
 export interface PlanGameContext {
   tick: number;
@@ -18,7 +19,26 @@ export interface PlanGameContext {
   mate: {
     room: number; x: number; y: number; hp: number;
     downed: boolean; dead: boolean; bleedTicksLeft: number;
+    /**
+     * Touch-revive possible right now (same sim, living helper).
+     * When true and bleedTicksLeft=0, the alone-bleed clock simply never armed —
+     * not "zero seconds left on a running timer".
+     */
+    canPhysicallyRevive: boolean;
+    /** Viewer and mate share a RoomSim right now (join without reconstructing rooms). */
+    sameSim: boolean;
+    /** Ticks since mate fell (0 if upright). Same-room: still advances. */
+    ticksSinceDowned: number;
   };
+  /**
+   * Live same-room HUD bubble on the mate (sayT>0), or null.
+   * Physical fact for plans.jsonl — independent of hearPartner (that only
+   * gates observation). Absence across dumps with hearPartner:true was a
+   * logging hole, not proof the planner heard nothing.
+   */
+  partnerSay: string | null;
+  /** Team Phoenix Feather charge held right now (22DB forensics hole). */
+  hasFeather: boolean;
 }
 
 export type EpisodeCause =
@@ -29,7 +49,16 @@ export type EpisodeCause =
   | "rescued"
   | "betray-abandon"
   | "partner-arrived"
+  | "closed-without-arrival"
   | "timeout";
+
+/** How an alone-bleed window ended — fed into classifyBleedEpisode. */
+export type BleedCloseOutcome =
+  | "rescued"
+  | "timeout"
+  | "betray-abandon"
+  | "partner-arrived"
+  | "closed-without-arrival";
 
 export interface EpisodeRecord {
   id: string;
@@ -60,6 +89,10 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
   const me = g.players[slot];
   const mate = g.players[1 - slot];
   const mateSim = simOf(g, 1 - slot);
+  const sameSim = me.simIndex === mate.simIndex;
+  const bubble = sameSim && mate.present && !mate.dead && mate.sayT > 0
+    ? String(mate.say || "").trim()
+    : "";
   return {
     tick: g.ticks,
     room: simOf(g, slot).room,
@@ -86,7 +119,12 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
       // live bleed body (8GQC @5060 veilcut vs corpse read as remote cord-cut).
       dead: mate.dead,
       bleedTicksLeft: mate.bleedT,
+      canPhysicallyRevive: canPhysicallyRevive(g, 1 - slot, slot),
+      sameSim,
+      ticksSinceDowned: ticksSinceDowned(g, 1 - slot),
     },
+    partnerSay: bubble || null,
+    hasFeather: !!g.hasFeather,
   };
 }
 
@@ -136,10 +174,11 @@ export function isLootIntent(action: string): boolean {
 }
 
 export function isRescueIntent(action: string): boolean {
-  // Explicit rescue / go-to-partner orders. "follow"/"idle" walk to a downed
-  // mate in-room (word sense) — count them as rescue for bleed classification.
+  // Explicit rescue orders only. follow/idle may approach a downed body but do
+  // not hold V — counting them as rescue attributed collaboration without a
+  // revive decision (QQBK). In-room hug = "revive" (or "goto" to the body).
   return action === "exit" || action === "goto" || action === "feather" ||
-    action === "follow" || action === "idle";
+    action === "revive";
 }
 
 export function distToMate(g: Game, agentSlot: number): number {
@@ -166,7 +205,7 @@ export function mateBleedingAlone(g: Game, victimSlot: number): boolean {
 }
 
 export function classifyBleedEpisode(
-  outcome: "rescued" | "timeout" | "betray-abandon" | "partner-arrived",
+  outcome: BleedCloseOutcome,
   rescueEta: number,
   bleedBudget: number,
   plans: PlanSnapshot[],
@@ -175,6 +214,9 @@ export function classifyBleedEpisode(
   if (outcome === "betray-abandon") return "betray-abandon";
   if (outcome === "partner-arrived") return "partner-arrived";
 
+  // timeout + closed-without-arrival: same plan analysis; default cause differs.
+  // Match-end while still downed (lone-thaw / quit) must NOT read as partner-arrived
+  // (6ZPE m0 flush bug — Memory already said closed-without-arrival).
   if (plans.some(p => !p.ok)) return "parse-failure";
   if (rescueEta > bleedBudget) return "routing-infeasible";
 
@@ -188,7 +230,25 @@ export function classifyBleedEpisode(
     if (endDist >= startDist - 20) return "physics-late";
   }
 
-  return "timeout";
+  return outcome === "closed-without-arrival" ? "closed-without-arrival" : "timeout";
+}
+
+/**
+ * Resolve how an alone-bleed window closed. `reunited` = living partner now
+ * shares the victim's sim (touch-revive possible) — only then partner-arrived
+ * while the victim is still downed.
+ */
+export function bleedCloseOutcome(
+  g: Game,
+  victimSlot: number,
+  reunited: boolean,
+): BleedCloseOutcome {
+  const victim = g.players[victimSlot];
+  if (victim.dead) return "betray-abandon";
+  if (!victim.downed) return "rescued";
+  if (g.bleedoutLoss) return "timeout";
+  if (reunited) return "partner-arrived";
+  return "closed-without-arrival";
 }
 
 /** Joinability: a plan record's tick falls inside an episode window. */
@@ -236,40 +296,31 @@ export class EpisodeTracker {
     }
 
     if (!this.open) return;
-
-    const victim = g.players[this.open.victimSlot];
     if (bleeding) return;
 
-    let outcome: "rescued" | "timeout" | "betray-abandon" | "partner-arrived";
-    if (victim.dead) outcome = "betray-abandon";
-    else if (!victim.downed) outcome = "rescued";
-    else if (g.bleedoutLoss) outcome = "timeout";
-    else outcome = "partner-arrived";
-
-    const cause = classifyBleedEpisode(
-      outcome, this.open.rescueEta, this.open.bleedBudget, this.planSnaps,
-    );
-    this.completed.push({
-      id: `${this.sid}-${this.open.startTick}`,
-      kind: "bleed-out",
-      cause,
-      startTick: this.open.startTick,
-      endTick: g.ticks,
-      victimSlot: this.open.victimSlot,
-      agentSlot: this.agentSlot,
-      rescueEta: this.open.rescueEta,
-      bleedBudget: this.open.bleedBudget,
-    });
-    this.open = null;
-    this.planSnaps = [];
+    const victim = g.players[this.open.victimSlot];
+    const partner = g.players[this.agentSlot];
+    const reunited = victim.present && partner.present && !partner.downed && !partner.dead
+      && victim.simIndex === partner.simIndex;
+    this.close(g, bleedCloseOutcome(g, this.open.victimSlot, reunited));
   }
 
-  /** Flush an open alone-bleed episode at match end (timeout). */
+  /** Flush an open alone-bleed episode at match end. */
   flush(g: Game): void {
     if (!this.open) return;
+    const victimSlot = this.open.victimSlot;
+    const victim = g.players[victimSlot];
+    const partner = g.players[this.agentSlot];
+    // Match end while still alone+downed (lone-thaw, quit, wipe) ≠ partner-arrived.
+    const reunited = victim.present && partner.present && !partner.downed && !partner.dead
+      && victim.simIndex === partner.simIndex;
+    this.close(g, bleedCloseOutcome(g, victimSlot, reunited));
+  }
+
+  private close(g: Game, outcome: BleedCloseOutcome): void {
+    if (!this.open) return;
     const cause = classifyBleedEpisode(
-      g.bleedoutLoss ? "timeout" : "partner-arrived",
-      this.open.rescueEta, this.open.bleedBudget, this.planSnaps,
+      outcome, this.open.rescueEta, this.open.bleedBudget, this.planSnaps,
     );
     this.completed.push({
       id: `${this.sid}-${this.open.startTick}`,

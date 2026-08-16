@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-/** Dump ALL matches (+ plans / dialogue windows) from Docker logs/matches.jsonl. */
+/** Dump ALL matches (+ plans / dialogue windows) from Docker logs/matches.jsonl.
+ *  index.json carries farm join columns (cordCut / loneThaw / rescueClaimDivergence / …).
+ *  Full match body is always in session-*-match.json. */
 import fs from "node:fs";
 
 const matches = fs
@@ -41,6 +43,7 @@ for (const sid of Object.keys(bySid)) {
       .map((p) => ({
         t: p.t,
         tick: p.tick,
+        matchIndex: p.matchIndex,
         slot: p.slot,
         llm: p.llm,
         room: p.room,
@@ -49,8 +52,13 @@ for (const sid of Object.keys(bySid)) {
         why: p.why,
         privateWhy: p.privateWhy,
         privateGround: p.privateGround,
+        privateNote: p.privateNote,
         veilcutField: p.veilcutField,
         betray: p.betray,
+        rescueClaim: p.rescueClaim,
+        rescueClaimDiverge: p.rescueClaimDiverge,
+        rescueDist: p.rescueDist,
+        partnerSay: p.partnerSay,
         personaRole: p.personaRole,
         me: p.me,
         mate: p.mate,
@@ -69,6 +77,23 @@ for (const sid of Object.keys(bySid)) {
       betrayalCause: m.betrayalCause,
       ticks: m.ticks,
       betrayed: m.betrayed,
+      bleedout: m.bleedout,
+      /** SHIFT cord-cut geometry (bleedRunning / bleedFracLeft null when paused). */
+      cordCut: m.cordCut ?? null,
+      /** Pedestal win over downed partner — same geometry family as cordCut. */
+      loneThaw: m.loneThaw ?? null,
+      /** Team Phoenix Feather still held at match end (null/false = spent or never claimed). */
+      hasFeather: m.hasFeather ?? null,
+      rescueClaimDivergence: m.rescueClaimDivergence ?? null,
+      carryPicks: m.carryPicks ?? 0,
+      carryThrows: m.carryThrows ?? 0,
+      corpseThrows: m.corpseThrows ?? 0,
+      hardGate: m.hardGate,
+      duoTemptGate: m.duoTemptGate,
+      temptationVisited: m.temptationVisited,
+      temptationResolved: m.temptationResolved,
+      temptationDeal: m.temptationDeal,
+      temptationPayoff: m.temptationPayoff,
       emberMercyUsed: m.emberMercyUsed,
       p1name: m.p1name,
       partner: m.partner,
@@ -80,17 +105,29 @@ for (const sid of Object.keys(bySid)) {
       speech2: m.speech2,
       travelMode: m.travelMode,
       treason: m.treason,
+      defector0: m.defector0,
+      defector1: m.defector1,
       brain: m.brain,
+      elicitationRung: m.elicitationRung,
       elicitationRungName: m.elicitationRungName,
+      hearPartner: m.hearPartner,
+      partnerTypeTrue0: m.partnerTypeTrue0,
+      partnerTypeTrue1: m.partnerTypeTrue1,
+      partnerTypeDisclosed: m.partnerTypeDisclosed,
       plans: m.plans,
       plans0: m.plans0,
       plans1: m.plans1,
       parseFailures: m.parseFailures,
       refusalTaxonomy0: m.refusalTaxonomy0,
       refusalTaxonomy1: m.refusalTaxonomy1,
+      betrayalDmg: m.betrayalDmg,
       betrayalDowns: m.betrayalDowns,
       betrayalStrikes: m.betrayalStrikes,
+      bellRings: m.bellRings,
       routeAssists: m.routeAssists,
+      icePlans: m.icePlans,
+      locomotionNoops: m.locomotionNoops,
+      providerAbort: m.providerAbort,
       avgLatencyMs: m.avgLatencyMs,
       planLines: mp.length,
       dialogueLines: dial.length,
@@ -100,6 +137,7 @@ for (const sid of Object.keys(bySid)) {
       errands: m.errands,
       firstStrikeClaims: m.firstStrikeClaims,
       veilcutConfirms: m.veilcutConfirms,
+      veilcutFieldStats: m.veilcutFieldStats,
       privateWhyStats: m.privateWhyStats,
       build: m.build,
       mode: m.mode,
@@ -114,6 +152,25 @@ console.log(
       ending: x.ending,
       cause: x.betrayalCause,
       ticks: x.ticks,
+      cordCut: x.cordCut
+        ? {
+            sameSim: x.cordCut.sameSim,
+            canR: x.cordCut.canPhysicallyRevive,
+            bleedRunning: x.cordCut.bleedRunning ?? null,
+            frac: x.cordCut.bleedFracLeft,
+            since: x.cordCut.ticksSinceDowned,
+          }
+        : null,
+      loneThaw: x.loneThaw
+        ? {
+            sameSim: x.loneThaw.sameSim,
+            canR: x.loneThaw.canPhysicallyRevive,
+            bleedRunning: x.loneThaw.bleedRunning ?? null,
+            frac: x.loneThaw.bleedFracLeft,
+          }
+        : null,
+      rescueDiv: x.rescueClaimDivergence,
+      refusal: [x.refusalTaxonomy0, x.refusalTaxonomy1],
       p1: x.p1name,
       p2: x.partner,
       plans: x.planLines,

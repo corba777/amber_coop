@@ -220,15 +220,23 @@ export class RelationshipMemory {
 
     if (me.dead) {
       this.push(g, "rescue-window",
-        g.betrayed ? "cord-cut" : "bleed-timeout", base);
+        g.betrayed ? "cord-cut" : "bleed-timeout", {
+          ...base,
+          featherAvailableAtClose: g.hasFeather,
+        });
     } else if (!me.downed) {
       // Rose from the ground: only "partner-arrived" if the partner is actually
       // here (touch-revive). Otherwise I survived by other means and the partner
       // never came — the honest label is closed-without-arrival.
       this.push(g, "rescue-window",
-        inRoom ? "partner-arrived" : "closed-without-arrival", base);
+        inRoom ? "partner-arrived" : "closed-without-arrival", {
+          ...base,
+          featherAvailableAtClose: g.hasFeather,
+        });
     } else if (inRoom) {
-      this.push(g, "rescue-window", "partner-in-room", { ...base, iStillDowned: true });
+      this.push(g, "rescue-window", "partner-in-room", {
+        ...base, iStillDowned: true, featherAvailableAtClose: g.hasFeather,
+      });
     }
 
     this.aloneBleedOpen = false;
@@ -246,12 +254,14 @@ export class RelationshipMemory {
         partnerEtaSec: sec(onset.eta),
         bleedBudgetSec: sec(onset.budget),
         routeWithinBudget: onset.eta <= onset.budget,
+        featherAvailableAtClose: g.hasFeather,
       });
     } else if (g.bleedoutLoss || me.downed) {
       this.push(g, "rescue-window", "closed-without-arrival", {
         partnerEtaSec: sec(onset.eta),
         bleedBudgetSec: sec(onset.budget),
         routeWithinBudget: onset.eta <= onset.budget,
+        featherAvailableAtClose: g.hasFeather,
       });
     }
 

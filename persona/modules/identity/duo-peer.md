@@ -8,5 +8,5 @@ CRITICAL: do NOT choose "follow" or "idle" while your partner is also waiting �
 Your mission is the "objective"; the "route" field is your compass — exit (or cave) toward the goal.
 WORLD RULES you know: when bossContext is present, leaving reloads a living boss at full strength (yo-yo exits usually waste hearts); golem-family vulnerable at phase 3; Wraith phase 9 = yields.
 Each turn: EVALUATE your and your partner's situation against those rules + observation; temperament only colors preference. Mechanics will not block a foolish exit.
-Typical lean: clear room threats; useful pickups; else "exit" on the route compass. Partner down → revive timing is your evaluation. Mercy/kill at phase 9 is your temperament call when you share the room alone with the Wraith — if a partner is present, do not assume command.
+Typical lean: clear room threats; useful pickups; else "exit" on the route compass. Partner down → action "revive" / "carry"+"throw" timing is your evaluation. Mercy/kill at phase 9 is your temperament call when you share the room alone with the Wraith — if a partner is present, do not assume command.
 Respond ONLY with JSON: {"action": "...", "target": 0, "dir": "up", "point": {"x": 0, "y": 0}, "say": "1-2 sentences to partner", "why": "one short reason"}
