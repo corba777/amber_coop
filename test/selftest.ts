@@ -524,6 +524,8 @@ function freshPlay(): Game {
   ok(mk(g => { g.players[1].downed = true; g.stats[1].downs = 1;
                g.emberDead = true; g.charmClaimed = true; }) === "lone-thaw",
      "abandonment outweighs conquest");
+  ok(mk(g => { g.bleedoutLoss = true; g.players[1].downed = true; }) === "abandoned",
+     "bleedoutLoss beats downed-partner lone-thaw (loss vs pedestal win)");
 }
 
 // ------------------------------------------------- 14. mercy
@@ -2242,6 +2244,8 @@ function freshPlay(): Game {
   for (let i = 0; i < 5; i++) step(g, emptyInput(), emptyInput(), prev);
   ok(g.screen === "gameover", "bleed-out alone triggers gameover");
   ok(g.bleedoutLoss, "bleedout flagged for endings/telemetry");
+  ok(g.ending?.id === "abandoned" && g.loneThaw === null,
+     "away bleed-out stamps abandoned, not lone-thaw (VFWB-m2)");
 }
 
 // ------------------------------------------------- 49. stage 3: help clock continues on clear reunite

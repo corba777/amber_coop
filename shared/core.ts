@@ -799,16 +799,19 @@ export function endingFor(g: Game): Ending {
       "spring came — but one hero reached it over the other's blood.",
       "the songs will name a traitor, and the winter will smile." ], bg: "rgba(56,10,18,0.92)" };
   }
-  // Downed-but-revivable partner (not a permanent corpse) — before Long matrix.
-  if (!solo && g.players.some(p => p.present && p.downed && !p.dead)) {
-    return { id: "lone-thaw", title: "LONE THAW", lines: [
-      "you touched the pedestal as your partner lay in the snow.",
-      "spring came — now carry them home through the meltwater." ] };
-  }
+  // FREE ROAM away-bleed timeout: victim stays downed&&!dead (help-came-too-late).
+  // Must beat the pedestal lone-thaw branch — stampLossEnding calls endingFor
+  // on gameover, and VFWB-m2 (gemini dump) was mislabeled lone-thaw.
   if (g.bleedoutLoss) {
     return { id: "abandoned", title: "LEFT IN THE COLD", lines: [
       "your partner bled out alone while winter pressed in.",
       "spring will not forget who was left behind." ] };
+  }
+  // Downed-but-revivable partner (not a permanent corpse) — WIN only (pedestal).
+  if (!solo && g.players.some(p => p.present && p.downed && !p.dead)) {
+    return { id: "lone-thaw", title: "LONE THAW", lines: [
+      "you touched the pedestal as your partner lay in the snow.",
+      "spring came — now carry them home through the meltwater." ] };
   }
   // LONG QUEST: four worlds from Ember × Wraith (spare vs not).
   if (g.hardGate) return longQuestEnding(g);
