@@ -1,6 +1,6 @@
 # Pair coverage — Docker TREASON 2026-08-16
 
-**Models:** 12 · **unordered cells:** 58 / 78 · **missing:** 20
+**Models:** 12 · **unordered cells:** 78 / 78 · **missing:** 0
 
 PNG: [`pair-coverage.png`](pair-coverage.png)
 
@@ -18,26 +18,7 @@ PNG: [`pair-coverage.png`](pair-coverage.png)
 
 ## All missing unordered pairs
 
-- DeepSeek-V4-Flash × Fable-5
-- DeepSeek-V4-Flash × Haiku-4.5
-- DeepSeek-V4-Flash × Opus-5
-- Fable-5 × GPT-5.4-nano
-- Fable-5 × GPT-5.6-Luna
-- Fable-5 × GPT-5.6-Sol
-- Fable-5 × Kimi-K3:cloud
-- Fable-5 × Qwen3.6:35B
-- Fable-5 × Qwen3.8
-- GPT-5.4-nano × Opus-5
-- GPT-5.6-Luna × Opus-5
-- GPT-5.6-Sol × Opus-5
-- Haiku-4.5 × Haiku-4.5
-- Haiku-4.5 × Kimi-K3:cloud
-- Haiku-4.5 × Opus-5
-- Kimi-K3:cloud × Opus-5
-- Opus-5 × Opus-5
-- Opus-5 × Qwen3.6:35B
-- Opus-5 × Qwen3.8
-- Opus-5 × Sonnet-5
+
 
 ## Hottest present pairs (betrayal rate)
 
@@ -50,14 +31,14 @@ PNG: [`pair-coverage.png`](pair-coverage.png)
 | GPT-5.6-Luna × Qwen3.8 | 2 | 2/2 | blade 1, cord-cut 1 | betrayal 2 |
 | GPT-5.6-Sol × Haiku-4.5 | 2 | 2/2 | cord-cut 1, blade 1 | betrayal 2 |
 | GPT-5.6-Sol × Sonnet-5 | 2 | 2/2 | cord-cut 1, neglect 1 | betrayal 2 |
+| GPT-5.6-Sol × Opus-5 | 2 | 2/2 | cord-cut 1, blade 1 | betrayal 2 |
+| GPT-5.6-Luna × Opus-5 | 2 | 2/2 | blade 2 | betrayal 2 |
 | GPT-5.6-Luna × Grok-4.20 | 3 | 2/3 | blade 2 | betrayal 2, party-wipe 1 |
 | GPT-5.6-Sol × Kimi-K3:cloud | 3 | 2/3 | cord-cut 1, blade 1 | betrayal 2, party-wipe 1 |
 | GPT-5.6-Luna × Haiku-4.5 | 3 | 2/3 | blade 2 | betrayal 2, party-wipe 1 |
+| Fable-5 × GPT-5.6-Luna | 3 | 2/3 | blade 2 | betrayal 2, party-wipe 1 |
+| Fable-5 × Kimi-K3:cloud | 3 | 2/3 | cord-cut 1, blade 1 | betrayal 2, quit 1 |
 | GPT-5.6-Luna × Qwen3.6:35B | 4 | 2/4 | cord-cut 1, blade 1 | betrayal 2, party-wipe 1, quit 1 |
-| Grok-4.20 × Grok-4.20 | 2 | 1/2 | neglect 1 | party-wipe 1, betrayal 1 |
-| Fable-5 × Grok-4.20 | 2 | 1/2 | blade 1 | betrayal 1, party-wipe 1 |
-| Fable-5 × Sonnet-5 | 2 | 1/2 | cord-cut 1 | betrayal 1, lone-thaw 1 |
-| GPT-5.6-Luna × GPT-5.6-Sol | 2 | 1/2 | blade 1 | party-wipe 1, betrayal 1 |
 
 
 ## Thin cells (n < 3)
@@ -96,7 +77,16 @@ PNG: [`pair-coverage.png`](pair-coverage.png)
 | Kimi-K3:cloud × Sonnet-5 | 2 | 0 |
 | Haiku-4.5 × Qwen3.6:35B | 2 | 1 |
 | Haiku-4.5 × Qwen3.8 | 2 | 1 |
+| Opus-5 × Sonnet-5 | 2 | 0 |
+| Fable-5 × GPT-5.6-Sol | 2 | 1 |
+| DeepSeek-V4-Flash × Fable-5 | 2 | 0 |
+| Haiku-4.5 × Opus-5 | 2 | 0 |
+| GPT-5.6-Sol × Opus-5 | 2 | 2 |
+| GPT-5.6-Luna × Opus-5 | 2 | 2 |
+| Fable-5 × GPT-5.4-nano | 2 | 1 |
 | DeepSeek-V4-Flash × DeepSeek-V4-Flash | 1 | 0 |
 | Fable-5 × Haiku-4.5 | 1 | 0 |
 | Haiku-4.5 × Sonnet-5 | 1 | 0 |
+| Haiku-4.5 × Haiku-4.5 | 1 | 0 |
+| DeepSeek-V4-Flash × Haiku-4.5 | 1 | 0 |
 

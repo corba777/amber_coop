@@ -385,7 +385,11 @@ export function anthropicAlwaysOnThinking(model: string): boolean {
   return /claude-(fable-5|mythos-5)\b/i.test(model);
 }
 
-/** Pure body builder — tested; used by the Anthropic provider. */
+/** Pure body builder — tested; used by the Anthropic provider.
+ *  Prompt caching: mark the stable system prefix (`cache_control` ephemeral,
+ *  5‑min TTL). Observation stays in `messages` and is never cached. Opt out
+ *  with ANTHROPIC_PROMPT_CACHE=0. Under-min-length prompts are processed
+ *  uncached (no API error) — see Anthropic cache limitations. */
 export function anthropicMessagesBody(
   model: string, system: string, user: string,
 ): Record<string, unknown> {
@@ -395,10 +399,16 @@ export function anthropicMessagesBody(
   const maxTokens = alwaysOn
     ? Math.max(LLM_PLAN_MAX_TOKENS_REASONING, 2048)
     : (restricted ? LLM_PLAN_MAX_TOKENS_REASONING : LLM_PLAN_MAX_TOKENS);
+  const cacheOn = process.env.ANTHROPIC_PROMPT_CACHE !== "0";
+  const systemBlock: Record<string, unknown> = { type: "text", text: system };
+  if (cacheOn) {
+    systemBlock.cache_control = { type: "ephemeral" };
+  }
   const body: Record<string, unknown> = {
     model,
     max_tokens: maxTokens,
-    system,
+    // Array form required for per-block cache_control (string system cannot mark).
+    system: [systemBlock],
     messages: [{ role: "user", content: user }],
   };
   if (restricted) {

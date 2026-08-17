@@ -107,7 +107,6 @@ export function planGameContext(g: Game, slot: number): PlanGameContext {
     },
     canRedeem: (
       (g.hasEmberMercy && me.winterMark && !me.downed)
-      || (g.hasEmberMercy && me.darkSide && me.darkSelfRedeemT > 0 && !me.downed)
     ) || undefined,
     mate: {
       room: mateSim.room,

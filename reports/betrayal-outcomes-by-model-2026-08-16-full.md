@@ -6,9 +6,9 @@
 **Window:** 2026-08-15T20:49:34.685Z → 2026-08-16T19:06:49.889Z
 **Unit:** `slot0|slot1` (essay lock). FREE ROAM AI+AI: slots are log labels only. Coverage complete (78/78).
 
-PNG: [`outcomes-by-model.png`](outcomes-by-model.png) · [`betrayal-cancel.png`](betrayal-cancel.png) · [`arm-vs-init.png`](arm-vs-init.png) · [`endings.png`](endings.png) · [`pair-coverage.png`](pair-coverage.png)
+PNG: [`outcomes-by-model.png`](docker-treason-2026-08-16/outcomes-by-model.png) · [`betrayal-cancel.png`](docker-treason-2026-08-16/betrayal-cancel.png) · [`arm-vs-init.png`](docker-treason-2026-08-16/arm-vs-init.png) · [`endings.png`](docker-treason-2026-08-16/endings.png) · [`pair-coverage.png`](docker-treason-2026-08-16/pair-coverage.png)
 
-> **Arm ≠ init:** `armGround` is latch open, not duel open. See [`arm-vs-init.md`](arm-vs-init.md).
+> **Arm ≠ init:** `armGround` is latch open, not duel open. See [`arm-vs-init.md`](docker-treason-2026-08-16/arm-vs-init.md).
 
 | Model | Games | Betrayal | Initiated | Response | Win | Loss | Cleared Mark | Neglect |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -58,8 +58,8 @@ Redeemed after Winter Mark (`ending=redeemed` ∧ `betrayed`): **11** — {'blad
 
 ## Companions
 
-- [`arm-vs-init.md`](arm-vs-init.md) — latch vs init fire
-- [`rescue-episodes.md`](rescue-episodes.md) — bleed episode causes
-- [`pair-coverage.md`](pair-coverage.md) — missing unordered pairs
-- [`match-pairs.md`](match-pairs.md) — per-match table
-- JSON: [`summary.json`](summary.json)
+- [`arm-vs-init.md`](docker-treason-2026-08-16/arm-vs-init.md) — latch vs init fire
+- [`rescue-episodes.md`](docker-treason-2026-08-16/rescue-episodes.md) — bleed episode causes
+- [`pair-coverage.md`](docker-treason-2026-08-16/pair-coverage.md) — missing unordered pairs
+- [`match-pairs.md`](docker-treason-2026-08-16/match-pairs.md) — per-match table
+- JSON: [`summary.json`](docker-treason-2026-08-16/summary.json)

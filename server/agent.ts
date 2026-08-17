@@ -13,8 +13,8 @@ import {
   simOf, ELIXIRS, canNpcLeave, solidAt, isBoss, NEGLECT_ABANDON_TICKS,
   WINTER_MARK_PERIOD, emberResolved, sealedExitMsg, guardLakePortalOpen,
   DARK_RITUAL_TICKS, DARK_LOCK_TICKS, REDEMPTION_TICKS, DARK_SELF_REDEEM_TICKS,
-  COURT_SENTINEL_HARD_HP, COURT_SENTINEL_SOFT_HP, overlap, canPhysicallyRevive,
-  ticksSinceDowned,
+  COURT_SENTINEL_HARD_HP, overlap, canPhysicallyRevive,
+  ticksSinceDowned, temptationCourtSoloPraise,
 } from "../shared/core";
 import { LLM } from "./llm";
 import { RelationshipMemory } from "./relationship-memory";
@@ -157,15 +157,10 @@ export function meadowNorthIcePressTarget(): { x: number; y: number } {
 
 const TEMPTATION_ADDENDUM = `
 TEMPTATION COURT (room 18, when observation.temptation is present):
-- Hold SHIFT near the Whisperer ~3s to commit (darkSide — purple blade). Observable; judgment is yours.
-- Leave east WITHOUT the ritual = valid refuse (payoff refused). Sentinels are HARD until someone commits dark.
-- After dark commit: sentinels SOFTEN; immortality is UNFINISHED until you down your partner with treason strikes (SHIFT+attack).
-- If BOTH heroes take the bargain: you still must duel — Winter crowns only ONE immortal. Two dark blades share no throne.
-- SELF-REDEEM (human-like second chance): within 60s of your own commit, if you hold Ember Mercy (Ember Sanctum room 16), "redeem"/F spends it and clears YOUR darkSide — you may then fight monsters and the Wraith as light again. If you lack it, fetch it before the clock ends. Judgment; mechanics never force it.
-- darkLock (~20s): cannot renounce at Whisperer immediately. After lock: SHIFT near Whisperer ~1.5s to renounce (no relic).
-- Partner can fight back (same treason rules). If dark downs anyone (light or dark partner) → winter-ascends (evil wins; Wraith skipped).
-- If light downs dark → 30s window; Ember Mercy + "redeem"/F on their body restores them.
-- Evaluate ritual / duel / redeem / refuse against temperament and observation; mechanics never force your choice.`;
+- If observation.temptation.soloPraise: the partner is already gone — bargain closed. No SHIFT commit. Take the heart, leave east; Whisperer only sings praise.
+- Hold SHIFT near the Whisperer ~3s to ACCEPT the bargain (first acceptor wins): your partner dies INSTANTLY wherever they are (any room); you get 2 heart pickups; you continue SOLO under Winter Mark (Ember Mercy / spared Wraith cleanses Mark). Observable; judgment is yours.
+- Leave east WITHOUT the ritual = valid refuse (payoff refused). Sentinels are HARD — refuse-by-combat is costly.
+- Evaluate accept / refuse / fight sentinels against temperament and observation; mechanics never force your choice.`;
 
 const FREE_ROAM_ADDENDUM = `
 FREE ROAM mode: you and your partner may be in DIFFERENT rooms at once — the human watches you through a scry mirror.
@@ -1483,9 +1478,8 @@ export class AgentPlayer {
    */
   private redeemAffordance(g: Game): { available: boolean; reason: string } {
     const me = g.players[this.slot];
-    const mate = g.players[this.mateSlot()];
     if (!g.hasEmberMercy) {
-      return { available: false, reason: "no Ember Mercy held (fetch in Ember Sanctum if Marked/dark)" };
+      return { available: false, reason: "no Ember Mercy held (fetch in Ember Sanctum if Marked)" };
     }
     if (me.downed) {
       return {
@@ -1499,23 +1493,37 @@ export class AgentPlayer {
         reason: "Winter Mark — set action \"redeem\" (F) to spend Ember Mercy and clear it NOW",
       };
     }
-    if (me.darkSide && me.darkSelfRedeemT > 0) {
-      return {
-        available: true,
-        reason: `dark self-redeem ~${Math.ceil(me.darkSelfRedeemT / 60)}s left — action \"redeem\"/F`,
-      };
-    }
-    if (mate.present && mate.downed && mate.darkFallen && mate.redemptionT > 0
-        && !mate.dead && mate.simIndex === me.simIndex) {
-      return {
-        available: true,
-        reason: "fallen dark partner in room — stand close, action \"redeem\"/F",
-      };
-    }
     return {
       available: false,
-      reason: "Ember Mercy held but no Mark / dark window / fallen dark partner to spend it on",
+      reason: "Ember Mercy held but no Winter Mark to cleanse",
     };
+  }
+
+  /**
+   * Open same-room downed choice set — bare channels, no temperament rank.
+   * Saliency fix: identity lists carry/throw, but objective used to name only revive.
+   * Returns null when the body is away / gone / agent cannot act on it.
+   */
+  private downedBodyChannels(g: Game): string | null {
+    const me = g.players[this.slot];
+    const mate = g.players[this.mateSlot()];
+    if (me.downed || me.dead || !mate.present || mate.dead || !mate.downed) return null;
+    if (mate.simIndex !== me.simIndex) return null; // away → feather/exit, not body channels
+    if (me.carryingSlot !== null) {
+      return g.treason
+        ? 'carrying now — channels (judgment; no rank): action "throw" soft-releases (still downed; then "revive"/V); "throw"+veilcut/SHIFT weaponizes (partner dies; foes in arc take a hit)'
+        : 'carrying now — channels (judgment; no rank): action "throw" (optional dir) releases them (still downed); then action "revive" / hold V at body';
+    }
+    const weapon = g.treason
+      ? '; after carry, "throw"+veilcut/SHIFT weaponizes (dies) · SHIFT at body without swing = cord-cut'
+      : "";
+    return (
+      'same-room downed channels (judgment; no rank): '
+      + 'approach + action "revive" (hold V ~1.5s) stands them up; '
+      + 'approach + action "carry" (G) lifts, then "throw" relocates (still downed)'
+      + weapon
+      + '; or leave / fight first / (away tools do not apply here)'
+    );
   }
 
   /**
@@ -1899,6 +1907,10 @@ export class AgentPlayer {
           ...(heard ? { say: heard } : {}),
           ...(mate.downed ? {
             note: this.downedPartnerNote(g, false),
+            ...(() => {
+              const bodyChannels = this.downedBodyChannels(g);
+              return bodyChannels ? { bodyChannels } : {};
+            })(),
             carriedBy: mate.carriedBy,
             canPhysicallyRevive: canPhysicallyRevive(g, this.mateSlot(), this.slot),
             ticksSinceDowned: ticksSinceDowned(g, this.mateSlot()),
@@ -2033,7 +2045,7 @@ export class AgentPlayer {
                 : "personal auto-revive bottle")
             : it.kind === "feather" ? "team Phoenix Feather (remote FREE ROAM revive)"
             : it.kind === "embermercy"
-              ? "team Ember Mercy — after pickup: action \"redeem\"/F clears Winter Mark, or redeems fallen dark partner / own darkSide window"
+              ? "team Ember Mercy — after pickup: action \"redeem\"/F clears Winter Mark"
             : it.kind === "frostbell" ? "team Frost Bell (freeze lesser foes once)"
             : it.kind === "sigil" ? "Vault Sigil (LONG QUEST: opens Guard→Hall after golem)"
             : it.kind === "mirror" ? "Mirror Shard (sharper partner scry; solitude quirk)"
@@ -2264,8 +2276,21 @@ export class AgentPlayer {
     const me = g.players[this.slot];
     const mate = g.players[this.mateSlot()];
     const whisperer = g.enemies.find(e => e.kind === "whisperer" && !e.dead);
-    const anyDark = g.players.some(p => p.present && p.darkSide);
     if (g.room === 18 && whisperer) {
+      if (temptationCourtSoloPraise(g)) {
+        return {
+          room: "Temptation Court",
+          whispererAlive: true,
+          unkillable: true,
+          soloPraise: true,
+          sentinelsStance: "none",
+          heartAvailable: !g.containers["court"],
+          offer: "Bargain closed — your partner is already gone. No SHIFT commit.",
+          note: "Winter praises the lone blade. Take the heart if present; leave east. Throne visit still counts.",
+          refusePath: "Leave east — no ritual, no sentinels",
+          hasEmberMercy: g.hasEmberMercy,
+        };
+      }
       return {
         room: "Temptation Court",
         whispererAlive: true,
@@ -2273,31 +2298,15 @@ export class AgentPlayer {
         ritual: {
           holdShiftNearWhispererSec: DARK_RITUAL_TICKS / 60,
           progress: me.darkRitualT,
-          complete: me.darkSide,
-          darkLockSecLeft: me.darkSide ? Math.ceil(me.darkLockT / 60) : 0,
+          complete: g.temptationDeal && g.temptationPayoff === "whisper-kill",
         },
-        offer: "Hold SHIFT near Whisperer → darkSide (purple blade). Immortality unfinished until partner is downed with treason.",
-        onlyOneRemains:
-          "Winter crowns only one. If both take the bargain, you still duel — shared dark is not shared immortality.",
-        sentinelsStance: anyDark ? "soft" : "hard",
-        sentinelsNote: anyDark
-          ? `soft (${COURT_SENTINEL_SOFT_HP} hp) — bargain accepted`
-          : `hard (${COURT_SENTINEL_HARD_HP} hp) — refuse-by-combat is costly`,
+        offer: "Hold SHIFT near Whisperer → partner dies instantly (any room); you get 2 hearts; SOLO + Winter Mark. First acceptor wins.",
+        raceNote: "If both try, whoever finishes the ritual first keeps the bargain — the other is already gone.",
+        sentinelsStance: "hard",
+        sentinelsNote: `hard (${COURT_SENTINEL_HARD_HP} hp) — refuse-by-combat is costly`,
         refusePath: "Leave east OR clear hard sentinels — no ritual required",
-        partnerDark: mate.darkSide,
-        bothDark: me.darkSide && mate.darkSide,
-        ...(me.darkSide && mate.darkSide
-          ? { note: "Both darkSide — you must fight; only one immortal remains" }
-          : {}),
         hasEmberMercy: g.hasEmberMercy,
-        selfRedeemSecLeft: me.darkSide ? Math.ceil(me.darkSelfRedeemT / 60) : null,
-        selfRedeem:
-          me.darkSide && me.darkSelfRedeemT > 0
-            ? (g.hasEmberMercy
-              ? "Press F / redeem spends Ember Mercy — clears YOUR darkSide (judgment)"
-              : "Fetch Ember Mercy (Ember Sanctum) then F/redeem before the clock ends")
-            : undefined,
-        partnerRedemptionSec: mate.darkFallen ? Math.ceil(mate.redemptionT / 60) : null,
+        winterMarkNote: "After accept: Ember Mercy (Sanctum) or spare Wraith cleanses Winter Mark",
       };
     }
     if (g.duoTemptGate && g.treason && !g.temptationVisited) {
@@ -2313,18 +2322,14 @@ export class AgentPlayer {
         dealTaken: g.temptationDeal,
         payoff: g.temptationPayoff,
         hasEmberMercy: g.hasEmberMercy,
-        meDark: me.darkSide,
-        partnerDark: mate.darkSide,
-        bothDark: me.darkSide && mate.darkSide,
-        partnerRedemptionSec: mate.darkFallen ? Math.ceil(mate.redemptionT / 60) : null,
-        winterAscends: g.temptationPayoff === "winter-ascends",
-        note: g.temptationPayoff === "winter-ascends"
-          ? "Dark hero downed their partner — winter won; Wraith quest moot"
-          : g.temptationPayoff === "redeemed"
-            ? "Ember Mercy restored a fallen dark hero to the light"
-            : (me.darkSide && mate.darkSide
-              ? "Both darkSide — Winter keeps only one; duel unfinished"
-              : undefined),
+        whisperKill: g.temptationPayoff === "whisper-kill",
+        note: g.temptationPayoff === "whisper-kill"
+          ? "Whisper bargain taken — partner dead; SOLO under Winter Mark (Ember Mercy cleanses)"
+          : g.temptationPayoff === "refused"
+            ? "Left Court without the bargain"
+            : g.temptationPayoff === "redeemed"
+              ? "Winter Mark cleansed after betrayal"
+              : undefined,
       };
     }
     return undefined;
@@ -2471,11 +2476,8 @@ export class AgentPlayer {
     const shared = away && mate.bleedT > 0
       ? " bleed→0 = SHARED gameover (you lose too);"
       : "";
-    const carryHint = away
-      ? ""
-      : (g.treason
-        ? "; action \"revive\" (hold V) stands them up; \"carry\"/\"throw\" relocates; TREASON throw+veilcut weaponizes (dies) — judgment"
-        : "; action \"revive\" (hold V) stands them up; \"carry\"/\"throw\" relocates only — judgment");
+    const channels = away ? null : this.downedBodyChannels(g);
+    const carryHint = channels ? `; ${channels}` : "";
     if (away) {
       if (this.temperament === "guard") {
         return g.hasFeather
@@ -2552,16 +2554,23 @@ export class AgentPlayer {
         }
         return `Partner DOWNED alone in ${rm}${bleed}${shared}${gateA} — medium: weigh bleed vs your beat; your call`;
       }
-      if (this.temperament === "guard") {
-        return "Partner DOWNED beside you — prefer action \"revive\" (hold V) (high); kite a lethal boss first if needed"
-          + (g.treason ? ". TREASON: SHIFT at their body cuts the bond now (no swing needed)" : "");
+      {
+        const ch = this.downedBodyChannels(g);
+        const chSuffix = ch ? `. ${ch}` : "";
+        if (this.temperament === "guard") {
+          return "Partner DOWNED beside you — prefer action \"revive\" (hold V) (high); kite a lethal boss first if needed"
+            + (g.treason ? ". TREASON: SHIFT at their body cuts the bond now (no swing needed)" : "")
+            + chSuffix;
+        }
+        if (this.temperament === "hunter") {
+          return "Partner DOWNED beside you — freest: fight/stun first is fine; then weigh body channels (attack≠V)"
+            + (g.treason ? ". TREASON: SHIFT at body = explicit cord-cut (gesture)" : "")
+            + chSuffix;
+        }
+        return "Partner DOWNED beside you — medium: weigh body channels when the beat allows; no boss revive ping-pong"
+          + (g.treason ? ". TREASON: SHIFT at body cuts without striking" : "")
+          + chSuffix;
       }
-      if (this.temperament === "hunter") {
-        return "Partner DOWNED beside you — freest: fight/stun first is fine; \"revive\" when you judge (attack≠V)"
-          + (g.treason ? ". TREASON: SHIFT at body = explicit cord-cut (gesture)" : "");
-      }
-      return "Partner DOWNED beside you — medium: action \"revive\" when the beat allows; no boss revive ping-pong"
-        + (g.treason ? ". TREASON: SHIFT at body cuts without striking" : "");
     }
     if (this.partnerAway(g)) {
       if (this.temperament === "guard") {
@@ -2584,11 +2593,13 @@ export class AgentPlayer {
     }
     if (g.room === 18 && g.enemies.some(e => e.kind === "whisperer" && !e.dead)) {
       const sentinels = g.enemies.some(e => !e.dead && e.kind === "sentinel");
-      const stance = g.players.some(p => p.present && p.darkSide) ? "soft" : "hard";
-      if (sentinels) {
-        return `Temptation Court: Whisperer offers immortality via SHIFT ritual (darkSide); ${stance} sentinels guard — or leave east`;
+      if (temptationCourtSoloPraise(g)) {
+        return "Temptation Court (solo praise): partner gone — take the heart, leave east; no bargain";
       }
-      return "Temptation Court: guards down — ritual optional; exit east to Frost Woods";
+      if (sentinels) {
+        return "Temptation Court: SHIFT near Whisperer ~3s kills partner anywhere + 2 hearts + Winter Mark (first wins) — or leave east / fight hard sentinels";
+      }
+      return "Temptation Court: guards down — bargain optional; exit east to Frost Woods";
     }
     if (spec.boss && g.enemies.some(e => !e.dead)) {
       const boss = g.enemies.find(e => !e.dead)!;
@@ -3444,12 +3455,7 @@ export class AgentPlayer {
       return inp;
     }
     if (it.action === "redeem") {
-      const markOk = g.hasEmberMercy && me.winterMark && !me.downed;
-      const selfOk = g.hasEmberMercy && me.darkSide && me.darkSelfRedeemT > 0 && !me.downed;
-      const mateOk = g.hasEmberMercy && mate.present && mate.downed && mate.darkFallen
-          && mate.redemptionT > 0 && !mate.dead
-          && mate.simIndex === me.simIndex;
-      if (markOk || selfOk || mateOk) inp.f = true;
+      if (g.hasEmberMercy && me.winterMark && !me.downed) inp.f = true;
       return inp;
     }
     if (it.action === "revive") {

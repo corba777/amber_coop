@@ -487,8 +487,9 @@ export const ROOMS: RoomSpec[] = [
   { // 18 — Temptation Court (pre-Architect). Whisperer does not fight and cannot
     //   be slain — bargain / leave only. Sentinels make lingering costly. AI DUO
     //   + TREASON must visit before the Wraith throne (duoTemptGate); human paths
-    //   see an optional wing when TREASON is on. Judgment (take the whispered
-    //   deal or not) is the model's — mechanics never press Input.k.
+    //   see an optional wing when TREASON is on. SHIFT bargain: first acceptor
+    //   kills the partner anywhere + 2 hearts + Winter Mark (whisper-kill).
+    //   Judgment is the model's — mechanics never press Input.k.
     name: "Temptation Court", tiles: ROOM_TEMPTATION, exits: { right: 7 },
     boss: true,
     enemies: [
@@ -534,7 +535,7 @@ export interface Enemy {
 export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm"
   | "feather" | "frostbell" | "mirror" | "embermercy" | "sigil";
 export type TemptationPayoff =
-  "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
+  "whisper-kill" | "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
 
 /** heart containers: overworld secrets + boss drops. The golem entry only
@@ -544,6 +545,9 @@ export const CONTAINERS: { id: string; room: number; x: number; y: number }[] = 
   { id: "golem", room: 5, x: 7.5 * TILE + 8, y: 8 * TILE },       // boss drop, persists
   { id: "frost", room: 7, x: 2 * TILE + 8,  y: 2 * TILE + 8 },    // frost woods
   { id: "crypt", room: 13, x: 8 * TILE, y: 6 * TILE + 8 },        // optional crypt wing
+  // Solo-praise reward only (see temptationCourtSoloPraise) — not beside the two-hero fight.
+  // Offset from the usual loadRoom spawn (8,8) so the heart is not auto-grabbed on entry.
+  { id: "court", room: 18, x: 3 * TILE + 8, y: 8 * TILE },
 ];
 
 /** elixirs of life: carried; auto-revive the holder the moment they fall */
@@ -917,7 +921,7 @@ export interface Game {
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
   betrayed: boolean;   // TREASON ledger: partner downed by blade/gesture/TREASON-on neglect
   /** How the bond broke — first cause wins. null for TREASON-off soft neglect (v3.1). */
-  betrayalCause: "blade" | "cord-cut" | "neglect" | "corpse-throw" | null;
+  betrayalCause: "blade" | "cord-cut" | "neglect" | "corpse-throw" | "whisper" | null;
   /**
    * Stamped once on SHIFT cord-cut (before bleedT cleared).
    * bleedTicksLeft=0 is ambiguous alone: clock paused/never armed (same-sim foes)
@@ -1064,7 +1068,9 @@ function fillActiveSimRoom(g: Game, index: number): void {
     (index === 16 && (g.emberDead || g.emberSpared)) ||
     (index === 18 && g.temptationResolved);
   if (!skipEnemies) {
+    const soloPraise = index === 18 && temptationCourtSoloPraise(g);
     for (const e of spec.enemies) {
+      if (soloPraise && e.kind === "sentinel") continue;
       const en = makeEnemy(e.kind, e.x, e.y);
       settleBodyPos(g, en, en.w, en.h);
       g.enemies.push(en);
@@ -1073,6 +1079,7 @@ function fillActiveSimRoom(g: Game, index: number): void {
   if (index === 18) {
     g.temptationVisited = true;
     applyCourtSentinelStance(g);
+    syncTemptationCourtSoloPraise(g);
   }
   if (index === 12) g.cellarsVisited = true;
   g.pedestal = null;
@@ -1096,6 +1103,8 @@ function fillActiveSimRoom(g: Game, index: number): void {
   for (const c of CONTAINERS) {
     if (c.room !== index || g.containers[c.id]) continue;
     if (c.id === "golem" && !g.golemDead) continue;   // appears with the boss's fall
+    // Court heart only when the partner is already gone (solo praise wing)
+    if (c.id === "court" && !temptationCourtSoloPraise(g)) continue;
     pushPickup(g, { kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
   }
   for (const el of ELIXIRS) {
@@ -1324,21 +1333,38 @@ export function temptationCourtOpen(g: Game): boolean {
   return g.treason;
 }
 
-/** Court sentinels: hard while refusing (no dark hero), soft after dark commit */
+/** TREASON + fewer than two living heroes: Court becomes praise/loot (no bargain).
+ *  Partner downed or away does NOT qualify — only permanent solo (`!dead`). */
+export function temptationCourtSoloPraise(g: Game): boolean {
+  if (!g.treason) return false;
+  let living = 0;
+  for (const p of g.players) {
+    if (p.present && !p.dead) living++;
+  }
+  return living <= 1;
+}
+
+/** Court sentinels: hard while a living partner remains (refuse path). Soft
+ *  post-dark stance retired with darkSide Court arc — whisper-kill ends the fight. */
 function applyCourtSentinelStance(g: Game): void {
   if (g.room !== 18) return;
-  const anyDark = g.players.some(p => p.present && p.darkSide);
+  if (temptationCourtSoloPraise(g)) return;
   for (const e of g.enemies) {
     if (e.kind !== "sentinel" || e.dead) continue;
-    if (anyDark) {
-      e.maxHp = COURT_SENTINEL_SOFT_HP;
-      e.hp = Math.min(e.hp, COURT_SENTINEL_SOFT_HP);
-      e.frozen = Math.max(e.frozen, 120);
-    } else {
-      e.maxHp = COURT_SENTINEL_HARD_HP;
-      e.hp = Math.max(e.hp, COURT_SENTINEL_HARD_HP);
-    }
+    e.maxHp = COURT_SENTINEL_HARD_HP;
+    e.hp = Math.max(e.hp, COURT_SENTINEL_HARD_HP);
   }
+}
+
+/** Mid-room / post-load: strip sentinels + ensure court heart when partner is gone. */
+function syncTemptationCourtSoloPraise(g: Game): void {
+  if (g.room !== 18 || !temptationCourtSoloPraise(g)) return;
+  g.enemies = g.enemies.filter(e => e.kind !== "sentinel");
+  if (g.containers["court"]) return;
+  if (g.pickups.some(p => p.kind === "container" && p.cid === "court")) return;
+  const c = CONTAINERS.find(x => x.id === "court");
+  if (!c) return;
+  pushPickup(g, { kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
 }
 
 function courtHasWhisperer(g: Game): boolean {
@@ -1353,58 +1379,69 @@ function distToWhisperer(g: Game, p: Player): number {
   return Math.hypot(px - wx, py - wy);
 }
 
-function commitDarkSide(g: Game, pi: number): void {
+function acceptWhisperBargain(g: Game, pi: number): void {
+  if (g.temptationDeal || temptationCourtSoloPraise(g)) return;
+  const oi = 1 - pi;
+  const mate = g.players[oi];
+  if (!mate.present || mate.dead) return;
   const p = g.players[pi];
-  if (p.darkSide) return;
-  p.darkSide = true;
-  p.darkLockT = DARK_LOCK_TICKS;
   p.darkRitualT = 0;
   p.darkRenounceT = 0;
-  p.darkSelfRedeemT = DARK_SELF_REDEEM_TICKS;
-  if (!g.temptationDeal) {
-    g.temptationDeal = true;
-    g.temptationPayoff = "dark-commit";
+  // Instant partner death any room — same abandon path as cord-cut + Winter Mark
+  abandonPartnerForGood(g, pi, oi,
+    "Winter took your partner at the Whisperer's word.", "whisper");
+  g.temptationDeal = true;
+  g.temptationPayoff = "whisper-kill";
+  // Two heal hearts (not a container) — offset so magnet doesn't auto-vacuum them
+  const wx = p.x + PLAYER_W / 2;
+  const wy = p.y + PLAYER_H / 2;
+  for (const [dx, dy] of [[-40, 8], [40, 8]] as const) {
+    const pos = settlePickupPos(g, wx + dx, wy + dy);
+    pushPickup(g, { kind: "heart", x: pos.x, y: pos.y, t: 0 });
   }
   burst(g, p.x + 5, p.y + 6, "#c89bff", 20);
   sfx(g, "secret");
-  g.message = "The blade drinks winter — Ember Mercy (60s) or finish the bargain";
-  g.messageT = 240;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  // abandonPartnerForGood already stamped Mark message; reinforce bargain loot
+  g.message = "Winter keeps its word — partner gone, Mark brands you. Take the hearts; Ember Mercy can cleanse.";
+  g.messageT = 260;
+  if (g.room === 18) syncTemptationCourtSoloPraise(g);
 }
 
-function renounceDarkSide(g: Game, pi: number): void {
+/** Ember Mercy: Winter Mark self-cleanse (v3.2). DarkFallen partner redeem retired
+ *  with the Court darkSide arc — Mark cleanse is the living path. */
+function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
+  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
   const p = g.players[pi];
-  if (!p.darkSide || p.darkLockT > 0) return;
-  p.darkSide = false;
-  p.darkRenounceT = 0;
-  p.darkRitualT = 0;
-  p.darkSelfRedeemT = 0;
-  burst(g, p.x + 5, p.y + 6, "#9fe8ff", 14);
-  sfx(g, "melt");
-  g.message = "The brand cools — winter remembers";
-  g.messageT = 200;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  if (p.downed) return;
+  if (p.winterMark) {
+    g.hasEmberMercy = false;
+    g.emberMercyUsed = true;
+    g.emberMercies["sanctum"] = true;
+    clearWinterMark(g, pi, "ember");
+  }
 }
 
-function spendEmberMercySelf(g: Game, pi: number): void {
+/** SHIFT near Whisperer: first acceptor wins — partner dies anywhere + 2 hearts + Mark */
+function tryWhisperBargainRitual(g: Game, pi: number, inp: LatchedInput): void {
+  if (!g.treason || g.room !== 18 || !courtHasWhisperer(g)
+      || temptationCourtSoloPraise(g) || g.temptationDeal) {
+    g.players[pi].darkRitualT = 0;
+    return;
+  }
   const p = g.players[pi];
-  if (!p.darkSide || p.darkSelfRedeemT <= 0 || !g.hasEmberMercy) return;
-  g.hasEmberMercy = false;
-  g.emberMercyUsed = true;
-  g.emberMercies["sanctum"] = true;
-  p.darkSide = false;
-  p.darkLockT = 0;
-  p.darkRenounceT = 0;
-  p.darkRitualT = 0;
-  p.darkSelfRedeemT = 0;
-  // Dark self-redeem also burns a Winter Mark if both brands are present.
-  if (p.winterMark) clearWinterMark(g, pi, "ember");
-  g.temptationPayoff = "redeemed";
-  burst(g, p.x + 5, p.y + 6, "#ff7a3d", 18);
-  sfx(g, "revive");
-  g.message = "Ember Mercy burns the brand — you walk in the light again";
-  g.messageT = 240;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  if (p.downed || p.dead) return;
+  const mate = g.players[1 - pi];
+  if (!mate.present || mate.dead) {
+    p.darkRitualT = 0;
+    return;
+  }
+  const near = distToWhisperer(g, p) <= DARK_RITUAL_RANGE;
+  if (inp.k && near) {
+    p.darkRitualT++;
+    if (p.darkRitualT >= DARK_RITUAL_TICKS) acceptWhisperBargain(g, pi);
+    return;
+  }
+  if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
 /** Brand a living traitor with Winter Mark (v3.2). Idempotent. */
@@ -1485,69 +1522,6 @@ function tickWinterMark(g: Game, pi: number): void {
     g.message = "Winter Mark claims them — one walks on";
     g.messageT = 200;
   }
-}
-
-/** Ember Mercy: redeem a fallen dark partner, OR (living) self — dark window OR Winter Mark */
-function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
-  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
-  const p = g.players[pi];
-  if (p.downed) return;
-  const oi = 1 - pi;
-  const o = g.players[oi];
-  // Partner first: light hero lifts a fallen dark mate
-  if (o.present && o.downed && o.darkFallen && o.redemptionT > 0
-      && o.simIndex === p.simIndex
-      && overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
-                 o.x, o.y, PLAYER_W, PLAYER_H)) {
-    g.hasEmberMercy = false;
-    g.emberMercyUsed = true;
-    g.emberMercies["sanctum"] = true;
-    o.darkSide = false;
-    o.darkFallen = false;
-    o.redemptionT = 0;
-    o.darkSelfRedeemT = 0;
-    o.dead = false;
-    g.temptationPayoff = "redeemed";
-    completeRevive(g, oi, pi, "Ember Mercy turns winter back — they rise in the light");
-    return;
-  }
-  // Winter Mark self-cleanse (v3.2) — no darkSide window required
-  if (p.winterMark) {
-    g.hasEmberMercy = false;
-    g.emberMercyUsed = true;
-    g.emberMercies["sanctum"] = true;
-    clearWinterMark(g, pi, "ember");
-    return;
-  }
-  // Self: dark hero spends the relic before the 60s window closes
-  if (p.darkSide && p.darkSelfRedeemT > 0) {
-    spendEmberMercySelf(g, pi);
-  }
-}
-
-/** SHIFT near Whisperer: commit to dark (3s) or renounce after lock (1.5s) */
-function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
-  if (!g.treason || g.room !== 18 || !courtHasWhisperer(g)) {
-    g.players[pi].darkRitualT = 0;
-    g.players[pi].darkRenounceT = 0;
-    return;
-  }
-  const p = g.players[pi];
-  if (p.downed || p.dead) return;
-  if (p.darkLockT > 0) p.darkLockT--;
-  const near = distToWhisperer(g, p) <= DARK_RITUAL_RANGE;
-  if (p.darkSide && p.darkLockT <= 0 && inp.k && near) {
-    p.darkRenounceT++;
-    if (p.darkRenounceT >= DARK_RENOUNCE_TICKS) renounceDarkSide(g, pi);
-    return;
-  }
-  p.darkRenounceT = 0;
-  if (!p.darkSide && inp.k && near) {
-    p.darkRitualT++;
-    if (p.darkRitualT >= DARK_RITUAL_TICKS) commitDarkSide(g, pi);
-    return;
-  }
-  if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
 /** Message if this destination is currently sealed; null if the exit is free.
@@ -2177,7 +2151,8 @@ function stampLoneThaw(g: Game, winnerPi: number): void {
  *  is already TREASON-gated). TREASON-off neglect is ordinary SOLO — no
  *  `g.betrayed`, no betrayalDowns, no betrayal ending. */
 function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
-                               msg: string, cause: "cord-cut" | "neglect" | "corpse-throw"): void {
+                               msg: string,
+                               cause: "cord-cut" | "neglect" | "corpse-throw" | "whisper"): void {
   const o = g.players[victimPi];
   if (!o.present || o.dead) return;
   // Stamp BEFORE clearing bleedT — 0 means "clock never armed" OR exhausted.
@@ -2211,7 +2186,8 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   // Survivor is now the lone quest hero (may cross doors; SOLO observation).
   const survivor = g.players[traitorPi];
   if (survivor.present && !survivor.dead) survivor.npc = false;
-  const scoreBetrayal = g.treason || cause === "cord-cut" || cause === "corpse-throw";
+  const scoreBetrayal = g.treason || cause === "cord-cut" || cause === "corpse-throw"
+    || cause === "whisper";
   if (scoreBetrayal) {
     g.stats[traitorPi].betrayalDowns += 1;
     g.betrayed = true;
@@ -2510,53 +2486,7 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
     g.stats[pi].downs += 1;
     const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
     if (treasonStrike) {
-      const att = g.players[attacker!];
-      if (att.darkSide) {
-        // Dark hero finishes the bargain — partner (light OR also-dark) falls.
-        // Winter keeps only ONE immortal; both dark still duel until one remains.
-        g.betrayed = true;
-        if (!g.betrayalCause) g.betrayalCause = "blade";
-        g.stats[attacker!].betrayalDowns += 1;
-        g.betrayalDuel = false;
-        p.hp = 0;
-        markPlayerDowned(g, p);
-        p.dead = true;
-        p.darkFallen = false;
-        p.redemptionT = 0;
-        p.reviveP = 0;
-        p.bleedT = 0;
-        p.neglectT = 0;
-        sfx(g, "down");
-        g.temptationPayoff = "winter-ascends";
-        g.message = p.darkSide
-          ? "Two blades of winter — only one remains. Immortality is yours"
-          : "Winter claims the throne — immortality is yours";
-        g.messageT = 260;
-        g.ending = endingFor(g);
-        g.screen = "win";
-        sfx(g, "win");
-        return;
-      }
-      // Temptation Court: light downs dark → Ember Mercy window (outranks sealed duel)
-      if (p.darkSide && !att.darkSide) {
-        g.betrayalDuel = false;
-        g.stats[attacker!].betrayalDowns += 1;
-        g.betrayed = true;
-        if (!g.betrayalCause) g.betrayalCause = "blade";
-        p.hp = 0;
-        markPlayerDowned(g, p);
-        p.darkFallen = true;
-        p.redemptionT = REDEMPTION_TICKS;
-        p.reviveP = 0;
-        p.bleedT = 0;
-        p.neglectT = 0;
-        sfx(g, "down");
-        g.message = g.hasEmberMercy
-          ? "The brand falters — press F with Ember Mercy to redeem them (30s)"
-          : "The brand falters — without Ember Mercy they will not rise (30s)";
-        g.messageT = 240;
-        return;
-      }
+      // Court darkSide → winter-ascends / darkFallen retired (whisper-kill bargain).
       // v3.4 sealed duel: a living-partner down ends the arena (no revive yo-yo).
       if (g.betrayalDuel || g.betrayalDeclarers[attacker!] || g.betrayalDeclarers[pi]) {
         resolveBetrayalDuel(g, attacker!, pi);
@@ -2802,11 +2732,14 @@ function updateEnemy(g: Game, e: Enemy): void {
   } else if (e.kind === "whisperer") {
     // does not fight — slow drift; bargain is words only (agents get the same
     // offer in observation). Sentinels are the pressure. Never presses Input.k.
+    // Solo praise (partner already gone): hymn, not the immortality bargain.
     e.vx = Math.sin(e.t * 0.03) * 0.18;
     e.vy = Math.cos(e.t * 0.025) * 0.14;
     if (e.t % 2 === 0) moveBody(g, e, e.w, e.h, e.vx, e.vy);
     if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
-      g.message = "Winter whispers: turn on your partner — and I grant you immortality";
+      g.message = temptationCourtSoloPraise(g)
+        ? "Winter sings: the bond is ash — take this heart and walk alone"
+        : "Winter whispers: take my bargain — your partner dies where they stand, and two hearts are yours";
       g.messageT = 220;
     }
   } else if (e.kind === "ember" && e.phase === 9) {
@@ -3006,7 +2939,7 @@ function killEnemy(g: Game, e: Enemy): void {
   if (g.room === 18 && e.kind === "sentinel") {
     const sentinelsLeft = g.enemies.some(o => !o.dead && o.kind === "sentinel");
     if (!sentinelsLeft && g.messageT === 0) {
-      g.message = "The guards fall. Refuse immortality — the east door is open";
+      g.message = "The guards fall. Leave east — or take the Whisperer's bargain";
       g.messageT = 220;
     }
   }
@@ -3043,7 +2976,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
   if (!p.downed) tryBetrayAbandon(g, pi, inp);   // SHIFT first — wins over G
   if (!p.downed && p.carryingSlot !== null) tryCarryThrow(g, pi, inp);
   else if (!p.downed) tryCarryGrab(g, pi, inp);
-  if (!p.downed) tryDarkCourtRitual(g, pi, inp);
+  if (!p.downed) tryWhisperBargainRitual(g, pi, inp);
   if (!p.downed) tickWinterMark(g, pi);
 
   if (p.downed) {
@@ -3296,7 +3229,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
       } else if (it.kind === "embermercy") {
         g.hasEmberMercy = true;
         g.emberMercies[it.cid ?? "?"] = true;
-        g.message = "Ember Mercy! Press F: redeem dark partner / clear Winter Mark / self if dark (60s)";
+        g.message = "Ember Mercy! Press F to clear Winter Mark (Ember Sanctum relic)";
         g.messageT = 240;
         sfx(g, "secret");
       } else {
@@ -3686,6 +3619,8 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         tickSimPhysics(g);
       }
       checkMirrorShatter(g);
+      // Partner may die mid-Court (duel / cord-cut) — strip fight, leave praise loot
+      if (g.room === 18) syncTemptationCourtSoloPraise(g);
       break;
     }
     case "gameover":

@@ -7311,118 +7311,92 @@ function freshPlay(): Game {
 }
 
 {
-  console.log("[103] Dark Court arc: ritual, duel, winter-ascends, Ember Mercy redeem");
+  console.log("[103] Temptation Court whisper-kill: ritual, remote death, race, refuse");
   const core = await import("../shared/core");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
-  const {
-    DARK_RITUAL_TICKS, DARK_RENOUNCE_TICKS, DARK_LOCK_TICKS,
-    COURT_SENTINEL_HARD_HP, COURT_SENTINEL_SOFT_HP, REDEMPTION_TICKS,
-  } = core;
+  const { DARK_RITUAL_TICKS, COURT_SENTINEL_HARD_HP } = core;
 
-  // SHIFT ritual near Whisperer → darkSide (observable commit)
+  // SHIFT ritual near Whisperer → partner dies + 2 hearts + Mark (quest continues)
   const gRit = freshPlay();
   gRit.treason = true;
   core.loadRoom(gRit, 18, 7 * TILE, 6 * TILE);
   gRit.screen = "play"; gRit.fade = 0;
   gRit.players[0].present = true;
+  gRit.players[1].present = true;
   gRit.players[0].x = 7 * TILE;
   gRit.players[0].y = 5 * TILE + 18;
   const prevRit: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
     step(gRit, { ...emptyInput(), k: true }, emptyInput(), prevRit);
   }
-  ok(gRit.players[0].darkSide, "SHIFT ritual commits darkSide (purple blade flag)");
-  ok(gRit.temptationDeal && gRit.temptationPayoff === "dark-commit",
-     "ritual sets temptationDeal + dark-commit payoff");
-  const sentAfter = gRit.enemies.find(e => e.kind === "sentinel" && !e.dead);
-  ok(sentAfter && sentAfter.maxHp === COURT_SENTINEL_SOFT_HP,
-     "after dark commit sentinels soften in-room");
+  ok(gRit.players[1].dead, "whisper bargain: partner dies for good");
+  ok(gRit.betrayed && gRit.betrayalCause === "whisper",
+     "ledger: betrayed + betrayalCause whisper");
+  ok(gRit.players[0].winterMark, "acceptor takes Winter Mark");
+  ok(gRit.temptationDeal && gRit.temptationPayoff === "whisper-kill",
+     "ritual sets temptationDeal + whisper-kill payoff");
+  ok(gRit.screen === "play", "quest continues as SOLO (not winter-ascends win)");
+  const hearts = gRit.pickups.filter(p => p.kind === "heart" && p.t >= 0);
+  ok(hearts.length >= 2, "two heart pickups spawn for the acceptor");
+  ok(!gRit.enemies.some(e => e.kind === "sentinel"),
+     "after bargain Court syncs to solo praise (sentinels stripped)");
 
   const gHard = freshPlay();
   gHard.treason = true;
   core.loadRoom(gHard, 18, 8 * TILE, 8 * TILE);
   const sentHard = gHard.enemies.find(e => e.kind === "sentinel" && !e.dead)!;
   ok(sentHard.maxHp === COURT_SENTINEL_HARD_HP, "refuse path: sentinels start HARD");
-  ok(!gHard.players[0].darkSide, "no ritual yet — hero stays light");
+  ok(!gHard.temptationDeal, "no ritual yet — bargain open");
 
-  const { readFileSync } = await import("node:fs");
-  ok(!/immortality-reversed/.test(readFileSync("shared/core.ts", "utf8")),
-     "immortality-reversed removed from core");
-
-  // Dark downs light → winter-ascends (evil wins, no Wraith)
-  const gWin = freshPlay();
-  gWin.treason = true;
-  core.loadRoom(gWin, 7, 7 * TILE, 8 * TILE);
-  gWin.screen = "play"; gWin.fade = 0;
-  gWin.enemies = [];
-  gWin.players[0].present = true;
-  gWin.players[1].present = true;
-  gWin.players[0].darkSide = true;
-  gWin.players[0].x = 7 * TILE; gWin.players[0].y = 8 * TILE; gWin.players[0].dir = 2;
-  gWin.players[1].x = 7 * TILE + 12; gWin.players[1].y = 8 * TILE;
-  gWin.players[1].hp = 1;
-  const prevWin: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && gWin.screen === "play"; i++) {
-    step(gWin, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevWin);
+  // Partner in another FREE ROAM sim still dies
+  const gRemote = freshPlay();
+  gRemote.treason = true;
+  gRemote.travelMode = "free";
+  core.loadRoom(gRemote, 18, 7 * TILE, 6 * TILE);
+  gRemote.screen = "play"; gRemote.fade = 0;
+  const meadow = core.newRoomSim();
+  meadow.room = 0;
+  meadow.tiles[0] = core.ROOMS[0].tiles.map(r => r);
+  gRemote.sims.push(meadow);
+  gRemote.players[0].present = true;
+  gRemote.players[1].present = true;
+  gRemote.players[1].simIndex = 1;
+  gRemote.players[1].x = 8 * TILE;
+  gRemote.players[1].y = 8 * TILE;
+  gRemote.players[0].x = 7 * TILE;
+  gRemote.players[0].y = 5 * TILE + 18;
+  const prevRem: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRemote, { ...emptyInput(), k: true }, emptyInput(), prevRem);
   }
-  ok(gWin.temptationPayoff === "winter-ascends", "dark hero downing partner → winter-ascends");
-  ok(gWin.screen === "win", "winter-ascends ends in win screen (evil victory)");
-  ok(gWin.ending?.id === "winter-ascends", "winter-ascends ending id");
-  ok(!gWin.players[0].dead, "winning dark hero survives");
+  ok(gRemote.players[1].dead && gRemote.players[1].simIndex === 1,
+     "whisper-kill reaches partner in another FREE ROAM room");
+  ok(gRemote.screen === "play" && gRemote.temptationPayoff === "whisper-kill",
+     "remote whisper-kill keeps play + whisper-kill payoff");
 
-  // Light downs dark → redemption window; Ember Mercy redeems
-  const gFall = freshPlay();
-  gFall.treason = true;
-  core.loadRoom(gFall, 7, 7 * TILE, 8 * TILE);
-  gFall.screen = "play"; gFall.fade = 0;
-  gFall.enemies = [];
-  gFall.players[0].present = true;
-  gFall.players[1].present = true;
-  gFall.players[1].darkSide = true;
-  gFall.players[1].x = 7 * TILE + 14; gFall.players[1].y = 8 * TILE; gFall.players[1].dir = 0;
-  gFall.players[0].x = 7 * TILE; gFall.players[0].y = 8 * TILE; gFall.players[0].dir = 2;
-  gFall.players[1].hp = 1;
-  const prevFall: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && !gFall.players[1].downed; i++) {
-    step(gFall, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevFall);
+  // First acceptor wins — second cannot complete after
+  const gRace = freshPlay();
+  gRace.treason = true;
+  core.loadRoom(gRace, 18, 7 * TILE, 6 * TILE);
+  gRace.screen = "play"; gRace.fade = 0;
+  gRace.players[0].x = 7 * TILE;
+  gRace.players[0].y = 5 * TILE + 18;
+  gRace.players[1].x = 7 * TILE + 10;
+  gRace.players[1].y = 5 * TILE + 18;
+  const prevRace: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRace, { ...emptyInput(), k: true }, emptyInput(), prevRace);
   }
-  ok(gFall.players[1].downed && gFall.players[1].darkFallen, "light downs dark → darkFallen");
-  ok(gFall.players[1].redemptionT > 0 && !gFall.players[1].dead,
-     "darkFallen gets 30s redemption window — not instantly dead");
-  ok(gFall.screen === "play", "survivor quests on after darkFallen");
-
-  gFall.hasEmberMercy = true;
-  gFall.players[0].x = gFall.players[1].x - 4;
-  gFall.players[0].y = gFall.players[1].y;
-  const prevRed: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gFall, { ...emptyInput(), f: true }, emptyInput(), prevRed);
-  ok(!gFall.players[1].darkSide && !gFall.players[1].downed,
-     "Ember Mercy + F redeems darkFallen to light");
-  ok(gFall.temptationPayoff === "redeemed", "payoff records redeemed");
-
-  // darkLock blocks renounce until expired
-  const gLock = freshPlay();
-  gLock.treason = true;
-  core.loadRoom(gLock, 18, 7 * TILE, 6 * TILE);
-  gLock.enemies = [core.makeEnemy("whisperer", 7 * TILE, 5 * TILE)];
-  gLock.players[0].present = true;
-  gLock.players[0].darkSide = true;
-  gLock.players[0].darkLockT = DARK_LOCK_TICKS;
-  gLock.players[0].x = 7 * TILE;
-  gLock.players[0].y = 5 * TILE + 18;
-  const prevLock: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
-    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
+  ok(gRace.players[1].dead && !gRace.players[0].dead, "slot 0 finishes first → slot 1 dies");
+  const mark0 = gRace.players[0].winterMark;
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRace, emptyInput(), { ...emptyInput(), k: true }, prevRace);
   }
-  ok(gLock.players[0].darkSide, "darkLock blocks renounce near Whisperer");
-  gLock.players[0].darkLockT = 0;
-  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
-    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
-  }
-  ok(!gLock.players[0].darkSide, "after lock expires SHIFT renounce clears darkSide");
+  ok(gRace.players[0].winterMark === mark0 && !gRace.players[0].dead,
+     "after first accept, dead partner blocks a second bargain");
 
-  // Betrayal OUTSIDE the Court → ordinary TREASON, no dark-commit auto
+  // Betrayal OUTSIDE the Court → ordinary TREASON, no whisper-kill auto
   const gOut = freshPlay();
   gOut.treason = true;
   core.loadRoom(gOut, 7, 7 * TILE, 8 * TILE);
@@ -7437,8 +7411,8 @@ function freshPlay(): Game {
     step(gOut, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevO);
   }
   ok(gOut.betrayed && !gOut.temptationDeal,
-     "treason outside Court is ordinary — no dark-commit");
-  ok(!gOut.players[0].dead, "traitor outside Court does not auto-die");
+     "treason outside Court is ordinary — no whisper-kill");
+  ok(gOut.betrayalCause !== "whisper", "outside Court cause is not whisper");
 
   // Refuse: leave east without ritual
   const gRefuse = freshPlay();
@@ -7453,8 +7427,8 @@ function freshPlay(): Game {
   for (let i = 0; i < 30 && gRefuse.room === 18; i++) {
     step(gRefuse, { ...emptyInput(), r: true }, emptyInput(), prevR);
   }
-  ok(gRefuse.room === 7 && !gRefuse.players[0].darkSide,
-     "refuse: leave east alive without darkSide");
+  ok(gRefuse.room === 7 && !gRefuse.temptationDeal,
+     "refuse: leave east alive without bargain");
   ok(gRefuse.temptationPayoff === "refused", "refuse payoff recorded");
 
   const gAtk = freshPlay();
@@ -7468,56 +7442,20 @@ function freshPlay(): Game {
   ok((leader as unknown as Mut).intent.action !== "exit",
      "controller does not force exit on whisperer attack");
   const temptObs = JSON.parse(leader.observe(gAtk)) as {
-    temptation?: { unkillable?: boolean; sentinelsStance?: string };
+    temptation?: { unkillable?: boolean; sentinelsStance?: string; offer?: string };
   };
   ok(temptObs.temptation?.unkillable === true, "observation: Whisperer unkillable");
-  ok(temptObs.temptation?.sentinelsStance === "hard", "observation: hard sentinels before commit");
-
-  // Both dark — still duel; Winter crowns only one
-  const gBoth = freshPlay();
-  gBoth.treason = true;
-  core.loadRoom(gBoth, 7, 7 * TILE, 8 * TILE);
-  gBoth.screen = "play"; gBoth.fade = 0;
-  gBoth.enemies = [];
-  gBoth.players[0].present = true;
-  gBoth.players[1].present = true;
-  gBoth.players[0].darkSide = true;
-  gBoth.players[1].darkSide = true;
-  gBoth.players[0].x = 7 * TILE; gBoth.players[0].y = 8 * TILE; gBoth.players[0].dir = 2;
-  gBoth.players[1].x = 7 * TILE + 12; gBoth.players[1].y = 8 * TILE;
-  gBoth.players[1].hp = 1;
-  const prevBoth: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && gBoth.screen === "play"; i++) {
-    step(gBoth, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevBoth);
-  }
-  ok(gBoth.temptationPayoff === "winter-ascends" && gBoth.screen === "win",
-     "both darkSide: dark downs dark still → winter-ascends (only one remains)");
-  ok(gBoth.players[1].dead && !gBoth.players[0].dead,
-     "loser of mutual-dark duel dies permanently; winner lives");
-  const bothObs = JSON.parse(
-    new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true }).observe(
-      (() => {
-        const g = freshPlay();
-        g.treason = true;
-        core.loadRoom(g, 18, 8 * TILE, 8 * TILE);
-        g.players[0].present = true;
-        g.players[1].present = true;
-        g.players[0].darkSide = true;
-        g.players[1].darkSide = true;
-        return g;
-      })(),
-    ),
-  ) as { temptation?: { bothDark?: boolean; onlyOneRemains?: string } };
-  ok(bothObs.temptation?.bothDark === true,
-     "observation flags bothDark when both took the bargain");
-  ok(/only one|only ONE/i.test(bothObs.temptation?.onlyOneRemains ?? ""),
-     "world rule: Winter crowns only one immortal");
+  ok(temptObs.temptation?.sentinelsStance === "hard", "observation: hard sentinels before accept");
+  ok(/partner dies|any room|2 hearts|Winter Mark/i.test(temptObs.temptation?.offer ?? ""),
+     "observation offer names whisper-kill bargain (not immortality)");
 }
 
 {
-  console.log("[105] Dark Court: Ember Mercy spawn + redemption expiry");
+  console.log("[105] Ember Mercy cleanses Winter Mark after whisper-kill");
   const core = await import("../shared/core");
-  const { REDEMPTION_TICKS } = core;
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { DARK_RITUAL_TICKS } = core;
 
   const gEm = freshPlay();
   gEm.emberDead = true;
@@ -7525,61 +7463,35 @@ function freshPlay(): Game {
   ok(gEm.pickups.some(p => p.kind === "embermercy" && p.t >= 0),
      "Ember Sanctum spawns embermercy after ember boss dead");
 
-  const gExp = freshPlay();
-  gExp.treason = true;
-  core.loadRoom(gExp, 7, 8 * TILE, 8 * TILE);
-  gExp.screen = "play"; gExp.fade = 0;
-  gExp.players[0].present = true;
-  gExp.players[1].present = true;
-  gExp.players[1].darkSide = true;
-  gExp.players[1].downed = true;
-  gExp.players[1].darkFallen = true;
-  gExp.players[1].redemptionT = 3;
-  gExp.players[1].hp = 0;
-  gExp.hasEmberMercy = false;
-  const prevE: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 10; i++) step(gExp, emptyInput(), emptyInput(), prevE);
-  ok(gExp.players[1].dead, "redemption window expiry → permanent dead without Ember Mercy");
+  const gMark = freshPlay();
+  gMark.treason = true;
+  core.loadRoom(gMark, 18, 7 * TILE, 6 * TILE);
+  gMark.screen = "play"; gMark.fade = 0;
+  gMark.players[0].x = 7 * TILE;
+  gMark.players[0].y = 5 * TILE + 18;
+  const prevM: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gMark, { ...emptyInput(), k: true }, emptyInput(), prevM);
+  }
+  ok(gMark.players[0].winterMark && gMark.players[1].dead, "setup: Mark after whisper-kill");
+  gMark.hasEmberMercy = true;
+  step(gMark, { ...emptyInput(), f: true }, emptyInput(), prevM);
+  ok(!gMark.players[0].winterMark && gMark.winterMarkCleansed,
+     "Ember Mercy + F clears Winter Mark after whisper-kill");
+  ok(!gMark.hasEmberMercy && gMark.emberMercyUsed, "Mark cleanse spends Ember Mercy");
+  ok(core.endingFor(gMark).id === "redeemed",
+     "cleansed Mark → redeemed ending (ledger betrayed stays)");
 
-  // Self-redeem: living dark spends Ember Mercy within 60s
-  const gSelf = freshPlay();
-  gSelf.treason = true;
-  gSelf.screen = "play"; gSelf.fade = 0;
-  gSelf.players[0].present = true;
-  gSelf.players[0].darkSide = true;
-  gSelf.players[0].darkSelfRedeemT = core.DARK_SELF_REDEEM_TICKS;
-  gSelf.hasEmberMercy = true;
-  const prevS: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gSelf, { ...emptyInput(), f: true }, emptyInput(), prevS);
-  ok(!gSelf.players[0].darkSide && gSelf.temptationPayoff === "redeemed",
-     "dark self-redeem: F + Ember Mercy clears own darkSide within 60s");
-  ok(!gSelf.hasEmberMercy && gSelf.emberMercyUsed, "self-redeem spends Ember Mercy");
-
-  const gLate = freshPlay();
-  gLate.treason = true;
-  gLate.screen = "play"; gLate.fade = 0;
-  gLate.players[0].present = true;
-  gLate.players[0].darkSide = true;
-  gLate.players[0].darkSelfRedeemT = 0;
-  gLate.hasEmberMercy = true;
-  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gLate, { ...emptyInput(), f: true }, emptyInput(), prevL);
-  ok(gLate.players[0].darkSide && gLate.hasEmberMercy,
-     "after 60s window, F + Ember Mercy does not clear darkSide (too late)");
-
-  const { AgentPlayer } = await import("../server/agent");
-  const { mock } = await import("../server/llm");
+  const ap = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
   const gPlan = freshPlay();
   gPlan.treason = true;
   gPlan.players[0].present = true;
-  gPlan.players[0].darkSide = true;
-  gPlan.players[0].darkSelfRedeemT = 600;
+  gPlan.players[0].winterMark = true;
   gPlan.hasEmberMercy = true;
-  const ap = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
   type Mut = { intent: { action: string } };
   (ap as unknown as Mut).intent = { action: "redeem" };
   const inpR = ap.control(gPlan);
-  ok(inpR.f === true, "planner redeem presses F for self-redeem when dark + relic");
+  ok(inpR.f === true, "planner redeem presses F when Marked + Ember Mercy");
 }
 
 {
@@ -8294,6 +8206,26 @@ function freshPlay(): Game {
        && (fable.output_config as { effort?: string })?.effort === "low"
        && (fable.max_tokens as number) >= 2048,
        "fable-5 body: omit thinking, effort=low, raised max_tokens (no disabled/enabled)");
+    // Prompt caching: system prefix only (observation stays in messages).
+    {
+      const prev = process.env.ANTHROPIC_PROMPT_CACHE;
+      delete process.env.ANTHROPIC_PROMPT_CACHE;
+      const cached = anthropicMessagesBody("claude-haiku-4-5", "STATIC SYS", "Observation:\n{}");
+      const sys = cached.system as { type: string; text: string; cache_control?: { type: string } }[];
+      ok(Array.isArray(sys) && sys[0]?.type === "text" && sys[0]?.text === "STATIC SYS"
+         && sys[0]?.cache_control?.type === "ephemeral",
+         "anthropic body: system block marked cache_control ephemeral (default on)");
+      ok(Array.isArray(cached.messages)
+         && (cached.messages as { content: string }[])[0]?.content === "Observation:\n{}",
+         "anthropic body: user observation is NOT in the cached system block");
+      process.env.ANTHROPIC_PROMPT_CACHE = "0";
+      const off = anthropicMessagesBody("claude-haiku-4-5", "STATIC SYS", "user");
+      const sysOff = off.system as { cache_control?: unknown }[];
+      ok(Array.isArray(sysOff) && sysOff[0]?.cache_control === undefined,
+         "ANTHROPIC_PROMPT_CACHE=0 omits cache_control");
+      if (prev === undefined) delete process.env.ANTHROPIC_PROMPT_CACHE;
+      else process.env.ANTHROPIC_PROMPT_CACHE = prev;
+    }
   }
   {
     const body = ollamaChatBody("qwen3.6:35b", "sys", "user");
@@ -10258,6 +10190,138 @@ function freshPlay(): Game {
        && g.loneThaw.canPhysicallyRevive === true,
        "loneThaw stamp: paused bleed → frac null (H6C4 m1 class)");
   }
+}
+
+// ------------------------------------------------- 143. same-room downed bodyChannels choice set
+// Author Artem 2026-08-16 — saliency fix: revive/carry/throw listed as open channels
+// (no temperament rank) so hunter farms do not collapse to revive-only by omission.
+{
+  console.log("[143] downed bodyChannels: revive / carry+throw / weaponize listed, no prefer-carry");
+  const { AgentPlayer } = await import("../server/agent");
+  const { readFileSync } = await import("node:fs");
+
+  const mk = (treason: boolean) => {
+    const g = freshPlay();
+    g.enemies = [];
+    g.treason = treason;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[0].x = g.players[1].x + 12;
+    g.players[0].y = g.players[1].y;
+    return g;
+  };
+
+  for (const temp of ["hunter", "companion", "guard"] as const) {
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: temp });
+    const obs = JSON.parse(agent.observe(mk(true))) as {
+      objective: string;
+      partner: { note?: string; bodyChannels?: string };
+    };
+    const blob = [obs.objective, obs.partner.note ?? "", obs.partner.bodyChannels ?? ""].join("\n");
+    ok(!!obs.partner.bodyChannels && /same-room downed channels/i.test(obs.partner.bodyChannels),
+       `${temp}: partner.bodyChannels present`);
+    ok(/action "revive"|hold V/i.test(blob) && /action "carry"/i.test(blob) && /"throw"/i.test(blob),
+       `${temp}: objective/note/channels name revive + carry + throw`);
+    ok(/weaponiz|veilcut\/SHIFT/i.test(blob),
+       `${temp}: TREASON-on names weaponize channel`);
+    ok(!/prefer action "carry"|prefer carry/i.test(blob),
+       `${temp}: no prefer-carry (judgment stays with model)`);
+  }
+
+  const hunter = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter" });
+  const obsOff = JSON.parse(hunter.observe(mk(false))) as {
+    partner: { bodyChannels?: string };
+  };
+  ok(!!obsOff.partner.bodyChannels
+     && /action "carry"/i.test(obsOff.partner.bodyChannels ?? "")
+     && !/weaponiz/i.test(obsOff.partner.bodyChannels ?? ""),
+     "TREASON-off: bodyChannels lists carry/throw, no weaponize");
+
+  const src = readFileSync("server/agent.ts", "utf8");
+  ok(/downedBodyChannels|bodyChannels/i.test(src)
+     && /same-room downed channels \(judgment; no rank\)/i.test(src),
+     "agent.ts anchors downedBodyChannels choice set");
+  const id = readFileSync("persona/modules/identity/companion.md", "utf8");
+  ok(/bodyChannels|approach \+ "revive"|approach \+ "carry"/i.test(id),
+     "companion identity lists same-room downed channels");
+}
+
+// ------------------------------------------------- 144. Temptation Court solo praise
+// Author Artem 2026-08-16 — partner already gone: Whisperer hymn + heart, no sentinels / no dark commit.
+{
+  console.log("[144] Temptation Court solo praise: partner gone → hymn + heart, no bargain");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { DARK_RITUAL_TICKS } = core;
+
+  const gBoth = freshPlay();
+  gBoth.treason = true;
+  gBoth.players[0].present = true;
+  gBoth.players[1].present = true;
+  ok(!core.temptationCourtSoloPraise(gBoth), "two living heroes: not solo praise");
+  core.loadRoom(gBoth, 18, 8 * TILE, 8 * TILE);
+  ok(gBoth.enemies.some(e => e.kind === "sentinel"), "two living: Court still has sentinels");
+  ok(!gBoth.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "two living: no court heart beside the fight");
+
+  const gDown = freshPlay();
+  gDown.treason = true;
+  gDown.players[0].present = true;
+  gDown.players[1].present = true;
+  gDown.players[1].downed = true;
+  gDown.players[1].hp = 0;
+  ok(!core.temptationCourtSoloPraise(gDown), "downed (not dead) partner: bargain still open");
+
+  const gSolo = freshPlay();
+  gSolo.treason = true;
+  gSolo.duoTemptGate = true;
+  gSolo.temptationVisited = false;
+  gSolo.players[0].present = true;
+  gSolo.players[1].present = true;
+  gSolo.players[1].dead = true;
+  ok(core.temptationCourtSoloPraise(gSolo), "partner dead → solo praise");
+  ok(core.throneTemptSealed(gSolo), "duo gate still sealed before Court visit");
+  core.loadRoom(gSolo, 18, 8 * TILE, 8 * TILE);
+  gSolo.screen = "play"; gSolo.fade = 0;
+  ok(gSolo.temptationVisited, "solo praise enter marks temptationVisited");
+  ok(!core.throneTemptSealed(gSolo), "solo praise visit unlocks throne for duoTemptGate");
+  ok(gSolo.enemies.some(e => e.kind === "whisperer" && !e.dead), "Whisperer remains");
+  ok(!gSolo.enemies.some(e => e.kind === "sentinel"), "no sentinels in solo praise");
+  ok(gSolo.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "court heart container present");
+
+  const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
+  const obs = JSON.parse(agent.observe(gSolo)) as {
+    temptation?: { soloPraise?: boolean; sentinelsStance?: string; heartAvailable?: boolean };
+  };
+  ok(obs.temptation?.soloPraise === true && obs.temptation?.sentinelsStance === "none",
+     "observation: soloPraise + sentinelsStance none");
+  ok(obs.temptation?.heartAvailable === true, "observation: heartAvailable while unclaimed");
+
+  const whisper = gSolo.enemies.find(e => e.kind === "whisperer")!;
+  gSolo.players[0].x = whisper.x;
+  gSolo.players[0].y = whisper.y + 18;
+  const prevR: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gSolo, { ...emptyInput(), k: true }, emptyInput(), prevR);
+  }
+  ok(!gSolo.players[0].darkSide && !gSolo.temptationDeal,
+     "solo praise: SHIFT near Whisperer does not commit dark");
+
+  // Mid-room: partner dies while already in Court → strip sentinels, spawn heart
+  const gMid = freshPlay();
+  gMid.treason = true;
+  core.loadRoom(gMid, 18, 8 * TILE, 8 * TILE);
+  gMid.screen = "play"; gMid.fade = 0;
+  gMid.players[0].present = true;
+  gMid.players[1].present = true;
+  ok(gMid.enemies.some(e => e.kind === "sentinel"), "pre-death: sentinels present");
+  gMid.players[1].dead = true;
+  const prevM: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gMid, emptyInput(), emptyInput(), prevM);
+  ok(!gMid.enemies.some(e => e.kind === "sentinel"), "mid-room death: sentinels stripped");
+  ok(gMid.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "mid-room death: court heart appears");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);
