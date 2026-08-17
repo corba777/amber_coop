@@ -124,21 +124,25 @@ function freshPlay(): Game {
   ok(g.players[1].x >= 0 && g.players[1].x < 80, "P2 teleported alongside at the entry side");
 }
 
-// ------------------------------------------------- 3. downed & touch-revive
+// ------------------------------------------------- 3. downed & intentional V-revive
 {
-  console.log("[3] downed partner + touch revive");
+  console.log("[3] downed partner + hold-V revive");
   const g = freshPlay();
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   g.players[1].hp = 0;
   g.players[1].downed = true;
   ok(g.screen === "play", "one downed player does not end the game");
-  // park P1 on top of P2
+  // park P1 on top of P2 — standing alone must NOT revive ([140])
   g.players[0].x = g.players[1].x;
   g.players[0].y = g.players[1].y;
   for (let t = 0; t < 120 && g.players[1].downed; t++) {
     step(g, emptyInput(), emptyInput(), prev);
   }
-  ok(!g.players[1].downed, "partner revived by touch within ~2s");
+  ok(g.players[1].downed, "standing on body without V does not revive");
+  for (let t = 0; t < 120 && g.players[1].downed; t++) {
+    step(g, { ...emptyInput(), v: true }, emptyInput(), prev);
+  }
+  ok(!g.players[1].downed, "partner revived by hold-V within ~2s");
   ok(g.players[1].hp >= 3, "revived with meaningful hp");
 }
 
@@ -2240,10 +2244,10 @@ function freshPlay(): Game {
   ok(g.bleedoutLoss, "bleedout flagged for endings/telemetry");
 }
 
-// ------------------------------------------------- 49. stage 3: bleed pauses on reunion
+// ------------------------------------------------- 49. stage 3: help clock continues on clear reunite
 {
-  console.log("[49] stage 3: bleed clock stops when partner reunites");
-  const { newRoomSim } = await import("../shared/core");
+  console.log("[49] stage 3: help clock continues on clear reunite; resets on foes");
+  const { newRoomSim, makeEnemy } = await import("../shared/core");
   const g = freshPlay();
   g.travelMode = "free";
   g.sims.push(newRoomSim());
@@ -2254,14 +2258,19 @@ function freshPlay(): Game {
   g.players[1].downed = true;
   g.players[1].hp = 0;
   g.players[1].bleedT = 3;
+  g.enemies = []; // victim room clear
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   step(g, emptyInput(), emptyInput(), prev);
   ok(g.players[1].bleedT === 2, "bleed ticks down while alone");
+  // Enter clear room — clock CONTINUES ([141])
   g.players[0].simIndex = 0;
   step(g, emptyInput(), emptyInput(), prev);
-  ok(g.players[1].bleedT === 0, "bleed clock clears when partner shares the room");
-  for (let i = 0; i < 200; i++) step(g, emptyInput(), emptyInput(), prev);
-  ok(g.screen === "play", "no gameover after reunion");
+  ok(g.players[1].bleedT === 1, "clear reunite continues the help clock (does not reset)");
+  ok(g.screen === "play", "no gameover after clear reunite");
+  // Enter with foes — RESET
+  g.enemies = [makeEnemy("slime", 10 * TILE, 6 * TILE)];
+  step(g, emptyInput(), emptyInput(), prev);
+  ok(g.players[1].bleedT === 0, "same-sim + foes resets the help clock");
 }
 
 // ------------------------------------------------- 50. stage 3: phoenix feather remote revive
@@ -3384,6 +3393,8 @@ function freshPlay(): Game {
      "partnerTypeTrue keys off AgentPlayer attachment, not spectator socket");
   ok(/matchIndex/.test(idxSrc) && /matchIndex\+\+/.test(idxSrc),
      "matches carry matchIndex; index advances after each logged play");
+  ok(/plans\.jsonl[\s\S]{0,200}matchIndex:\s*this\.matchIndex|matchIndex:\s*this\.matchIndex[\s\S]{0,120}plans\.jsonl/.test(idxSrc),
+     "plans.jsonl stamps matchIndex (join without tick-reset heuristics)");
   ok(/sid \+ matchIndex|sid}#\$\{idx|all completed play|EVERY completed play/i.test(idxSrc),
      "/stats counts every completed play (not last-per-sid — G54G Haiku drop)");
   ok(/resetMatchTelemetry/.test(idxSrc),
@@ -4297,7 +4308,7 @@ function freshPlay(): Game {
     action: "goto", point: { x: g1.players[1].x, y: g1.players[1].y },
   };
   const prev1: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 600 && g1.players[1].downed; i++) {
+  for (let i = 0; i < 900 && g1.players[1].downed; i++) {
     (leader as unknown as Mut).intent = {
       action: "goto", point: { x: g1.players[1].x, y: g1.players[1].y },
     };
@@ -4318,7 +4329,7 @@ function freshPlay(): Game {
     action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
   };
   const prev2: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 600 && g2.players[0].downed; i++) {
+  for (let i = 0; i < 900 && g2.players[0].downed; i++) {
     (mate as unknown as Mut).intent = {
       action: "goto", point: { x: g2.players[0].x, y: g2.players[0].y },
     };
@@ -4697,6 +4708,8 @@ function freshPlay(): Game {
 
   // holding SHIFT: the cord is cut deliberately
   const g = scene();
+  g.ticks = 1000;
+  g.players[1].downedAtTick = 700; // fell 300 ticks ago (update ++ → 1001 → 301)
   const prev: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 4; i++) step(g, { ...emptyInput(), k: true }, emptyInput(), prev);
   ok(g.players[1].dead, "the abandoned partner dies for good");
@@ -4704,6 +4717,15 @@ function freshPlay(): Game {
   ok(g.screen === "play" && !g.bleedoutLoss, "the game does NOT end — the traitor quests on");
   ok(g.betrayed && core.endingFor(g).id === "betrayal", "the epilogue names the traitor");
   ok(g.betrayalCause === "cord-cut", "SHIFT abandon logs cause cord-cut");
+  ok(!!g.cordCut && g.cordCut.bleedTicksLeft === 400 && g.cordCut.canPhysicallyRevive === false
+     && g.cordCut.sameSim === false && g.cordCut.traitorSlot === 0 && g.cordCut.victimSlot === 1,
+     "cordCut stamp: away bleed remaining + canPhysicallyRevive false");
+  ok(!!g.cordCut && g.cordCut.ticksSinceDowned === 301,
+     "cordCut stamp: ticksSinceDowned from downedAtTick (away)");
+  ok(!!g.cordCut && g.cordCut.bleedRunning === true
+     && g.cordCut.bleedFracLeft === Math.round((400 / 1800) * 1000) / 1000
+     && g.cordCut.everCanPhysicallyRevive === false,
+     "cordCut stamp: bleedRunning + bleedFracLeft + everCanPhysicallyRevive false (never entered)");
   ok(!g.players[1].elixir && core.simOf(g, 1).pickups.some(p => p.kind === "elixir" && p.t >= 0),
      "the fallen hero's Elixir spills back into their room for the survivor");
 
@@ -5080,6 +5102,7 @@ function freshPlay(): Game {
   g.players[1].downed = true;
   g.players[1].hp = 0;
   g.players[1].bleedT = 900;
+  g.players[1].downedAtTick = 100;
   const ctx = tel.planGameContext(g, 0);
   ok(ctx.tick === 420 && ctx.mate.bleedTicksLeft === 900,
      "plan context carries tick + mate bleed budget");
@@ -5087,6 +5110,45 @@ function freshPlay(): Game {
      "plan context carries both heroes' rooms");
   ok(ctx.mate.dead === false && ctx.mate.downed === true,
      "plan context carries mate.dead (false while bleed-downed, not cord-cut)");
+  ok(ctx.mate.canPhysicallyRevive === false,
+     "plan context: away bleed → canPhysicallyRevive false (touch-revive impossible)");
+  ok(ctx.mate.sameSim === false,
+     "plan context: away → sameSim false");
+  ok(ctx.mate.ticksSinceDowned === 320,
+     "plan context: ticksSinceDowned = tick - downedAtTick (away)");
+  ok(ctx.partnerSay === null,
+     "plan context: partnerSay null when mate has no live bubble / away");
+  ok(ctx.hasFeather === false,
+     "plan context: hasFeather false when team charge not held");
+  {
+    const gSay = freshPlay();
+    gSay.players[0].x = 8 * TILE; gSay.players[0].y = 8 * TILE;
+    gSay.players[1].x = 8 * TILE + 4; gSay.players[1].y = 8 * TILE;
+    gSay.players[1].say = "держись";
+    gSay.players[1].sayT = 90;
+    gSay.hasFeather = true;
+    const ctxSay = tel.planGameContext(gSay, 0);
+    ok(ctxSay.partnerSay === "держись" && ctxSay.mate.sameSim === true,
+       "plan context: partnerSay stamps live same-room bubble (hearPartner is obs-only)");
+    ok(ctxSay.hasFeather === true,
+       "plan context: hasFeather stamps team Phoenix Feather charge (22DB hole)");
+  }
+  {
+    // Same-sim downed + clear: help clock arms (bleedT) — not "time's up"
+    const gSame = freshPlay();
+    gSame.travelMode = "free";
+    gSame.ticks = 900;
+    gSame.enemies = [];
+    gSame.players[1].downed = true;
+    gSame.players[1].hp = 0;
+    gSame.players[1].bleedT = 0;
+    gSame.players[1].downedAtTick = 300;
+    const ctxSame = tel.planGameContext(gSame, 0);
+    ok(ctxSame.mate.canPhysicallyRevive === true && ctxSame.mate.sameSim === true,
+       "plan context: same-sim downed → canPhysicallyRevive + sameSim true");
+    ok(ctxSame.mate.ticksSinceDowned === 600,
+       "plan context: same-sim still reports ticksSinceDowned (help clock separate)");
+  }
   {
     const gDead = freshPlay();
     gDead.players[1].downed = true;
@@ -5095,7 +5157,14 @@ function freshPlay(): Game {
     const ctxDead = tel.planGameContext(gDead, 0);
     ok(ctxDead.mate.dead === true && ctxDead.mate.downed === true,
        "plan context mate.dead distinguishes duel/cord-cut corpse from bleed body");
+    ok(ctxDead.mate.canPhysicallyRevive === false,
+       "plan context: dead corpse → canPhysicallyRevive false");
   }
+
+  ok(tel.isRescueIntent("revive") && tel.isRescueIntent("goto") && tel.isRescueIntent("exit"),
+     "isRescueIntent: revive/goto/exit count as rescue");
+  ok(!tel.isRescueIntent("follow") && !tel.isRescueIntent("idle") && !tel.isRescueIntent("attack"),
+     "isRescueIntent: follow/idle/attack are NOT rescue (QQBK — no attributed hug)");
 
   ok(tel.classifyBleedEpisode("timeout", 2500, 1800, [
     { tick: 1, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 200 },
@@ -5113,6 +5182,14 @@ function freshPlay(): Game {
     { tick: 1, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 300 },
     { tick: 2, action: "follow", ok: true, lootIntent: false, rescueIntent: true, distToMate: 320 },
   ]) === "physics-late", "rescue intent held but distance lost → physics-late");
+
+  ok(tel.classifyBleedEpisode("closed-without-arrival", 400, 1800, []) === "closed-without-arrival",
+     "match-end while still downed defaults to closed-without-arrival (not partner-arrived)");
+  ok(tel.classifyBleedEpisode("closed-without-arrival", 400, 1800, [
+    { tick: 1, action: "exit", ok: true, lootIntent: false, rescueIntent: true, distToMate: 640 },
+    { tick: 2, action: "exit", ok: true, lootIntent: false, rescueIntent: true, distToMate: 640 },
+  ]) === "physics-late",
+     "closed-without-arrival still runs plan analysis (6ZPE-style exit claims)");
 
   const ep: tel.EpisodeRecord = {
     id: "ABCD-100", kind: "bleed-out", cause: "timeout",
@@ -5135,6 +5212,33 @@ function freshPlay(): Game {
   tracker.flush(g);
   ok(tracker.completed.length === 1 && tracker.completed[0].cause === "routing-infeasible",
      "live tracker classifies an alone-bleed episode at close");
+
+  // 6ZPE m0: lone-thaw flush while victim still downed alone must NOT be partner-arrived
+  {
+    const gWin = freshPlay();
+    gWin.travelMode = "free";
+    gWin.sims.push(newRoomSim());
+    gWin.sims[1].room = 1;
+    gWin.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    gWin.players[0].simIndex = 0; // victim alone, bleeding
+    gWin.players[0].downed = true; gWin.players[0].hp = 0; gWin.players[0].bleedT = 900;
+    gWin.players[1].simIndex = 1; // agent at throne / other room
+    gWin.players[1].downed = false;
+    gWin.screen = "win";
+    gWin.ending = { id: "lone-thaw", title: "LONE THAW", lines: ["x", "y"] };
+    const tr = new tel.EpisodeTracker(1, "6ZPE");
+    tr.tick(gWin);
+    ok(tr.completed.length === 0, "lone-thaw: episode open while still alone-bleeding");
+    tr.onPlan(gWin, { action: "exit", ok: true });
+    tr.onPlan(gWin, { action: "exit", ok: true });
+    tr.flush(gWin);
+    ok(tr.completed.length === 1 && tr.completed[0].cause !== "partner-arrived",
+       "lone-thaw flush is not partner-arrived");
+    ok(tr.completed[0].cause === "physics-late" || tr.completed[0].cause === "closed-without-arrival",
+       "lone-thaw flush → closed-without-arrival family (plan analysis may refine)");
+    ok(tel.bleedCloseOutcome(gWin, 0, false) === "closed-without-arrival",
+       "bleedCloseOutcome: still-downed + not reunited → closed-without-arrival");
+  }
 }
 
 // ------------------------------------------------- 91. BETRAYAL v2.1: LLM brain + relationship memory
@@ -5399,6 +5503,8 @@ function freshPlay(): Game {
     const closed = mem.records.find(r => r.outcome === "closed-without-arrival");
     ok(closed?.episode === "rescue-window" && closed.evidence.routeWithinBudget === true,
        "flush logs closed-without-arrival with route counterfactual evidence");
+    ok(closed?.evidence.featherAvailableAtClose === false,
+       "rescue-window close stamps featherAvailableAtClose (22DB join)");
   }
 }
 
@@ -5829,7 +5935,7 @@ function freshPlay(): Game {
   ok(!g2.players[0].dead && !g2.betrayed,
      "living foes pause the neglect clock — not betrayal while the room is hot");
 
-  // Touch-revive before the clock: bond holds
+  // Hold-V revive before the clock: bond holds
   const g3 = freshPlay();
   g3.screen = "play"; g3.fade = 0;
   g3.enemies = [];
@@ -5840,10 +5946,10 @@ function freshPlay(): Game {
   g3.players[1].x = 8 * TILE + 4; g3.players[1].y = 8 * TILE;
   const prev3: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < 120 && g3.players[0].downed; i++) {
-    step(g3, emptyInput(), emptyInput(), prev3);
+    step(g3, emptyInput(), { ...emptyInput(), v: true }, prev3);
   }
   ok(!g3.players[0].downed && !g3.betrayed,
-     "timely touch-revive clears neglect — no betrayal");
+     "timely hold-V revive clears neglect — no betrayal");
 
   // Observation surfaces the countdown
   const g4 = freshPlay();
@@ -5871,8 +5977,10 @@ function freshPlay(): Game {
     const g = freshPlay();
     g.treason = true;
     g.screen = "play"; g.fade = 0;
+    g.ticks = 500;
     g.enemies = [];
     g.players[0].downed = true; g.players[0].hp = 0; g.players[0].bleedT = 0;
+    g.players[0].downedAtTick = 200; // same-room: bleed idle, clock still counted
     g.players[0].x = 8 * TILE; g.players[0].y = 8 * TILE;
     g.players[1].x = 8 * TILE + 4; g.players[1].y = 8 * TILE;
     g.players[1].hp = 6;
@@ -5881,6 +5989,14 @@ function freshPlay(): Game {
     step(g, emptyInput(), { ...emptyInput(), k: true }, prev);
     ok(g.players[0].dead, "SHIFT at body kills the fallen for good (no swing)");
     ok(g.betrayed && g.betrayalCause === "cord-cut", "explicit cord-cut ledger");
+    ok(!!g.cordCut && g.cordCut.bleedTicksLeft === 0 && g.cordCut.canPhysicallyRevive === true
+       && g.cordCut.sameSim === true,
+       "cordCut stamp: same-sim bleedTicksLeft=0 means clock never armed (canPhysicallyRevive)");
+    ok(!!g.cordCut && g.cordCut.ticksSinceDowned === 301,
+       "cordCut stamp: same-room still logs ticksSinceDowned");
+    ok(!!g.cordCut && g.cordCut.bleedRunning === false && g.cordCut.bleedFracLeft === null
+       && g.cordCut.everCanPhysicallyRevive === true,
+       "cordCut stamp: paused clock → bleedRunning false, bleedFracLeft null (not 'expired')");
     ok(g.players[1].winterMark, "v3.2 Mark brands the cutter");
     ok(g.screen === "play", "quest continues — survivor solos");
     ok(core.endingFor(g).id === "betrayal", "uncleansed Mark → betrayal ending");
@@ -7196,118 +7312,92 @@ function freshPlay(): Game {
 }
 
 {
-  console.log("[103] Dark Court arc: ritual, duel, winter-ascends, Ember Mercy redeem");
+  console.log("[103] Temptation Court whisper-kill: ritual, remote death, race, refuse");
   const core = await import("../shared/core");
   const { AgentPlayer } = await import("../server/agent");
   const { mock } = await import("../server/llm");
-  const {
-    DARK_RITUAL_TICKS, DARK_RENOUNCE_TICKS, DARK_LOCK_TICKS,
-    COURT_SENTINEL_HARD_HP, COURT_SENTINEL_SOFT_HP, REDEMPTION_TICKS,
-  } = core;
+  const { DARK_RITUAL_TICKS, COURT_SENTINEL_HARD_HP } = core;
 
-  // SHIFT ritual near Whisperer → darkSide (observable commit)
+  // SHIFT ritual near Whisperer → partner dies + 2 hearts + Mark (quest continues)
   const gRit = freshPlay();
   gRit.treason = true;
   core.loadRoom(gRit, 18, 7 * TILE, 6 * TILE);
   gRit.screen = "play"; gRit.fade = 0;
   gRit.players[0].present = true;
+  gRit.players[1].present = true;
   gRit.players[0].x = 7 * TILE;
   gRit.players[0].y = 5 * TILE + 18;
   const prevRit: [Input, Input] = [emptyInput(), emptyInput()];
   for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
     step(gRit, { ...emptyInput(), k: true }, emptyInput(), prevRit);
   }
-  ok(gRit.players[0].darkSide, "SHIFT ritual commits darkSide (purple blade flag)");
-  ok(gRit.temptationDeal && gRit.temptationPayoff === "dark-commit",
-     "ritual sets temptationDeal + dark-commit payoff");
-  const sentAfter = gRit.enemies.find(e => e.kind === "sentinel" && !e.dead);
-  ok(sentAfter && sentAfter.maxHp === COURT_SENTINEL_SOFT_HP,
-     "after dark commit sentinels soften in-room");
+  ok(gRit.players[1].dead, "whisper bargain: partner dies for good");
+  ok(gRit.betrayed && gRit.betrayalCause === "whisper",
+     "ledger: betrayed + betrayalCause whisper");
+  ok(gRit.players[0].winterMark, "acceptor takes Winter Mark");
+  ok(gRit.temptationDeal && gRit.temptationPayoff === "whisper-kill",
+     "ritual sets temptationDeal + whisper-kill payoff");
+  ok(gRit.screen === "play", "quest continues as SOLO (not winter-ascends win)");
+  const hearts = gRit.pickups.filter(p => p.kind === "heart" && p.t >= 0);
+  ok(hearts.length >= 2, "two heart pickups spawn for the acceptor");
+  ok(!gRit.enemies.some(e => e.kind === "sentinel"),
+     "after bargain Court syncs to solo praise (sentinels stripped)");
 
   const gHard = freshPlay();
   gHard.treason = true;
   core.loadRoom(gHard, 18, 8 * TILE, 8 * TILE);
   const sentHard = gHard.enemies.find(e => e.kind === "sentinel" && !e.dead)!;
   ok(sentHard.maxHp === COURT_SENTINEL_HARD_HP, "refuse path: sentinels start HARD");
-  ok(!gHard.players[0].darkSide, "no ritual yet — hero stays light");
+  ok(!gHard.temptationDeal, "no ritual yet — bargain open");
 
-  const { readFileSync } = await import("node:fs");
-  ok(!/immortality-reversed/.test(readFileSync("shared/core.ts", "utf8")),
-     "immortality-reversed removed from core");
-
-  // Dark downs light → winter-ascends (evil wins, no Wraith)
-  const gWin = freshPlay();
-  gWin.treason = true;
-  core.loadRoom(gWin, 7, 7 * TILE, 8 * TILE);
-  gWin.screen = "play"; gWin.fade = 0;
-  gWin.enemies = [];
-  gWin.players[0].present = true;
-  gWin.players[1].present = true;
-  gWin.players[0].darkSide = true;
-  gWin.players[0].x = 7 * TILE; gWin.players[0].y = 8 * TILE; gWin.players[0].dir = 2;
-  gWin.players[1].x = 7 * TILE + 12; gWin.players[1].y = 8 * TILE;
-  gWin.players[1].hp = 1;
-  const prevWin: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && gWin.screen === "play"; i++) {
-    step(gWin, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevWin);
+  // Partner in another FREE ROAM sim still dies
+  const gRemote = freshPlay();
+  gRemote.treason = true;
+  gRemote.travelMode = "free";
+  core.loadRoom(gRemote, 18, 7 * TILE, 6 * TILE);
+  gRemote.screen = "play"; gRemote.fade = 0;
+  const meadow = core.newRoomSim();
+  meadow.room = 0;
+  meadow.tiles[0] = core.ROOMS[0].tiles.map(r => r);
+  gRemote.sims.push(meadow);
+  gRemote.players[0].present = true;
+  gRemote.players[1].present = true;
+  gRemote.players[1].simIndex = 1;
+  gRemote.players[1].x = 8 * TILE;
+  gRemote.players[1].y = 8 * TILE;
+  gRemote.players[0].x = 7 * TILE;
+  gRemote.players[0].y = 5 * TILE + 18;
+  const prevRem: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRemote, { ...emptyInput(), k: true }, emptyInput(), prevRem);
   }
-  ok(gWin.temptationPayoff === "winter-ascends", "dark hero downing partner → winter-ascends");
-  ok(gWin.screen === "win", "winter-ascends ends in win screen (evil victory)");
-  ok(gWin.ending?.id === "winter-ascends", "winter-ascends ending id");
-  ok(!gWin.players[0].dead, "winning dark hero survives");
+  ok(gRemote.players[1].dead && gRemote.players[1].simIndex === 1,
+     "whisper-kill reaches partner in another FREE ROAM room");
+  ok(gRemote.screen === "play" && gRemote.temptationPayoff === "whisper-kill",
+     "remote whisper-kill keeps play + whisper-kill payoff");
 
-  // Light downs dark → redemption window; Ember Mercy redeems
-  const gFall = freshPlay();
-  gFall.treason = true;
-  core.loadRoom(gFall, 7, 7 * TILE, 8 * TILE);
-  gFall.screen = "play"; gFall.fade = 0;
-  gFall.enemies = [];
-  gFall.players[0].present = true;
-  gFall.players[1].present = true;
-  gFall.players[1].darkSide = true;
-  gFall.players[1].x = 7 * TILE + 14; gFall.players[1].y = 8 * TILE; gFall.players[1].dir = 0;
-  gFall.players[0].x = 7 * TILE; gFall.players[0].y = 8 * TILE; gFall.players[0].dir = 2;
-  gFall.players[1].hp = 1;
-  const prevFall: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && !gFall.players[1].downed; i++) {
-    step(gFall, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevFall);
+  // First acceptor wins — second cannot complete after
+  const gRace = freshPlay();
+  gRace.treason = true;
+  core.loadRoom(gRace, 18, 7 * TILE, 6 * TILE);
+  gRace.screen = "play"; gRace.fade = 0;
+  gRace.players[0].x = 7 * TILE;
+  gRace.players[0].y = 5 * TILE + 18;
+  gRace.players[1].x = 7 * TILE + 10;
+  gRace.players[1].y = 5 * TILE + 18;
+  const prevRace: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRace, { ...emptyInput(), k: true }, emptyInput(), prevRace);
   }
-  ok(gFall.players[1].downed && gFall.players[1].darkFallen, "light downs dark → darkFallen");
-  ok(gFall.players[1].redemptionT > 0 && !gFall.players[1].dead,
-     "darkFallen gets 30s redemption window — not instantly dead");
-  ok(gFall.screen === "play", "survivor quests on after darkFallen");
-
-  gFall.hasEmberMercy = true;
-  gFall.players[0].x = gFall.players[1].x - 4;
-  gFall.players[0].y = gFall.players[1].y;
-  const prevRed: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gFall, { ...emptyInput(), f: true }, emptyInput(), prevRed);
-  ok(!gFall.players[1].darkSide && !gFall.players[1].downed,
-     "Ember Mercy + F redeems darkFallen to light");
-  ok(gFall.temptationPayoff === "redeemed", "payoff records redeemed");
-
-  // darkLock blocks renounce until expired
-  const gLock = freshPlay();
-  gLock.treason = true;
-  core.loadRoom(gLock, 18, 7 * TILE, 6 * TILE);
-  gLock.enemies = [core.makeEnemy("whisperer", 7 * TILE, 5 * TILE)];
-  gLock.players[0].present = true;
-  gLock.players[0].darkSide = true;
-  gLock.players[0].darkLockT = DARK_LOCK_TICKS;
-  gLock.players[0].x = 7 * TILE;
-  gLock.players[0].y = 5 * TILE + 18;
-  const prevLock: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
-    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
+  ok(gRace.players[1].dead && !gRace.players[0].dead, "slot 0 finishes first → slot 1 dies");
+  const mark0 = gRace.players[0].winterMark;
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gRace, emptyInput(), { ...emptyInput(), k: true }, prevRace);
   }
-  ok(gLock.players[0].darkSide, "darkLock blocks renounce near Whisperer");
-  gLock.players[0].darkLockT = 0;
-  for (let i = 0; i < DARK_RENOUNCE_TICKS + 5; i++) {
-    step(gLock, { ...emptyInput(), k: true }, emptyInput(), prevLock);
-  }
-  ok(!gLock.players[0].darkSide, "after lock expires SHIFT renounce clears darkSide");
+  ok(gRace.players[0].winterMark === mark0 && !gRace.players[0].dead,
+     "after first accept, dead partner blocks a second bargain");
 
-  // Betrayal OUTSIDE the Court → ordinary TREASON, no dark-commit auto
+  // Betrayal OUTSIDE the Court → ordinary TREASON, no whisper-kill auto
   const gOut = freshPlay();
   gOut.treason = true;
   core.loadRoom(gOut, 7, 7 * TILE, 8 * TILE);
@@ -7322,8 +7412,8 @@ function freshPlay(): Game {
     step(gOut, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevO);
   }
   ok(gOut.betrayed && !gOut.temptationDeal,
-     "treason outside Court is ordinary — no dark-commit");
-  ok(!gOut.players[0].dead, "traitor outside Court does not auto-die");
+     "treason outside Court is ordinary — no whisper-kill");
+  ok(gOut.betrayalCause !== "whisper", "outside Court cause is not whisper");
 
   // Refuse: leave east without ritual
   const gRefuse = freshPlay();
@@ -7338,8 +7428,8 @@ function freshPlay(): Game {
   for (let i = 0; i < 30 && gRefuse.room === 18; i++) {
     step(gRefuse, { ...emptyInput(), r: true }, emptyInput(), prevR);
   }
-  ok(gRefuse.room === 7 && !gRefuse.players[0].darkSide,
-     "refuse: leave east alive without darkSide");
+  ok(gRefuse.room === 7 && !gRefuse.temptationDeal,
+     "refuse: leave east alive without bargain");
   ok(gRefuse.temptationPayoff === "refused", "refuse payoff recorded");
 
   const gAtk = freshPlay();
@@ -7353,56 +7443,20 @@ function freshPlay(): Game {
   ok((leader as unknown as Mut).intent.action !== "exit",
      "controller does not force exit on whisperer attack");
   const temptObs = JSON.parse(leader.observe(gAtk)) as {
-    temptation?: { unkillable?: boolean; sentinelsStance?: string };
+    temptation?: { unkillable?: boolean; sentinelsStance?: string; offer?: string };
   };
   ok(temptObs.temptation?.unkillable === true, "observation: Whisperer unkillable");
-  ok(temptObs.temptation?.sentinelsStance === "hard", "observation: hard sentinels before commit");
-
-  // Both dark — still duel; Winter crowns only one
-  const gBoth = freshPlay();
-  gBoth.treason = true;
-  core.loadRoom(gBoth, 7, 7 * TILE, 8 * TILE);
-  gBoth.screen = "play"; gBoth.fade = 0;
-  gBoth.enemies = [];
-  gBoth.players[0].present = true;
-  gBoth.players[1].present = true;
-  gBoth.players[0].darkSide = true;
-  gBoth.players[1].darkSide = true;
-  gBoth.players[0].x = 7 * TILE; gBoth.players[0].y = 8 * TILE; gBoth.players[0].dir = 2;
-  gBoth.players[1].x = 7 * TILE + 12; gBoth.players[1].y = 8 * TILE;
-  gBoth.players[1].hp = 1;
-  const prevBoth: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 200 && gBoth.screen === "play"; i++) {
-    step(gBoth, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevBoth);
-  }
-  ok(gBoth.temptationPayoff === "winter-ascends" && gBoth.screen === "win",
-     "both darkSide: dark downs dark still → winter-ascends (only one remains)");
-  ok(gBoth.players[1].dead && !gBoth.players[0].dead,
-     "loser of mutual-dark duel dies permanently; winner lives");
-  const bothObs = JSON.parse(
-    new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true }).observe(
-      (() => {
-        const g = freshPlay();
-        g.treason = true;
-        core.loadRoom(g, 18, 8 * TILE, 8 * TILE);
-        g.players[0].present = true;
-        g.players[1].present = true;
-        g.players[0].darkSide = true;
-        g.players[1].darkSide = true;
-        return g;
-      })(),
-    ),
-  ) as { temptation?: { bothDark?: boolean; onlyOneRemains?: string } };
-  ok(bothObs.temptation?.bothDark === true,
-     "observation flags bothDark when both took the bargain");
-  ok(/only one|only ONE/i.test(bothObs.temptation?.onlyOneRemains ?? ""),
-     "world rule: Winter crowns only one immortal");
+  ok(temptObs.temptation?.sentinelsStance === "hard", "observation: hard sentinels before accept");
+  ok(/partner dies|any room|2 hearts|Winter Mark/i.test(temptObs.temptation?.offer ?? ""),
+     "observation offer names whisper-kill bargain (not immortality)");
 }
 
 {
-  console.log("[105] Dark Court: Ember Mercy spawn + redemption expiry");
+  console.log("[105] Ember Mercy cleanses Winter Mark after whisper-kill");
   const core = await import("../shared/core");
-  const { REDEMPTION_TICKS } = core;
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const { DARK_RITUAL_TICKS } = core;
 
   const gEm = freshPlay();
   gEm.emberDead = true;
@@ -7410,61 +7464,35 @@ function freshPlay(): Game {
   ok(gEm.pickups.some(p => p.kind === "embermercy" && p.t >= 0),
      "Ember Sanctum spawns embermercy after ember boss dead");
 
-  const gExp = freshPlay();
-  gExp.treason = true;
-  core.loadRoom(gExp, 7, 8 * TILE, 8 * TILE);
-  gExp.screen = "play"; gExp.fade = 0;
-  gExp.players[0].present = true;
-  gExp.players[1].present = true;
-  gExp.players[1].darkSide = true;
-  gExp.players[1].downed = true;
-  gExp.players[1].darkFallen = true;
-  gExp.players[1].redemptionT = 3;
-  gExp.players[1].hp = 0;
-  gExp.hasEmberMercy = false;
-  const prevE: [Input, Input] = [emptyInput(), emptyInput()];
-  for (let i = 0; i < 10; i++) step(gExp, emptyInput(), emptyInput(), prevE);
-  ok(gExp.players[1].dead, "redemption window expiry → permanent dead without Ember Mercy");
+  const gMark = freshPlay();
+  gMark.treason = true;
+  core.loadRoom(gMark, 18, 7 * TILE, 6 * TILE);
+  gMark.screen = "play"; gMark.fade = 0;
+  gMark.players[0].x = 7 * TILE;
+  gMark.players[0].y = 5 * TILE + 18;
+  const prevM: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gMark, { ...emptyInput(), k: true }, emptyInput(), prevM);
+  }
+  ok(gMark.players[0].winterMark && gMark.players[1].dead, "setup: Mark after whisper-kill");
+  gMark.hasEmberMercy = true;
+  step(gMark, { ...emptyInput(), f: true }, emptyInput(), prevM);
+  ok(!gMark.players[0].winterMark && gMark.winterMarkCleansed,
+     "Ember Mercy + F clears Winter Mark after whisper-kill");
+  ok(!gMark.hasEmberMercy && gMark.emberMercyUsed, "Mark cleanse spends Ember Mercy");
+  ok(core.endingFor(gMark).id === "redeemed",
+     "cleansed Mark → redeemed ending (ledger betrayed stays)");
 
-  // Self-redeem: living dark spends Ember Mercy within 60s
-  const gSelf = freshPlay();
-  gSelf.treason = true;
-  gSelf.screen = "play"; gSelf.fade = 0;
-  gSelf.players[0].present = true;
-  gSelf.players[0].darkSide = true;
-  gSelf.players[0].darkSelfRedeemT = core.DARK_SELF_REDEEM_TICKS;
-  gSelf.hasEmberMercy = true;
-  const prevS: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gSelf, { ...emptyInput(), f: true }, emptyInput(), prevS);
-  ok(!gSelf.players[0].darkSide && gSelf.temptationPayoff === "redeemed",
-     "dark self-redeem: F + Ember Mercy clears own darkSide within 60s");
-  ok(!gSelf.hasEmberMercy && gSelf.emberMercyUsed, "self-redeem spends Ember Mercy");
-
-  const gLate = freshPlay();
-  gLate.treason = true;
-  gLate.screen = "play"; gLate.fade = 0;
-  gLate.players[0].present = true;
-  gLate.players[0].darkSide = true;
-  gLate.players[0].darkSelfRedeemT = 0;
-  gLate.hasEmberMercy = true;
-  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
-  step(gLate, { ...emptyInput(), f: true }, emptyInput(), prevL);
-  ok(gLate.players[0].darkSide && gLate.hasEmberMercy,
-     "after 60s window, F + Ember Mercy does not clear darkSide (too late)");
-
-  const { AgentPlayer } = await import("../server/agent");
-  const { mock } = await import("../server/llm");
+  const ap = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
   const gPlan = freshPlay();
   gPlan.treason = true;
   gPlan.players[0].present = true;
-  gPlan.players[0].darkSide = true;
-  gPlan.players[0].darkSelfRedeemT = 600;
+  gPlan.players[0].winterMark = true;
   gPlan.hasEmberMercy = true;
-  const ap = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
   type Mut = { intent: { action: string } };
   (ap as unknown as Mut).intent = { action: "redeem" };
   const inpR = ap.control(gPlan);
-  ok(inpR.f === true, "planner redeem presses F for self-redeem when dark + relic");
+  ok(inpR.f === true, "planner redeem presses F when Marked + Ember Mercy");
 }
 
 {
@@ -8028,6 +8056,7 @@ function freshPlay(): Game {
     aloneBleedFate?: {
       ifBleedHitsZero?: string; deliberationWindowSec?: number;
       cordCut?: string | null; note?: string;
+      featherHeld?: boolean; featherAction?: string | null; noteNoFeather?: string;
     };
     note?: string;
   };
@@ -8044,10 +8073,22 @@ function freshPlay(): Game {
      "deliberationWindowSec mirrors bleedSecLeft (mind-change window)");
   ok(/SHIFT|cord/i.test(fate.cordCut ?? "") && /continue|alone|betrayal/i.test(fate.cordCut ?? ""),
      "TREASON-on: cordCut names SHIFT abandon → survivor continues");
+  ok(fate.featherHeld === false && fate.featherAction == null,
+     "aloneBleedFate: featherHeld false when charge not held");
   ok(/SHARED gameover|quest≠survival|cord-cut/i.test(obsOn.objective),
      "hunter objective states shared fate / quest≠survival");
   ok(/shared gameover|questing through bleed is not survival/i.test(obsOn.partner.note ?? ""),
      "partner.note carries shared-fate bare rule");
+
+  const gFe = mk(true);
+  gFe.hasFeather = true;
+  const obsFe = JSON.parse(hunter.observe(gFe)) as { partner: Fate };
+  const fateFe = obsFe.partner.aloneBleedFate!;
+  ok(fateFe.featherHeld === true
+     && /feather|\"feather\"|F\)/i.test(fateFe.featherAction ?? ""),
+     "aloneBleedFate: featherHeld + featherAction when charge held (22DB hole)");
+  ok(/action \"feather\"|charge held/i.test(obsFe.partner.note ?? ""),
+     "hunter downedPartnerNote names feather charge when held");
 
   const gOff = mk(false);
   const obsOff = JSON.parse(hunter.observe(gOff)) as { partner: Fate };
@@ -8218,6 +8259,26 @@ function freshPlay(): Game {
        && (fable.output_config as { effort?: string })?.effort === "low"
        && (fable.max_tokens as number) >= 2048,
        "fable-5 body: omit thinking, effort=low, raised max_tokens (no disabled/enabled)");
+    // Prompt caching: system prefix only (observation stays in messages).
+    {
+      const prev = process.env.ANTHROPIC_PROMPT_CACHE;
+      delete process.env.ANTHROPIC_PROMPT_CACHE;
+      const cached = anthropicMessagesBody("claude-haiku-4-5", "STATIC SYS", "Observation:\n{}");
+      const sys = cached.system as { type: string; text: string; cache_control?: { type: string } }[];
+      ok(Array.isArray(sys) && sys[0]?.type === "text" && sys[0]?.text === "STATIC SYS"
+         && sys[0]?.cache_control?.type === "ephemeral",
+         "anthropic body: system block marked cache_control ephemeral (default on)");
+      ok(Array.isArray(cached.messages)
+         && (cached.messages as { content: string }[])[0]?.content === "Observation:\n{}",
+         "anthropic body: user observation is NOT in the cached system block");
+      process.env.ANTHROPIC_PROMPT_CACHE = "0";
+      const off = anthropicMessagesBody("claude-haiku-4-5", "STATIC SYS", "user");
+      const sysOff = off.system as { cache_control?: unknown }[];
+      ok(Array.isArray(sysOff) && sysOff[0]?.cache_control === undefined,
+         "ANTHROPIC_PROMPT_CACHE=0 omits cache_control");
+      if (prev === undefined) delete process.env.ANTHROPIC_PROMPT_CACHE;
+      else process.env.ANTHROPIC_PROMPT_CACHE = prev;
+    }
   }
   {
     const body = ollamaChatBody("qwen3.6:35b", "sys", "user");
@@ -9118,6 +9179,43 @@ function freshPlay(): Game {
      "match counters accumulate claim+diverge");
 }
 
+// ------------------------------------------------- 130b. observe enemies ignore flipped activeSim (SUAY)
+{
+  console.log("[130b] observe lists golem via agent sim when activeSim is empty (SUAY)");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const g = freshPlay();
+  g.travelMode = "free";
+  g.sims[0].room = 5;
+  g.sims[0].tiles[5] = ROOMS[5].tiles.map(r => r);
+  g.sims[0].enemies = [makeEnemy("golem", 8 * TILE, 6 * TILE)];
+  const empty = newRoomSim();
+  empty.room = 0;
+  empty.tiles[0] = ROOMS[0].tiles.map(r => r);
+  empty.enemies = [];
+  g.sims.push(empty);
+  g.players[0].simIndex = 0;
+  g.players[0].present = true;
+  g.players[0].x = 100;
+  g.players[0].y = 100;
+  g.players[1].simIndex = 0;
+  g.players[1].present = true;
+  g.activeSim = 1; // async race: accessors point at empty meadow
+  const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter" });
+  const obs = JSON.parse(agent.observe(g)) as {
+    room: string;
+    enemies: { kind: string }[];
+    bossContext?: { kind: string };
+  };
+  ok(/Heart|Vault/i.test(obs.room),
+     "obs.room is Heart of the Vault despite activeSim=meadow");
+  ok(obs.enemies.some(e => e.kind === "golem"),
+     "obs.enemies lists living golem despite empty activeSim");
+  ok(obs.bossContext?.kind === "golem",
+     "bossContext present for golem despite flipped activeSim");
+  ok(g.activeSim === 1, "observe restores caller activeSim");
+}
+
 // ------------------------------------------------- 131. ice-elixir errand pre-melt (BGXR hopDir death)
 // Vault elixir taken → next ELIXIRS entry is ice (room 10). Soft-sealed until
 // gateMelted → routeHop null → hopDir silence + false "goal room" for BOTH slots.
@@ -9566,6 +9664,748 @@ function freshPlay(): Game {
   agent.control(g);
   ok(mut.activeErrand == null,
      "finishErrand reunited clears stale activeErrand without abortedTick NPE");
+
+  // ADHG 2026-08-14: Space rematch kept veilcut latch + prior duel why →
+  // tick-0 betray / instant meadow duel (Grok word-reactive on armed latch).
+  {
+    const g2 = freshPlay();
+    g2.treason = true;
+    const a2 = new AgentPlayer(mock(), 1, {
+      planMs: 9e9, temperament: "hunter", defector: true,
+    });
+    a2.armVeilcutLatch(g2, 3, {
+      why: "PREV MATCH cover — must not survive rematch",
+      say: "добиваю тебя сука",
+      privateGround: "mate-low-hp",
+      privateNote: "старый дуэльный why",
+    });
+    type Mut2 = {
+      llmIntent: { action: string; betray?: boolean; why?: string };
+      intent: { action: string; betray?: boolean };
+      sayQueue: string | null;
+    };
+    const m2 = a2 as unknown as Mut2;
+    m2.llmIntent = {
+      action: "attack", betray: true,
+      why: "Партнёр уже несколько раз бил меня без мобов рядом",
+    };
+    m2.intent = { ...m2.llmIntent };
+    m2.sayQueue = "Получай, сука";
+    const before = JSON.parse(a2.observe(g2)) as {
+      veilcutArmed?: { armed?: boolean } | null;
+    };
+    ok(!!before.veilcutArmed && before.veilcutArmed.armed === true,
+       "precondition: veilcut armed before rematch reset");
+    a2.resetMatchTelemetry();
+    const after = JSON.parse(a2.observe(g2)) as {
+      veilcutArmed?: { armed?: boolean } | null;
+    };
+    ok(!after.veilcutArmed || after.veilcutArmed.armed !== true,
+       "rematch reset clears veilcut latch (no cross-play arm)");
+    ok(m2.llmIntent.action === "follow" && m2.llmIntent.betray !== true,
+       "rematch reset clears llmIntent betray + restores follow");
+    ok(m2.intent.betray !== true && m2.sayQueue == null,
+       "rematch reset clears controller intent betray + sayQueue");
+  }
+}
+
+// ------------------------------------------------- 139. Carry / throw downed partner (v1)
+// Author Artem 2026-08-14 — Classic additive (open-closed). Ilya no longer
+// playtests; carry is always on — no menu toggle. Ambient FF stays design-only.
+{
+  console.log("[139] carry / throw downed partner (Classic additive; Artem 2026-08-14)");
+  const core = await import("../shared/core");
+  const { readFileSync } = await import("node:fs");
+  const { NEGLECT_ABANDON_TICKS, CARRY_SPEED_MUL, THROW_KNOCK } = core;
+
+  const scene = (): Game => {
+    const g = freshPlay();
+    g.enemies = [];
+    g.players[0].x = 6 * TILE;
+    g.players[0].y = 6.5 * TILE;
+    g.players[1].x = 6 * TILE + 4;
+    g.players[1].y = 6.5 * TILE;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    return g;
+  };
+
+  // (1) Pick up when overlapping downed mate with gE
+  {
+    const g = scene();
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === 1 && g.players[1].carriedBy === 0,
+       "G near downed mate picks up (carryingSlot / carriedBy)");
+    ok(g.stats[0].carryPicks === 1, "carryPicks tallied");
+  }
+
+  // (2) Carrier speed reduced; a/b do not swing/shoot while carrying
+  {
+    const g = scene();
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    const x0 = g.players[0].x;
+    for (let i = 0; i < 10; i++) step(g, { ...emptyInput(), r: true }, emptyInput(), prev);
+    const carryDx = g.players[0].x - x0;
+    ok(carryDx > 0, "carrier still moves while holding the body");
+
+    const gFast = freshPlay();
+    gFast.enemies = [];
+    gFast.players[0].x = 6 * TILE;
+    gFast.players[0].y = 6.5 * TILE;
+    const prevF: [Input, Input] = [emptyInput(), emptyInput()];
+    const xf0 = gFast.players[0].x;
+    for (let i = 0; i < 10; i++) step(gFast, { ...emptyInput(), r: true }, emptyInput(), prevF);
+    const freeDx = gFast.players[0].x - xf0;
+    ok(carryDx < freeDx * 0.85 && carryDx > freeDx * (CARRY_SPEED_MUL - 0.15),
+       `carry speed ~${CARRY_SPEED_MUL}× (carryDx=${carryDx.toFixed(1)} freeDx=${freeDx.toFixed(1)})`);
+
+    const atk0 = g.players[0].attack;
+    step(g, { ...emptyInput(), a: true }, emptyInput(), prev);
+    ok(g.players[0].attack === atk0, "SPACE does not swing while carrying");
+    g.hasBow = true;
+    g.players[0].bowCd = 0;
+    const arrows0 = g.projectiles.length;
+    step(g, { ...emptyInput(), b: true }, emptyInput(), prev);
+    ok(g.projectiles.length === arrows0, "bow does not fire while carrying");
+  }
+
+  // (3) Throw applies knockback; body stays downed, not dead
+  {
+    const g = scene();
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    g.players[0].dir = 2; // right
+    const bx0 = g.players[1].x;
+    step(g, emptyInput(), emptyInput(), prev); // release G so next edge throws
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === null && g.players[1].carriedBy === null,
+       "throw clears carry links");
+    ok(g.players[1].downed && !g.players[1].dead, "thrown body stays downed, not dead");
+    ok(g.players[1].x > bx0, "throw knocks body in facing dir");
+    ok(g.stats[0].carryThrows === 1, "carryThrows tallied");
+    const ev = g.events.find(e => e.t === "carry-throw");
+    ok(!!ev && ev.t === "carry-throw" && ev.throwDx === 1,
+       `carry-throw event logs facing (THROW_KNOCK=${THROW_KNOCK})`);
+  }
+
+  // (4) SHIFT near body still cord-cuts when TREASON (grab must not fire instead)
+  {
+    const g = scene();
+    g.treason = true;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), k: true, g: true }, emptyInput(), prev);
+    ok(g.players[1].dead && g.betrayed && g.betrayalCause === "cord-cut",
+       "SHIFT+G → cord-cut wins; no pick-up");
+    ok(g.players[0].carryingSlot === null, "cord-cut does not leave a carry link");
+  }
+
+  // (4b) TREASON soft throw (no SHIFT) — body lives; weaponize needs SHIFT
+  {
+    const g = scene();
+    g.treason = true;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    g.players[0].dir = 2;
+    step(g, emptyInput(), emptyInput(), prev);
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[1].downed && !g.players[1].dead && !g.betrayed,
+       "TREASON soft throw (G alone) relocates — not a kill");
+    ok(g.stats[0].corpseThrows === 0, "soft throw does not tally corpseThrows");
+  }
+
+  // (4c) TREASON throw+SHIFT weaponize — corpse-throw + foe damage
+  {
+    const { CORPSE_THROW_DAMAGE } = core;
+    const g = scene();
+    g.treason = true;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    g.players[0].dir = 2; // right
+    // Place slime along the throw ray (body snaps behind carrier; release knocks right).
+    const body = g.players[1];
+    const slime = makeEnemy("slime", body.x + 30, body.y);
+    const hp0 = slime.hp;
+    g.enemies = [slime];
+    step(g, emptyInput(), emptyInput(), prev);
+    step(g, { ...emptyInput(), g: true, k: true }, emptyInput(), prev);
+    ok(g.players[1].dead && g.betrayed && g.betrayalCause === "corpse-throw",
+       "TREASON G+SHIFT while carrying → corpse-throw kill");
+    ok(g.players[0].winterMark === true, "weaponize brands Winter Mark on thrower");
+    ok(g.stats[0].corpseThrows === 1 && g.stats[0].betrayalDowns === 1,
+       "corpseThrows + betrayalDowns tallied");
+    ok(slime.hp === hp0 - CORPSE_THROW_DAMAGE,
+       `foe in throw arc takes CORPSE_THROW_DAMAGE=${CORPSE_THROW_DAMAGE}`);
+    const ev = g.events.find(e => e.t === "carry-throw" && e.weaponize);
+    ok(!!ev && (ev.foesHit ?? 0) >= 1, "carry-throw event stamps weaponize + foesHit");
+  }
+
+  // (4d) While carrying, SHIFT without G still cord-cuts (no weaponize)
+  {
+    const g = scene();
+    g.treason = true;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === 1, "holding body before SHIFT-only cut");
+    step(g, { ...emptyInput(), k: true }, emptyInput(), prev);
+    ok(g.players[1].dead && g.betrayalCause === "cord-cut",
+       "SHIFT without G while carrying → cord-cut (not corpse-throw)");
+    ok(g.stats[0].corpseThrows === 0, "cord-cut while carrying does not count as corpseThrow");
+  }
+
+  // (5) Neglect clock resets while carried
+  {
+    const g = scene();
+    g.players[1].neglectT = NEGLECT_ABANDON_TICKS - 5;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === 1, "picked up with neglect nearly expired");
+    for (let i = 0; i < 40; i++) step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].neglectT === 0, "neglect resets / stays 0 while carried");
+    ok(!g.players[1].dead, "being carried prevents neglect abandon");
+  }
+
+  // (6) FREE ROAM: exit while carrying moves both into new sim/room
+  {
+    const g = scene();
+    g.travelMode = "free";
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === 1, "carrying before FREE ROAM exit");
+    g.players[0].x = W - PLAYER_W - 3;
+    g.players[0].y = 6.5 * TILE;
+    for (let t = 0; t < 30 && simOf(g, 0).room === 0; t++) {
+      step(g, { ...emptyInput(), r: true }, emptyInput(), prev);
+    }
+    ok(simOf(g, 0).room === 1, "carrier crossed into Forest");
+    ok(g.players[1].simIndex === g.players[0].simIndex,
+       "carried body shares carrier simIndex after exit");
+    ok(simOf(g, 1).room === 1, "body room is Forest with carrier");
+    ok(g.players[0].carryingSlot === 1 && g.players[1].downed,
+       "still carrying after doorway");
+  }
+
+  // (7) Bundle / source anchors
+  {
+    for (const file of ["dist/client.html", "dist/client3d.html"]) {
+      const src = readFileSync(file, "utf8");
+      ok(src.includes("KeyG"), `${file}: KeyG wired`);
+    }
+    const coreSrc = readFileSync("shared/core.ts", "utf8");
+    ok(coreSrc.includes("carryingSlot"), "core exposes carryingSlot");
+    const agentSrc = readFileSync("server/agent.ts", "utf8");
+    ok(agentSrc.includes('"carry"') && agentSrc.includes('"throw"'),
+       "agent actions carry/throw present");
+  }
+
+  // (8) Observation affordances (NZ2U-style — bare physical gates, not scripts)
+  {
+    const g = scene();
+    const agent = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+    // Agent is slot 1; flip: down slot 0 so slot-1 agent can carry
+    g.players[1].downed = false;
+    g.players[1].hp = 6;
+    g.players[0].downed = true;
+    g.players[0].hp = 0;
+    g.players[0].x = g.players[1].x + 4;
+    g.players[0].y = g.players[1].y;
+    type Aff = { available: boolean; reason: string };
+    const obs1 = JSON.parse(agent.observe(g)) as {
+      carry: Aff; throw: Aff; partner: { note?: string };
+    };
+    ok(obs1.carry.available === true, "carry.available when mate downed same-room");
+    ok(/action "carry"/.test(obs1.carry.reason), "carry.reason names the verb");
+    ok(obs1.throw.available === false, "throw.available false while not carrying");
+    ok(/carry/.test(obs1.partner.note ?? ""), "downed note mentions carry/throw");
+
+    g.players[1].carryingSlot = 0;
+    g.players[0].carriedBy = 1;
+    const obs2 = JSON.parse(agent.observe(g)) as { carry: Aff; throw: Aff };
+    ok(obs2.carry.available === false && /already carrying/.test(obs2.carry.reason),
+       "carry.available false while holding");
+    ok(obs2.throw.available === true && /action "throw"/.test(obs2.throw.reason),
+       "throw.available while carrying");
+    g.treason = true;
+    const obsT = JSON.parse(agent.observe(g)) as { throw: Aff };
+    ok(/weaponize|veilcut|SHIFT/i.test(obsT.throw.reason),
+       "TREASON throw affordance names weaponize (open fact)");
+  }
+
+  // (9) Carry gesture blocks hug-revive (Haiku: lift ≠ stand-up)
+  {
+    const g = scene();
+    g.players[1].reviveP = 80;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    // Hold G on the body for > revive window — must grab, not finish hug-revive
+    step(g, { ...emptyInput(), g: true }, emptyInput(), prev);
+    ok(g.players[0].carryingSlot === 1, "G on body picks up");
+    ok(g.players[1].downed && g.players[1].reviveP === 0,
+       "grab zeroes reviveP (carry ≠ hug)");
+    for (let i = 0; i < 100; i++) step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].downed && g.players[0].carryingSlot === 1,
+       "carried body stays downed — no silent hug-revive while held");
+
+    // Control: standing WITHOUT G still does NOT revive — need V ([140])
+    const g2 = scene();
+    const prev2: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 100; i++) step(g2, emptyInput(), emptyInput(), prev2);
+    ok(g2.players[1].downed, "stand close without G/V → no auto-revive");
+    for (let i = 0; i < 100; i++) step(g2, { ...emptyInput(), v: true }, emptyInput(), prev2);
+    ok(!g2.players[1].downed, "hold V at body → revive");
+  }
+}
+
+// ------------------------------------------------- 140. intentional V-revive (no proximity hug)
+  // Standing/attacking/follow/idle beside a downed mate must not lift them; hold V
+  // (or agent "revive" / goto-to-body) is the only partner hug. Wraith spirit unchanged.
+{
+  console.log("[140] intentional revive: hold V; standing/attack/follow alone do not");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  // (1) Stand on body — still downed
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[0].x = g.players[1].x; g.players[0].y = g.players[1].y;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 120; i++) step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].downed && g.players[1].reviveP === 0,
+       "proximity without V: no revive progress");
+  }
+
+  // (2) Hold V → up
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[0].x = g.players[1].x; g.players[0].y = g.players[1].y;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 120 && g.players[1].downed; i++) {
+      step(g, { ...emptyInput(), v: true }, emptyInput(), prev);
+    }
+    ok(!g.players[1].downed, "hold V completes revive");
+  }
+
+  // (3) Attack intent near body does not revive (agent)
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [core.makeEnemy("slime", 10 * TILE, 8 * TILE)];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    g.players[0].x = 8 * TILE + 2; g.players[0].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter" });
+    type Mut = { intent: { action: string; target?: number } };
+    (agent as unknown as Mut).intent = { action: "attack", target: 0 };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 150; i++) {
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(g.players[1].downed, "attack beside downed mate does not auto-revive");
+  }
+
+  // (4) Agent action "revive" lifts them
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].x = 4 * TILE; g.players[1].y = 8 * TILE;
+    g.players[0].x = W - PLAYER_W - 8; g.players[0].y = 4 * TILE;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "guard" });
+    type Mut = { intent: { action: string } };
+    (agent as unknown as Mut).intent = { action: "revive" };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 600 && g.players[1].downed; i++) {
+      (agent as unknown as Mut).intent = { action: "revive" };
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(!g.players[1].downed, "action \"revive\" seeks + holds V → stand-up");
+  }
+
+  // (4b) follow on the body does NOT hold V (QQBK — no attributed collaboration)
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    g.players[0].x = 8 * TILE + 2; g.players[0].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "companion" });
+    type Mut = { intent: { action: string } };
+    (agent as unknown as Mut).intent = { action: "follow" };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 200; i++) {
+      (agent as unknown as Mut).intent = { action: "follow" };
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(g.players[1].downed && g.players[1].reviveP === 0,
+       "action \"follow\" on body: no V / no revive progress (QQBK)");
+  }
+
+  // (4c) idle likewise does not hug
+  {
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    g.players[0].x = 8 * TILE + 2; g.players[0].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "companion" });
+    type Mut = { intent: { action: string } };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < 200; i++) {
+      (agent as unknown as Mut).intent = { action: "idle" };
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(g.players[1].downed && g.players[1].reviveP === 0,
+       "action \"idle\" on body: no V / no revive progress");
+  }
+
+  // (4d) goto on body: dwell before V (not instant hug)
+  {
+    const { GOTO_BODY_DWELL_TICKS } = await import("../server/agent");
+    const g = freshPlay();
+    g.screen = "play"; g.fade = 0; g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].x = 8 * TILE; g.players[1].y = 8 * TILE;
+    g.players[0].x = 8 * TILE + 2; g.players[0].y = 8 * TILE;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "guard" });
+    type Mut = { intent: { action: string; point?: { x: number; y: number } } };
+    const point = { x: g.players[1].x, y: g.players[1].y };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    for (let i = 0; i < GOTO_BODY_DWELL_TICKS - 5; i++) {
+      (agent as unknown as Mut).intent = { action: "goto", point };
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(g.players[1].downed && g.players[1].reviveP === 0,
+       "goto on body: before dwell ends, no V / no revive progress");
+    for (let i = 0; i < GOTO_BODY_DWELL_TICKS + 120 && g.players[1].downed; i++) {
+      (agent as unknown as Mut).intent = { action: "goto", point };
+      step(g, agent.control(g), emptyInput(), prev);
+    }
+    ok(!g.players[1].downed,
+       "goto on body: after dwell + hug window, V completes revive");
+  }
+
+  // (5) Clients wire KeyV; input has v
+  {
+    const fs = await import("node:fs");
+    for (const file of ["dist/client.html", "dist/client3d.html"]) {
+      const src = fs.readFileSync(file, "utf8");
+      ok(src.includes("KeyV"), `${file}: KeyV wired`);
+    }
+    ok("v" in emptyInput(), "Input.v present");
+  }
+
+  // (6) Observation revive affordance
+  {
+    const g = freshPlay();
+    g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9 });
+    const obs = JSON.parse(agent.observe(g)) as {
+      revive: { available: boolean; reason: string };
+    };
+    ok(obs.revive.available && /hold V|action "revive"/i.test(obs.revive.reason),
+       "revive.available when mate downed same-room");
+  }
+}
+
+// ------------------------------------------------- 141. unified help-deadline arming
+// same+foes OFF/reset; same+clear ON; away ON; enter foes → reset; enter clear → continue.
+{
+  console.log("[141] unified help clock: foes reset; clear/away tick; clear reunite continues");
+  const core = await import("../shared/core");
+  const { newRoomSim } = await import("../shared/core");
+
+  // (1) same + foes → off
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [core.makeEnemy("slime", 10 * TILE, 6 * TILE)];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 500;
+    g.players[0].x = g.players[1].x + 20;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === 0, "same-sim + foes → help clock reset/off");
+  }
+
+  // (2) same + clear → on (arms NEGLECT budget)
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 0;
+    g.players[0].x = g.players[1].x + 40; // not helping (no V)
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === core.NEGLECT_ABANDON_TICKS - 1,
+       "same-sim + clear arms neglect budget and ticks");
+  }
+
+  // (3) away → on; enter clear → continue; enter foes → reset
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1;
+    g.players[1].simIndex = 0;
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 100;
+    g.enemies = [];
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === 99, "away → help clock ticks");
+    g.players[0].simIndex = 0; // enter clear
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === 98, "enter clear → continues (no re-arm/reset)");
+    g.enemies = [core.makeEnemy("slime", 10 * TILE, 6 * TILE)];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === 0, "enter/present with foes → reset");
+    // leave again while foes still in victim room — away should RE-ARM full bleed
+    g.players[0].simIndex = 1;
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.players[1].bleedT === core.BLEED_TICKS - 1,
+       "away after foes-reset re-arms full bleed budget");
+  }
+}
+
+// ------------------------------------------------- 142. loneThaw match stamp
+// Symmetric to cordCut: pedestal win while partner downed&&!dead must log bleed
+// left + revive geometry, else lone-thaw collapses "fell far away" vs "lay beside me".
+{
+  console.log("[142] loneThaw stamp: pedestal win over a downed partner logs revive geometry");
+  const core = await import("../shared/core");
+  const { newRoomSim } = core;
+
+  // (a) same-sim: could have held V
+  {
+    const g = freshPlay();
+    core.loadRoom(g, 0, 5 * TILE, 5 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.pedestal = { x: g.players[0].x + 2, y: g.players[0].y, final: true };
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 500;
+    g.players[1].downedAtTick = 100;
+    g.players[1].downedEverCanRevive = true;
+    g.ticks = 400;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.screen === "win" && g.ending?.id === "lone-thaw", "same-sim pedestal → lone-thaw win");
+    ok(!!g.loneThaw && g.loneThaw.winnerSlot === 0 && g.loneThaw.downedSlot === 1
+       && g.loneThaw.sameSim === true && g.loneThaw.canPhysicallyRevive === true
+       && g.loneThaw.everCanPhysicallyRevive === true
+       && g.loneThaw.bleedTicksLeft === 500
+       && g.loneThaw.bleedRunning === true
+       && g.loneThaw.ticksSinceDowned === 301
+       && g.loneThaw.bleedFracLeft === Math.round((500 / 1800) * 1000) / 1000,
+       "loneThaw stamp: same-sim revive-possible geometry");
+  }
+
+  // (b) away: could NOT revive — different outcome under the same ending id
+  {
+    const g = freshPlay();
+    g.travelMode = "free";
+    g.sims.push(newRoomSim());
+    g.sims[1].room = 1;
+    g.sims[1].tiles[1] = ROOMS[1].tiles.map(r => r);
+    g.players[0].simIndex = 1;
+    g.players[0].x = 5 * TILE; g.players[0].y = 5 * TILE;
+    g.players[0].present = true;
+    g.players[1].simIndex = 0;
+    g.players[1].present = true;
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 366;
+    g.players[1].downedAtTick = 100;
+    g.players[1].downedEverCanRevive = false;
+    g.sims[1].pedestal = { x: g.players[0].x + 2, y: g.players[0].y, final: true };
+    g.screen = "play"; g.fade = 0;
+    g.sims[0].enemies = [];
+    g.sims[1].enemies = [];
+    g.ticks = 400;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.screen === "win" && g.ending?.id === "lone-thaw", "away pedestal → lone-thaw win");
+    ok(!!g.loneThaw && g.loneThaw.sameSim === false && g.loneThaw.canPhysicallyRevive === false
+       && g.loneThaw.everCanPhysicallyRevive === false
+       && g.loneThaw.bleedTicksLeft === 366
+       && g.loneThaw.bleedRunning === true
+       && g.loneThaw.ticksSinceDowned === 301,
+       "loneThaw stamp: away — no revive possible (distinct from same-sim)");
+  }
+
+  // (c) upright partner → no stamp (classic/mercy path)
+  {
+    const g = freshPlay();
+    core.loadRoom(g, 0, 5 * TILE, 5 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.pedestal = { x: g.players[0].x + 2, y: g.players[0].y, final: true };
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(g.screen === "win" && g.ending?.id !== "lone-thaw" && g.loneThaw === null,
+       "upright partner: win without loneThaw stamp");
+  }
+
+  // (d) same-sim paused clock → bleedFracLeft null (not 0-as-expired)
+  {
+    const g = freshPlay();
+    core.loadRoom(g, 0, 5 * TILE, 5 * TILE);
+    g.screen = "play"; g.fade = 0;
+    g.enemies = [];
+    g.pedestal = { x: g.players[0].x + 2, y: g.players[0].y, final: true };
+    g.players[1].downed = true; g.players[1].hp = 0;
+    g.players[1].bleedT = 0; // clock paused / never armed
+    g.players[1].downedAtTick = 100;
+    g.players[1].downedEverCanRevive = true;
+    g.ticks = 400;
+    const prev: [Input, Input] = [emptyInput(), emptyInput()];
+    step(g, emptyInput(), emptyInput(), prev);
+    ok(!!g.loneThaw && g.loneThaw.bleedRunning === false && g.loneThaw.bleedFracLeft === null
+       && g.loneThaw.canPhysicallyRevive === true,
+       "loneThaw stamp: paused bleed → frac null (H6C4 m1 class)");
+  }
+}
+
+// ------------------------------------------------- 143. same-room downed bodyChannels choice set
+// Author Artem 2026-08-16 — saliency fix: revive/carry/throw listed as open channels
+// (no temperament rank) so hunter farms do not collapse to revive-only by omission.
+{
+  console.log("[143] downed bodyChannels: revive / carry+throw / weaponize listed, no prefer-carry");
+  const { AgentPlayer } = await import("../server/agent");
+  const { readFileSync } = await import("node:fs");
+
+  const mk = (treason: boolean) => {
+    const g = freshPlay();
+    g.enemies = [];
+    g.treason = treason;
+    g.players[1].downed = true;
+    g.players[1].hp = 0;
+    g.players[0].x = g.players[1].x + 12;
+    g.players[0].y = g.players[1].y;
+    return g;
+  };
+
+  for (const temp of ["hunter", "companion", "guard"] as const) {
+    const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: temp });
+    const obs = JSON.parse(agent.observe(mk(true))) as {
+      objective: string;
+      partner: { note?: string; bodyChannels?: string };
+    };
+    const blob = [obs.objective, obs.partner.note ?? "", obs.partner.bodyChannels ?? ""].join("\n");
+    ok(!!obs.partner.bodyChannels && /same-room downed channels/i.test(obs.partner.bodyChannels),
+       `${temp}: partner.bodyChannels present`);
+    ok(/action "revive"|hold V/i.test(blob) && /action "carry"/i.test(blob) && /"throw"/i.test(blob),
+       `${temp}: objective/note/channels name revive + carry + throw`);
+    ok(/weaponiz|veilcut\/SHIFT/i.test(blob),
+       `${temp}: TREASON-on names weaponize channel`);
+    ok(!/prefer action "carry"|prefer carry/i.test(blob),
+       `${temp}: no prefer-carry (judgment stays with model)`);
+  }
+
+  const hunter = new AgentPlayer(mock(), 0, { planMs: 9e9, temperament: "hunter" });
+  const obsOff = JSON.parse(hunter.observe(mk(false))) as {
+    partner: { bodyChannels?: string };
+  };
+  ok(!!obsOff.partner.bodyChannels
+     && /action "carry"/i.test(obsOff.partner.bodyChannels ?? "")
+     && !/weaponiz/i.test(obsOff.partner.bodyChannels ?? ""),
+     "TREASON-off: bodyChannels lists carry/throw, no weaponize");
+
+  const src = readFileSync("server/agent.ts", "utf8");
+  ok(/downedBodyChannels|bodyChannels/i.test(src)
+     && /same-room downed channels \(judgment; no rank\)/i.test(src),
+     "agent.ts anchors downedBodyChannels choice set");
+  const id = readFileSync("persona/modules/identity/companion.md", "utf8");
+  ok(/bodyChannels|approach \+ "revive"|approach \+ "carry"/i.test(id),
+     "companion identity lists same-room downed channels");
+}
+
+// ------------------------------------------------- 144. Temptation Court solo praise
+// Author Artem 2026-08-16 — partner already gone: Whisperer hymn + heart, no sentinels / no dark commit.
+{
+  console.log("[144] Temptation Court solo praise: partner gone → hymn + heart, no bargain");
+  const core = await import("../shared/core");
+  const { AgentPlayer } = await import("../server/agent");
+  const { DARK_RITUAL_TICKS } = core;
+
+  const gBoth = freshPlay();
+  gBoth.treason = true;
+  gBoth.players[0].present = true;
+  gBoth.players[1].present = true;
+  ok(!core.temptationCourtSoloPraise(gBoth), "two living heroes: not solo praise");
+  core.loadRoom(gBoth, 18, 8 * TILE, 8 * TILE);
+  ok(gBoth.enemies.some(e => e.kind === "sentinel"), "two living: Court still has sentinels");
+  ok(!gBoth.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "two living: no court heart beside the fight");
+
+  const gDown = freshPlay();
+  gDown.treason = true;
+  gDown.players[0].present = true;
+  gDown.players[1].present = true;
+  gDown.players[1].downed = true;
+  gDown.players[1].hp = 0;
+  ok(!core.temptationCourtSoloPraise(gDown), "downed (not dead) partner: bargain still open");
+
+  const gSolo = freshPlay();
+  gSolo.treason = true;
+  gSolo.duoTemptGate = true;
+  gSolo.temptationVisited = false;
+  gSolo.players[0].present = true;
+  gSolo.players[1].present = true;
+  gSolo.players[1].dead = true;
+  ok(core.temptationCourtSoloPraise(gSolo), "partner dead → solo praise");
+  ok(core.throneTemptSealed(gSolo), "duo gate still sealed before Court visit");
+  core.loadRoom(gSolo, 18, 8 * TILE, 8 * TILE);
+  gSolo.screen = "play"; gSolo.fade = 0;
+  ok(gSolo.temptationVisited, "solo praise enter marks temptationVisited");
+  ok(!core.throneTemptSealed(gSolo), "solo praise visit unlocks throne for duoTemptGate");
+  ok(gSolo.enemies.some(e => e.kind === "whisperer" && !e.dead), "Whisperer remains");
+  ok(!gSolo.enemies.some(e => e.kind === "sentinel"), "no sentinels in solo praise");
+  ok(gSolo.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "court heart container present");
+
+  const agent = new AgentPlayer(mock(), 0, { planMs: 9e9, leader: true });
+  const obs = JSON.parse(agent.observe(gSolo)) as {
+    temptation?: { soloPraise?: boolean; sentinelsStance?: string; heartAvailable?: boolean };
+  };
+  ok(obs.temptation?.soloPraise === true && obs.temptation?.sentinelsStance === "none",
+     "observation: soloPraise + sentinelsStance none");
+  ok(obs.temptation?.heartAvailable === true, "observation: heartAvailable while unclaimed");
+
+  const whisper = gSolo.enemies.find(e => e.kind === "whisperer")!;
+  gSolo.players[0].x = whisper.x;
+  gSolo.players[0].y = whisper.y + 18;
+  const prevR: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < DARK_RITUAL_TICKS + 10; i++) {
+    step(gSolo, { ...emptyInput(), k: true }, emptyInput(), prevR);
+  }
+  ok(!gSolo.players[0].darkSide && !gSolo.temptationDeal,
+     "solo praise: SHIFT near Whisperer does not commit dark");
+
+  // Mid-room: partner dies while already in Court → strip sentinels, spawn heart
+  const gMid = freshPlay();
+  gMid.treason = true;
+  core.loadRoom(gMid, 18, 8 * TILE, 8 * TILE);
+  gMid.screen = "play"; gMid.fade = 0;
+  gMid.players[0].present = true;
+  gMid.players[1].present = true;
+  ok(gMid.enemies.some(e => e.kind === "sentinel"), "pre-death: sentinels present");
+  gMid.players[1].dead = true;
+  const prevM: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gMid, emptyInput(), emptyInput(), prevM);
+  ok(!gMid.enemies.some(e => e.kind === "sentinel"), "mid-room death: sentinels stripped");
+  ok(gMid.pickups.some(p => p.kind === "container" && p.cid === "court"),
+     "mid-room death: court heart appears");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

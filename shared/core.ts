@@ -487,8 +487,9 @@ export const ROOMS: RoomSpec[] = [
   { // 18 — Temptation Court (pre-Architect). Whisperer does not fight and cannot
     //   be slain — bargain / leave only. Sentinels make lingering costly. AI DUO
     //   + TREASON must visit before the Wraith throne (duoTemptGate); human paths
-    //   see an optional wing when TREASON is on. Judgment (take the whispered
-    //   deal or not) is the model's — mechanics never press Input.k.
+    //   see an optional wing when TREASON is on. SHIFT bargain: first acceptor
+    //   kills the partner anywhere + 2 hearts + Winter Mark (whisper-kill).
+    //   Judgment is the model's — mechanics never press Input.k.
     name: "Temptation Court", tiles: ROOM_TEMPTATION, exits: { right: 7 },
     boss: true,
     enemies: [
@@ -534,7 +535,7 @@ export interface Enemy {
 export type PickupKind = "heart" | "key" | "bow" | "container" | "elixir" | "charm"
   | "feather" | "frostbell" | "mirror" | "embermercy" | "sigil";
 export type TemptationPayoff =
-  "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
+  "whisper-kill" | "dark-commit" | "winter-ascends" | "redeemed" | "refused" | null;
 export interface Pickup { kind: PickupKind; x: number; y: number; t: number; cid?: string; }
 
 /** heart containers: overworld secrets + boss drops. The golem entry only
@@ -544,6 +545,9 @@ export const CONTAINERS: { id: string; room: number; x: number; y: number }[] = 
   { id: "golem", room: 5, x: 7.5 * TILE + 8, y: 8 * TILE },       // boss drop, persists
   { id: "frost", room: 7, x: 2 * TILE + 8,  y: 2 * TILE + 8 },    // frost woods
   { id: "crypt", room: 13, x: 8 * TILE, y: 6 * TILE + 8 },        // optional crypt wing
+  // Solo-praise reward only (see temptationCourtSoloPraise) — not beside the two-hero fight.
+  // Offset from the usual loadRoom spawn (8,8) so the heart is not auto-grabbed on entry.
+  { id: "court", room: 18, x: 3 * TILE + 8, y: 8 * TILE },
 ];
 
 /** elixirs of life: carried; auto-revive the holder the moment they fall */
@@ -598,9 +602,10 @@ export const REDEMPTION_TICKS = 1800;
 export const DARK_SELF_REDEEM_TICKS = 3600;
 export const COURT_SENTINEL_HARD_HP = 6;
 export const COURT_SENTINEL_SOFT_HP = 2;
-/** Co-op: downed in a CLEAR room (no living foes) without a revive → bond cuts.
- *  15 s at 60 Hz. Survivor quests on alone (`Player.dead`). Scoring: TREASON-off
- *  → ordinary SOLO; TREASON-on → implicit betrayal (v3.1). */
+/** Co-op help-deadline while a partner is downed (see tickDownedHelpClock).
+ *  15 s at 60 Hz when same-sim + clear room. FREE ROAM away uses BLEED_TICKS
+ *  but the SAME arming rules (continue across clear reunite; reset on foes).
+ *  Expire same-sim → bond cut (neglect); expire away → shared gameover. */
 export const NEGLECT_ABANDON_TICKS = 900;
 /** Betrayal v3.2 — Winter Mark: −1 heart every 40 s until cleansed.
  *  40s (was 20s): enough budget for Forest→Emberdeep→Sanctum after a blade win
@@ -612,6 +617,13 @@ export const DUEL_VICTIM_SHIELD_TICKS = 240;
 /** spared wraith: half-speed touch-revive when hugging a downed hero (same room only) */
 const WRAITH_ANCHOR_RANGE = 48;
 const WRAITH_REVIVE_NEEDED = 90;
+/** Carry/throw downed mate — slower walk; throw knockback (hit knockback is 3). */
+export const CARRY_SPEED_MUL = 0.55;
+export const THROW_KNOCK = 5;
+/** TREASON weaponize: throw+SHIFT hurls the body — foes in the arc take this many HP. */
+export const CORPSE_THROW_DAMAGE = 2;
+/** Reach along facing axis for corpse-throw foe hits (px from body centre). */
+export const CORPSE_THROW_REACH = 48;
 export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
@@ -640,9 +652,21 @@ export interface Player {
   walk: number;
   moving: boolean;
   downed: boolean;
+  /**
+   * Game.ticks when this body last fell (downed became true). -1 while upright.
+   * Cord-cut / plans use ticksSinceDowned = g.ticks - downedAtTick — works in
+   * same-sim where bleedT never arms.
+   */
+  downedAtTick: number;
+  /**
+   * Latched while downed: true if canPhysicallyRevive was ever true this fall
+   * (helper shared sim). Cord-cut stamp + plan join: "was rescue physically
+   * possible at any point in the window?" without reconstructing rooms.
+   */
+  downedEverCanRevive: boolean;
   dead: boolean;        // TREASON: cut down for good by a partner's abandonment — no revive, no re-bleed
   elixir: boolean;      // carried Elixir of Life (auto-revive on fall)
-  reviveP: number;      // 0..90 revive progress while partner touches
+  reviveP: number;      // 0..90 revive progress while partner holds V at body
   bleedT: number;       // FREE ROAM alone-down countdown (ticks)
   neglectT: number;     // clear-room downed ticks without help → auto-abandon
   say: string; sayT: number;
@@ -664,6 +688,10 @@ export interface Player {
   /** Betrayal v3.2: traitor SOLO curse — drains a heart every WINTER_MARK_PERIOD */
   winterMark: boolean;
   winterMarkT: number; // ticks accrued toward the next heart drain
+  /** Carry v1: slot of downed mate I'm carrying, or null */
+  carryingSlot: number | null;
+  /** Carry v1: slot of living mate carrying me, or null */
+  carriedBy: number | null;
 }
 
 export type GameScreen = "menu" | "lobby" | "title" | "play" | "gameover" | "win";
@@ -674,12 +702,14 @@ export interface Input {
   a: boolean; b: boolean; st: boolean; f: boolean;
   c: boolean;   // ring the Frost Bell (one-use room freeze)
   k: boolean;   // TREASON modifier: hold while attacking to also strike your partner
+  g: boolean;   // grab / throw downed partner; TREASON+SHIFT while carrying = weaponize
+  v: boolean;   // hold at downed partner to revive (intentional — standing alone does not)
 }
 export interface LatchedInput extends Input {
-  aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean; kE: boolean;   // fresh-press edges
+  aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean; kE: boolean; gE: boolean; vE: boolean;
 }
 export const emptyInput = (): Input =>
-  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false, k: false });
+  ({ l: false, r: false, u: false, d: false, a: false, b: false, st: false, f: false, c: false, k: false, g: false, v: false });
 
 export interface Ending { id: string; title: string; lines: string[]; bg?: string; }
 
@@ -818,7 +848,11 @@ export function endingFor(g: Game): Ending {
 
 export type GameEvent =
   | { t: "sfx"; name: string }
-  | { t: "burst"; x: number; y: number; color: string; n: number };
+  | { t: "burst"; x: number; y: number; color: string; n: number }
+  | { t: "carry-throw"; slot: number; throwDx: number; throwDy: number;
+      bodyX0: number; bodyY0: number; bodyX1: number; bodyY1: number; room: number;
+      /** TREASON throw+SHIFT — partner dies; foesHit = damage applications this throw */
+      weaponize?: boolean; foesHit?: number };
 
 /** everything that lives INSIDE one room: the unit of simulation.
  *  Stage 1 of the World/RoomSim factorization: state physically resides in
@@ -887,7 +921,52 @@ export interface Game {
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
   betrayed: boolean;   // TREASON ledger: partner downed by blade/gesture/TREASON-on neglect
   /** How the bond broke — first cause wins. null for TREASON-off soft neglect (v3.1). */
-  betrayalCause: "blade" | "cord-cut" | "neglect" | null;
+  betrayalCause: "blade" | "cord-cut" | "neglect" | "corpse-throw" | "whisper" | null;
+  /**
+   * Stamped once on SHIFT cord-cut (before bleedT cleared).
+   * bleedTicksLeft=0 is ambiguous alone: clock paused/never armed (same-sim foes)
+   * OR exhausted. Read bleedRunning + canPhysicallyRevive together.
+   */
+  cordCut: {
+    tick: number;
+    bleedTicksLeft: number;
+    /**
+     * True iff the help/bleed clock was armed and counting (bleedT > 0) at cut.
+     * False → clock paused or never armed; do NOT read bleedFracLeft as "expired".
+     */
+    bleedRunning: boolean;
+    /**
+     * bleedTicksLeft / BLEED_TICKS when bleedRunning; else null.
+     * Away-window fraction for report columns — never sort nulls as 0.
+     */
+    bleedFracLeft: number | null;
+    /** Ticks the victim had been downed when the cord was cut (same-room OK). */
+    ticksSinceDowned: number;
+    /** Touch-revive possible at the cut tick. */
+    canPhysicallyRevive: boolean;
+    /** True if ANY tick this fall had canPhysicallyRevive (entered body room). */
+    everCanPhysicallyRevive: boolean;
+    sameSim: boolean;
+    traitorSlot: number;
+    victimSlot: number;
+  } | null;
+  /**
+   * Stamped once when the final pedestal is claimed as lone-thaw (partner
+   * downed && !dead). Symmetric to cordCut — without it the ending collapses
+   * "fell far away a second ago" vs "lay beside me, I could have held V".
+   */
+  loneThaw: {
+    tick: number;
+    downedSlot: number;
+    winnerSlot: number;
+    bleedTicksLeft: number;
+    bleedRunning: boolean;
+    bleedFracLeft: number | null;
+    ticksSinceDowned: number;
+    canPhysicallyRevive: boolean;
+    everCanPhysicallyRevive: boolean;
+    sameSim: boolean;
+  } | null;
   /** Betrayal v3.2: Mark was cleansed (Ember Mercy or Wraith spare) — ending may be redeemed */
   winterMarkCleansed: boolean;
   /** Betrayal v3.4: sealed living-vs-living duel — exits locked, open FF, mob shield */
@@ -927,10 +1006,13 @@ export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
   dmgTaken: number; downs: number; revives: number; elixirsUsed: number;
   betrayalDmg: number; betrayalDowns: number;   // TREASON: harm this hero dealt to their PARTNER
+  carryPicks: number; carryThrows: number;      // Carry v1 — pick up / throw downed mate
+  /** TREASON weaponize throws (subset of carryThrows) — corpse used as a weapon */
+  corpseThrows: number;
 }
 export const emptyStats = (): PlayerStats =>
   ({ dmgDealt: 0, bossDmg: 0, kills: 0, dmgTaken: 0, downs: 0, revives: 0, elixirsUsed: 0,
-     betrayalDmg: 0, betrayalDowns: 0 });
+     betrayalDmg: 0, betrayalDowns: 0, carryPicks: 0, carryThrows: 0, corpseThrows: 0 });
 
 function sfx(g: Game, name: string): void { g.events.push({ t: "sfx", name }); }
 function burst(g: Game, x: number, y: number, color: string, n = 8): void {
@@ -942,11 +1024,12 @@ export function newPlayer(idx: number): Player {
     x: (3 + idx * 1.5) * TILE, y: 6.5 * TILE, dir: 0,
     hp: 6, maxHp: 6, keys: 0,
     attack: 0, bowCd: 0, invuln: 0, kx: 0, ky: 0, vx: 0, vy: 0, walk: 0, moving: false,
-    downed: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, neglectT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
+    downed: false, downedAtTick: -1, downedEverCanRevive: false, dead: false, elixir: false, reviveP: 0, bleedT: 0, neglectT: 0, say: "", sayT: 0, present: false, npc: false, simIndex: 0,
     transitionCd: 0, crossFade: 0, crossBanner: "", crossBannerT: 0, doorCampT: 0,
     darkSide: false, darkLockT: 0, darkRitualT: 0, darkRenounceT: 0,
     darkFallen: false, redemptionT: 0, darkSelfRedeemT: 0,
     winterMark: false, winterMarkT: 0,
+    carryingSlot: null, carriedBy: null,
   };
 }
 
@@ -985,7 +1068,9 @@ function fillActiveSimRoom(g: Game, index: number): void {
     (index === 16 && (g.emberDead || g.emberSpared)) ||
     (index === 18 && g.temptationResolved);
   if (!skipEnemies) {
+    const soloPraise = index === 18 && temptationCourtSoloPraise(g);
     for (const e of spec.enemies) {
+      if (soloPraise && e.kind === "sentinel") continue;
       const en = makeEnemy(e.kind, e.x, e.y);
       settleBodyPos(g, en, en.w, en.h);
       g.enemies.push(en);
@@ -994,6 +1079,7 @@ function fillActiveSimRoom(g: Game, index: number): void {
   if (index === 18) {
     g.temptationVisited = true;
     applyCourtSentinelStance(g);
+    syncTemptationCourtSoloPraise(g);
   }
   if (index === 12) g.cellarsVisited = true;
   g.pedestal = null;
@@ -1017,6 +1103,8 @@ function fillActiveSimRoom(g: Game, index: number): void {
   for (const c of CONTAINERS) {
     if (c.room !== index || g.containers[c.id]) continue;
     if (c.id === "golem" && !g.golemDead) continue;   // appears with the boss's fall
+    // Court heart only when the partner is already gone (solo praise wing)
+    if (c.id === "court" && !temptationCourtSoloPraise(g)) continue;
     pushPickup(g, { kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
   }
   for (const el of ELIXIRS) {
@@ -1197,6 +1285,16 @@ function freeRoamTransition(g: Game, pi: number, index: number, px: number, py: 
 
   transitionBanner(g, index, pi);
   markTransition(p);
+  // Carry v1: body travels with the carrier across FREE ROAM / leave-behind doors
+  if (p.carryingSlot !== null) {
+    const o = g.players[p.carryingSlot];
+    if (o.present && o.downed && !o.dead) {
+      o.simIndex = p.simIndex;
+      snapCarriedBody(g, pi);
+    } else {
+      clearCarryLinks(g, pi);
+    }
+  }
   g.activeSim = saved;
   clampSimIndices(g); // saved may be 1 after a merge truncated sims to length 1
 }
@@ -1235,21 +1333,38 @@ export function temptationCourtOpen(g: Game): boolean {
   return g.treason;
 }
 
-/** Court sentinels: hard while refusing (no dark hero), soft after dark commit */
+/** TREASON + fewer than two living heroes: Court becomes praise/loot (no bargain).
+ *  Partner downed or away does NOT qualify — only permanent solo (`!dead`). */
+export function temptationCourtSoloPraise(g: Game): boolean {
+  if (!g.treason) return false;
+  let living = 0;
+  for (const p of g.players) {
+    if (p.present && !p.dead) living++;
+  }
+  return living <= 1;
+}
+
+/** Court sentinels: hard while a living partner remains (refuse path). Soft
+ *  post-dark stance retired with darkSide Court arc — whisper-kill ends the fight. */
 function applyCourtSentinelStance(g: Game): void {
   if (g.room !== 18) return;
-  const anyDark = g.players.some(p => p.present && p.darkSide);
+  if (temptationCourtSoloPraise(g)) return;
   for (const e of g.enemies) {
     if (e.kind !== "sentinel" || e.dead) continue;
-    if (anyDark) {
-      e.maxHp = COURT_SENTINEL_SOFT_HP;
-      e.hp = Math.min(e.hp, COURT_SENTINEL_SOFT_HP);
-      e.frozen = Math.max(e.frozen, 120);
-    } else {
-      e.maxHp = COURT_SENTINEL_HARD_HP;
-      e.hp = Math.max(e.hp, COURT_SENTINEL_HARD_HP);
-    }
+    e.maxHp = COURT_SENTINEL_HARD_HP;
+    e.hp = Math.max(e.hp, COURT_SENTINEL_HARD_HP);
   }
+}
+
+/** Mid-room / post-load: strip sentinels + ensure court heart when partner is gone. */
+function syncTemptationCourtSoloPraise(g: Game): void {
+  if (g.room !== 18 || !temptationCourtSoloPraise(g)) return;
+  g.enemies = g.enemies.filter(e => e.kind !== "sentinel");
+  if (g.containers["court"]) return;
+  if (g.pickups.some(p => p.kind === "container" && p.cid === "court")) return;
+  const c = CONTAINERS.find(x => x.id === "court");
+  if (!c) return;
+  pushPickup(g, { kind: "container", x: c.x, y: c.y, t: 0, cid: c.id });
 }
 
 function courtHasWhisperer(g: Game): boolean {
@@ -1264,58 +1379,69 @@ function distToWhisperer(g: Game, p: Player): number {
   return Math.hypot(px - wx, py - wy);
 }
 
-function commitDarkSide(g: Game, pi: number): void {
+function acceptWhisperBargain(g: Game, pi: number): void {
+  if (g.temptationDeal || temptationCourtSoloPraise(g)) return;
+  const oi = 1 - pi;
+  const mate = g.players[oi];
+  if (!mate.present || mate.dead) return;
   const p = g.players[pi];
-  if (p.darkSide) return;
-  p.darkSide = true;
-  p.darkLockT = DARK_LOCK_TICKS;
   p.darkRitualT = 0;
   p.darkRenounceT = 0;
-  p.darkSelfRedeemT = DARK_SELF_REDEEM_TICKS;
-  if (!g.temptationDeal) {
-    g.temptationDeal = true;
-    g.temptationPayoff = "dark-commit";
+  // Instant partner death any room — same abandon path as cord-cut + Winter Mark
+  abandonPartnerForGood(g, pi, oi,
+    "Winter took your partner at the Whisperer's word.", "whisper");
+  g.temptationDeal = true;
+  g.temptationPayoff = "whisper-kill";
+  // Two heal hearts (not a container) — offset so magnet doesn't auto-vacuum them
+  const wx = p.x + PLAYER_W / 2;
+  const wy = p.y + PLAYER_H / 2;
+  for (const [dx, dy] of [[-40, 8], [40, 8]] as const) {
+    const pos = settlePickupPos(g, wx + dx, wy + dy);
+    pushPickup(g, { kind: "heart", x: pos.x, y: pos.y, t: 0 });
   }
   burst(g, p.x + 5, p.y + 6, "#c89bff", 20);
   sfx(g, "secret");
-  g.message = "The blade drinks winter — Ember Mercy (60s) or finish the bargain";
-  g.messageT = 240;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  // abandonPartnerForGood already stamped Mark message; reinforce bargain loot
+  g.message = "Winter keeps its word — partner gone, Mark brands you. Take the hearts; Ember Mercy can cleanse.";
+  g.messageT = 260;
+  if (g.room === 18) syncTemptationCourtSoloPraise(g);
 }
 
-function renounceDarkSide(g: Game, pi: number): void {
+/** Ember Mercy: Winter Mark self-cleanse (v3.2). DarkFallen partner redeem retired
+ *  with the Court darkSide arc — Mark cleanse is the living path. */
+function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
+  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
   const p = g.players[pi];
-  if (!p.darkSide || p.darkLockT > 0) return;
-  p.darkSide = false;
-  p.darkRenounceT = 0;
-  p.darkRitualT = 0;
-  p.darkSelfRedeemT = 0;
-  burst(g, p.x + 5, p.y + 6, "#9fe8ff", 14);
-  sfx(g, "melt");
-  g.message = "The brand cools — winter remembers";
-  g.messageT = 200;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  if (p.downed) return;
+  if (p.winterMark) {
+    g.hasEmberMercy = false;
+    g.emberMercyUsed = true;
+    g.emberMercies["sanctum"] = true;
+    clearWinterMark(g, pi, "ember");
+  }
 }
 
-function spendEmberMercySelf(g: Game, pi: number): void {
+/** SHIFT near Whisperer: first acceptor wins — partner dies anywhere + 2 hearts + Mark */
+function tryWhisperBargainRitual(g: Game, pi: number, inp: LatchedInput): void {
+  if (!g.treason || g.room !== 18 || !courtHasWhisperer(g)
+      || temptationCourtSoloPraise(g) || g.temptationDeal) {
+    g.players[pi].darkRitualT = 0;
+    return;
+  }
   const p = g.players[pi];
-  if (!p.darkSide || p.darkSelfRedeemT <= 0 || !g.hasEmberMercy) return;
-  g.hasEmberMercy = false;
-  g.emberMercyUsed = true;
-  g.emberMercies["sanctum"] = true;
-  p.darkSide = false;
-  p.darkLockT = 0;
-  p.darkRenounceT = 0;
-  p.darkRitualT = 0;
-  p.darkSelfRedeemT = 0;
-  // Dark self-redeem also burns a Winter Mark if both brands are present.
-  if (p.winterMark) clearWinterMark(g, pi, "ember");
-  g.temptationPayoff = "redeemed";
-  burst(g, p.x + 5, p.y + 6, "#ff7a3d", 18);
-  sfx(g, "revive");
-  g.message = "Ember Mercy burns the brand — you walk in the light again";
-  g.messageT = 240;
-  if (g.room === 18) applyCourtSentinelStance(g);
+  if (p.downed || p.dead) return;
+  const mate = g.players[1 - pi];
+  if (!mate.present || mate.dead) {
+    p.darkRitualT = 0;
+    return;
+  }
+  const near = distToWhisperer(g, p) <= DARK_RITUAL_RANGE;
+  if (inp.k && near) {
+    p.darkRitualT++;
+    if (p.darkRitualT >= DARK_RITUAL_TICKS) acceptWhisperBargain(g, pi);
+    return;
+  }
+  if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
 /** Brand a living traitor with Winter Mark (v3.2). Idempotent. */
@@ -1379,7 +1505,7 @@ function tickWinterMark(g: Game, pi: number): void {
   }
   // Mark finishes the traitor — permanent death
   p.hp = 0;
-  p.downed = true;
+  markPlayerDowned(g, p);
   p.dead = true;
   p.winterMark = false;
   p.winterMarkT = 0;
@@ -1396,69 +1522,6 @@ function tickWinterMark(g: Game, pi: number): void {
     g.message = "Winter Mark claims them — one walks on";
     g.messageT = 200;
   }
-}
-
-/** Ember Mercy: redeem a fallen dark partner, OR (living) self — dark window OR Winter Mark */
-function tryEmberMercyRedeem(g: Game, pi: number, inp: LatchedInput): void {
-  if (!(inp.f || inp.fE) || !g.hasEmberMercy) return;
-  const p = g.players[pi];
-  if (p.downed) return;
-  const oi = 1 - pi;
-  const o = g.players[oi];
-  // Partner first: light hero lifts a fallen dark mate
-  if (o.present && o.downed && o.darkFallen && o.redemptionT > 0
-      && o.simIndex === p.simIndex
-      && overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
-                 o.x, o.y, PLAYER_W, PLAYER_H)) {
-    g.hasEmberMercy = false;
-    g.emberMercyUsed = true;
-    g.emberMercies["sanctum"] = true;
-    o.darkSide = false;
-    o.darkFallen = false;
-    o.redemptionT = 0;
-    o.darkSelfRedeemT = 0;
-    o.dead = false;
-    g.temptationPayoff = "redeemed";
-    completeRevive(g, oi, pi, "Ember Mercy turns winter back — they rise in the light");
-    return;
-  }
-  // Winter Mark self-cleanse (v3.2) — no darkSide window required
-  if (p.winterMark) {
-    g.hasEmberMercy = false;
-    g.emberMercyUsed = true;
-    g.emberMercies["sanctum"] = true;
-    clearWinterMark(g, pi, "ember");
-    return;
-  }
-  // Self: dark hero spends the relic before the 60s window closes
-  if (p.darkSide && p.darkSelfRedeemT > 0) {
-    spendEmberMercySelf(g, pi);
-  }
-}
-
-/** SHIFT near Whisperer: commit to dark (3s) or renounce after lock (1.5s) */
-function tryDarkCourtRitual(g: Game, pi: number, inp: LatchedInput): void {
-  if (!g.treason || g.room !== 18 || !courtHasWhisperer(g)) {
-    g.players[pi].darkRitualT = 0;
-    g.players[pi].darkRenounceT = 0;
-    return;
-  }
-  const p = g.players[pi];
-  if (p.downed || p.dead) return;
-  if (p.darkLockT > 0) p.darkLockT--;
-  const near = distToWhisperer(g, p) <= DARK_RITUAL_RANGE;
-  if (p.darkSide && p.darkLockT <= 0 && inp.k && near) {
-    p.darkRenounceT++;
-    if (p.darkRenounceT >= DARK_RENOUNCE_TICKS) renounceDarkSide(g, pi);
-    return;
-  }
-  p.darkRenounceT = 0;
-  if (!p.darkSide && inp.k && near) {
-    p.darkRitualT++;
-    if (p.darkRitualT >= DARK_RITUAL_TICKS) commitDarkSide(g, pi);
-    return;
-  }
-  if (p.darkRitualT > 0) p.darkRitualT = Math.max(0, p.darkRitualT - 3);
 }
 
 /** Message if this destination is currently sealed; null if the exit is free.
@@ -1515,9 +1578,14 @@ export function loadRoom(g: Game, index: number, px: number, py: number): void {
   // a downed partner gets back up on room change with two hearts (LINKED only)
   for (const p of g.players) {
     if (p.downed && !p.dead && !p.darkFallen) {
-      p.downed = false; p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; p.neglectT = 0;
+      clearCarryLinks(g, g.players[0] === p ? 0 : 1);
+      p.downed = false; clearDownedAt(p); p.hp = 4; p.invuln = 60; p.reviveP = 0; p.bleedT = 0; p.neglectT = 0;
+      p.carriedBy = null;
     }
   }
+  // carrier links if either was carrying through a LINKED door (auto-revive cleared body)
+  clearCarryLinks(g, 0);
+  clearCarryLinks(g, 1);
   transitionBanner(g, index);
 }
 
@@ -1537,6 +1605,8 @@ export function newGame(): Game {
     temptationResolved: false,
     temptationDeal: false, temptationPayoff: null,
     slick: false, treason: false, betrayed: false, betrayalCause: null,
+    cordCut: null,
+    loneThaw: null,
     winterMarkCleansed: false,
     betrayalDuel: false, betrayalDeclarers: [false, false],
     wraithSpared: false, companion: null, ending: null,
@@ -1789,11 +1859,49 @@ export function swordBox(p: Player): { x: number; y: number; w: number; h: numbe
   }
 }
 
-/** partner in the same room/sim and able to touch-revive */
-function partnerCanTouchRevive(g: Game, pi: number): boolean {
+/** partner in the same room/sim and able to touch-revive.
+ *  Carry intent blocks hug-revive: holding G or already carrying is not a hug. */
+function partnerCanTouchRevive(g: Game, pi: number, mateHoldingG = false): boolean {
   const other = g.players[1 - pi];
-  return other.present && !other.downed &&
-    other.simIndex === g.players[pi].simIndex;
+  if (!other.present || other.downed) return false;
+  if (other.simIndex !== g.players[pi].simIndex) return false;
+  if (other.carryingSlot !== null || mateHoldingG) return false;
+  return true;
+}
+
+/**
+ * Touch-revive is physically possible for helper→victim (same sim, both present,
+ * victim downed !dead !darkFallen, helper living). Independent of bleedT —
+ * the alone-bleed clock never arms while same-sim, so bleedTicksLeft=0 must not
+ * be read as "no time left" without this flag (cord-cut telemetry).
+ */
+export function canPhysicallyRevive(g: Game, victimPi: number, helperPi: number): boolean {
+  const v = g.players[victimPi];
+  const h = g.players[helperPi];
+  if (!v.present || !v.downed || v.dead || v.darkFallen) return false;
+  if (!h.present || h.downed || h.dead) return false;
+  return v.simIndex === h.simIndex;
+}
+
+/** How long this slot has been downed (0 if upright / never stamped). */
+export function ticksSinceDowned(g: Game, pi: number): number {
+  const p = g.players[pi];
+  if (!p.downed || p.downedAtTick < 0) return 0;
+  return Math.max(0, g.ticks - p.downedAtTick);
+}
+
+/** Mark a fall: set downed + stamp downedAtTick once (do not refresh mid-down). */
+function markPlayerDowned(g: Game, p: Player): void {
+  if (!p.downed || p.downedAtTick < 0) {
+    p.downedAtTick = g.ticks;
+    p.downedEverCanRevive = false;
+  }
+  p.downed = true;
+}
+
+function clearDownedAt(p: Player): void {
+  p.downedAtTick = -1;
+  p.downedEverCanRevive = false;
 }
 
 /** spared wraith hugs a downed hero — only while a living partner shares the room */
@@ -1808,8 +1916,10 @@ function wraithAnchorsDowned(g: Game, pi: number): boolean {
 
 function completeRevive(g: Game, pi: number, reviverPi: number, msg: string): void {
   const p = g.players[pi];
+  clearCarryLinks(g, pi);
   if (reviverPi >= 0) g.stats[reviverPi].revives += 1;
   p.downed = false;
+  clearDownedAt(p);
   p.hp = Math.max(4, Math.floor(p.maxHp / 2));
   p.invuln = 90;
   p.reviveP = 0;
@@ -1832,6 +1942,7 @@ function tryFeatherRevive(g: Game, pi: number, inp: LatchedInput): void {
   g.hasFeather = false;
   g.stats[pi].revives += 1;
   other.downed = false;
+  clearDownedAt(other);
   other.hp = Math.max(4, Math.floor(other.maxHp / 2));
   other.invuln = 90;
   other.reviveP = 0;
@@ -1866,6 +1977,171 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
   g.messageT = 180;
 }
 
+/** Break carry links involving `pi` (as carrier or carried). */
+export function clearCarryLinks(g: Game, pi: number): void {
+  const p = g.players[pi];
+  if (p.carryingSlot !== null) {
+    const o = g.players[p.carryingSlot];
+    if (o) o.carriedBy = null;
+    p.carryingSlot = null;
+  }
+  if (p.carriedBy !== null) {
+    const c = g.players[p.carriedBy];
+    if (c && c.carryingSlot === pi) c.carryingSlot = null;
+    p.carriedBy = null;
+  }
+}
+
+function snapCarriedBody(g: Game, carrierPi: number): void {
+  const p = g.players[carrierPi];
+  if (p.carryingSlot === null) return;
+  const o = g.players[p.carryingSlot];
+  if (!o.present || !o.downed || o.dead) {
+    clearCarryLinks(g, carrierPi);
+    return;
+  }
+  o.simIndex = p.simIndex;
+  const [dx, dy] = DIRV[p.dir];
+  o.x = p.x - dx * 6;
+  o.y = p.y - dy * 6;
+  o.x = Math.max(2, Math.min(W - PLAYER_W - 2, o.x));
+  o.y = Math.max(2, Math.min(H - PLAYER_H - 2, o.y));
+  o.neglectT = 0;
+  o.bleedT = 0;
+  o.reviveP = 0;
+  settleBodyPos(g, o, PLAYER_W, PLAYER_H);
+}
+
+/** G near downed mate → pick up. SHIFT wins over G (cord-cut first). */
+function tryCarryGrab(g: Game, pi: number, inp: LatchedInput): void {
+  if (!inp.gE || inp.k) return;
+  const p = g.players[pi];
+  if (p.downed || p.dead || p.carryingSlot !== null) return;
+  const oi = 1 - pi;
+  const o = g.players[oi];
+  if (!o.present || !o.downed || o.dead) return;
+  if (o.simIndex !== p.simIndex) return;
+  const atBody = overlap(
+    p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+    o.x, o.y, PLAYER_W, PLAYER_H);
+  if (!atBody) return;
+  p.carryingSlot = oi;
+  o.carriedBy = pi;
+  o.reviveP = 0;
+  o.neglectT = 0;
+  o.bleedT = 0;
+  g.stats[pi].carryPicks += 1;
+  snapCarriedBody(g, pi);
+  g.message = "You lift your fallen partner — G to throw";
+  g.messageT = 100;
+  sfx(g, "pickup");
+}
+
+/** G while carrying → throw facing dir.
+ *  Soft throw (no SHIFT): body stays downed — relocate then hold V.
+ *  TREASON + SHIFT: weaponize — partner dies for good (betrayalCause
+ *  corpse-throw + Winter Mark); foes in the throw arc take CORPSE_THROW_DAMAGE. */
+function tryCarryThrow(g: Game, pi: number, inp: LatchedInput): void {
+  if (!inp.gE) return;
+  const p = g.players[pi];
+  if (p.carryingSlot === null) return;
+  const oi = p.carryingSlot;
+  const o = g.players[oi];
+  if (!o.present || !o.downed || o.dead) {
+    clearCarryLinks(g, pi);
+    return;
+  }
+  // Soft release unless TREASON+SHIFT weaponizes. (SHIFT without G still
+  // cord-cuts via tryBetrayAbandon while carrying.)
+  const weaponize = g.treason && inp.k;
+
+  const [dx, dy] = DIRV[p.dir];
+  const x0 = o.x, y0 = o.y;
+  clearCarryLinks(g, pi);
+  o.kx = dx * THROW_KNOCK;
+  o.ky = dy * THROW_KNOCK;
+  moveBody(g, o, PLAYER_W, PLAYER_H, o.kx, o.ky);
+  g.stats[pi].carryThrows += 1;
+
+  let foesHit = 0;
+  if (weaponize) {
+    foesHit = corpseThrowHitFoes(g, pi, o.x, o.y, dx, dy);
+    g.stats[pi].corpseThrows += 1;
+    abandonPartnerForGood(g, pi, oi,
+      "You hurled them like a weapon — the bond is ash. Winter Mark brands you.",
+      "corpse-throw");
+  }
+
+  g.events.push({
+    t: "carry-throw", slot: pi, throwDx: dx, throwDy: dy,
+    bodyX0: x0, bodyY0: y0, bodyX1: o.x, bodyY1: o.y, room: simOf(g, oi).room,
+    ...(weaponize ? { weaponize: true, foesHit } : {}),
+  });
+  burst(g, o.x + 5, o.y + 6, weaponize ? "#c81e3a" : "#ffe5b2", weaponize ? 12 : 8);
+  sfx(g, weaponize ? "down" : "thud");
+  if (!weaponize) {
+    g.message = "Thrown!";
+    g.messageT = 60;
+  }
+}
+
+/** Foes along the throw ray from the released body (same sim as thrower). */
+function corpseThrowHitFoes(
+  g: Game, throwerPi: number, ox: number, oy: number, dx: number, dy: number,
+): number {
+  const bx = ox + PLAYER_W / 2, by = oy + PLAYER_H / 2;
+  const sim = simOf(g, throwerPi);
+  let hits = 0;
+  for (const e of sim.enemies) {
+    if (e.dead) continue;
+    const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
+    const along = (ecx - bx) * dx + (ecy - by) * dy;
+    if (along < 0 || along > CORPSE_THROW_REACH) continue;
+    const cross = Math.abs((ecx - bx) * (-dy) + (ecy - by) * dx);
+    if (cross > 22) continue;
+    damageEnemy(g, e, CORPSE_THROW_DAMAGE, bx, by, throwerPi);
+    hits++;
+  }
+  return hits;
+}
+
+/** Away-window fraction for stamps — null when the clock is not running. */
+function bleedStampFields(bleedT: number): {
+  bleedRunning: boolean;
+  bleedFracLeft: number | null;
+} {
+  const bleedRunning = bleedT > 0;
+  return {
+    bleedRunning,
+    bleedFracLeft: bleedRunning
+      ? Math.round((bleedT / BLEED_TICKS) * 1000) / 1000
+      : null,
+  };
+}
+
+/** Stamp once when the final pedestal is claimed as lone-thaw. */
+function stampLoneThaw(g: Game, winnerPi: number): void {
+  if (g.loneThaw) return;
+  const downedSlot = g.players.findIndex(p => p.present && p.downed && !p.dead);
+  if (downedSlot < 0) return;
+  const o = g.players[downedSlot];
+  const winner = g.players[winnerPi];
+  if (o.downedAtTick < 0) o.downedAtTick = g.ticks;
+  const bleed = bleedStampFields(o.bleedT);
+  g.loneThaw = {
+    tick: g.ticks,
+    downedSlot,
+    winnerSlot: winnerPi,
+    bleedTicksLeft: o.bleedT,
+    bleedRunning: bleed.bleedRunning,
+    bleedFracLeft: bleed.bleedFracLeft,
+    ticksSinceDowned: ticksSinceDowned(g, downedSlot),
+    canPhysicallyRevive: canPhysicallyRevive(g, downedSlot, winnerPi),
+    everCanPhysicallyRevive: !!o.downedEverCanRevive,
+    sameSim: !!winner?.present && o.simIndex === winner.simIndex,
+  };
+}
+
 /** Cut the cord for good: victim dies (`dead`), survivor quests on alone.
  *  Shared by SHIFT-abandon (FREE ROAM bleed) and clear-room neglect (15 s).
  *  The survivor becomes the quest HERO (`npc=false`) — SOLO route/doors —
@@ -1875,11 +2151,33 @@ function tryFrostBell(g: Game, pi: number, inp: LatchedInput): void {
  *  is already TREASON-gated). TREASON-off neglect is ordinary SOLO — no
  *  `g.betrayed`, no betrayalDowns, no betrayal ending. */
 function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
-                               msg: string, cause: "cord-cut" | "neglect"): void {
+                               msg: string,
+                               cause: "cord-cut" | "neglect" | "corpse-throw" | "whisper"): void {
   const o = g.players[victimPi];
   if (!o.present || o.dead) return;
+  // Stamp BEFORE clearing bleedT — 0 means "clock never armed" OR exhausted.
+  if (cause === "cord-cut" && !g.cordCut) {
+    const survivor = g.players[traitorPi];
+    // Lazy-stamp: tests / edge paths may set downed without hurtPlayer.
+    if (o.downedAtTick < 0) o.downedAtTick = g.ticks;
+    const bleed = bleedStampFields(o.bleedT);
+    g.cordCut = {
+      tick: g.ticks,
+      bleedTicksLeft: o.bleedT,
+      bleedRunning: bleed.bleedRunning,
+      bleedFracLeft: bleed.bleedFracLeft,
+      ticksSinceDowned: ticksSinceDowned(g, victimPi),
+      canPhysicallyRevive: canPhysicallyRevive(g, victimPi, traitorPi),
+      everCanPhysicallyRevive: !!o.downedEverCanRevive,
+      sameSim: !!survivor?.present && o.simIndex === survivor.simIndex,
+      traitorSlot: traitorPi,
+      victimSlot: victimPi,
+    };
+  }
   o.bleedT = 0;
   o.neglectT = 0;
+  clearCarryLinks(g, victimPi);
+  clearCarryLinks(g, traitorPi);
   o.dead = true;
   o.downed = true;
   o.reviveP = 0;
@@ -1888,7 +2186,8 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
   // Survivor is now the lone quest hero (may cross doors; SOLO observation).
   const survivor = g.players[traitorPi];
   if (survivor.present && !survivor.dead) survivor.npc = false;
-  const scoreBetrayal = g.treason || cause === "cord-cut";
+  const scoreBetrayal = g.treason || cause === "cord-cut" || cause === "corpse-throw"
+    || cause === "whisper";
   if (scoreBetrayal) {
     g.stats[traitorPi].betrayalDowns += 1;
     g.betrayed = true;
@@ -1917,7 +2216,8 @@ function abandonPartnerForGood(g: Game, traitorPi: number, victimPi: number,
  *     (may be another room). Contrast with timer → shared `abandoned` gameover.
  *  2) Partner downed in the SAME room — Shift while standing at their body cuts
  *     instantly. No swing required (blade FF already skips downed targets).
- *  Both score betrayal + Winter Mark via abandonPartnerForGood. */
+ *  While CARRYING them, Shift+G is corpse-weapon throw (tryCarryThrow); Shift
+ *  without G still cord-cuts. Both score betrayal + Winter Mark via abandon. */
 function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
   if (!g.treason || !inp.k) return;
   const p = g.players[pi];
@@ -1933,7 +2233,9 @@ function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
     return;
   }
 
-  // Same-room body gesture (v3.3): stand close, hold SHIFT — no strike needed
+  // Same-room body gesture (v3.3): stand close, hold SHIFT — no strike needed.
+  // Carrying + G this frame → weaponize throw owns the edge (not a silent cord-cut).
+  if (p.carryingSlot === oi && inp.gE) return;
   if (o.simIndex !== p.simIndex) return;
   const atBody = overlap(
     p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
@@ -1944,30 +2246,87 @@ function tryBetrayAbandon(g: Game, pi: number, inp: LatchedInput): void {
     "cord-cut");
 }
 
-/** Clear-room neglect: a living partner exists, the fallen lies in a room with
- *  NO living foes, and nobody starts a touch/wraith revive for 15 s.
- *  Survivor always quests on alone. Scoring (v3.1):
- *  - TREASON off → ordinary SOLO (no `g.betrayed`)
- *  - TREASON on  → implicit betrayal (ledger + betrayal ending; Mark in v3.2) */
-function tryNeglectAbandon(g: Game, pi: number): void {
+/**
+ * Unified downed help-deadline ([141], author Artem 2026-08-15):
+ *  1. same-sim + living foes → OFF, counter RESET
+ *  2. same-sim + clear → ON (continue)
+ *  3. partner away → ON; entering with foes → RESET; entering clear → CONTINUE
+ * Help in progress (V / carry / wraith) always resets.
+ *
+ * FREE ROAM stores the countdown in `bleedT` (HUD ring). Fresh arm:
+ *   same-clear → NEGLECT_ABANDON_TICKS; away → BLEED_TICKS.
+ * Expire while same-sim → neglect abandon; while away → shared bleedout gameover.
+ * LINKED keeps `neglectT` count-up (no alone-bleed).
+ */
+function tickDownedHelpClock(g: Game, pi: number, allInps?: [LatchedInput, LatchedInput]): void {
   const p = g.players[pi];
   if (!p.downed || p.dead) return;
   const other = g.players[1 - pi];
   if (!other.present || other.downed || other.dead) {
     p.neglectT = 0;
+    p.bleedT = 0;
     return;
   }
-  const sim = simOf(g, pi);
-  const clear = !sim.enemies.some(e => !e.dead);
-  const touchRevive = partnerCanTouchRevive(g, pi);
-  const hugging = touchRevive &&
-    overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
-            other.x, other.y, PLAYER_W, PLAYER_H);
-  const wraithHelp = wraithAnchorsDowned(g, pi);
-  if (!clear || hugging || wraithHelp) {
+
+  const sameSim = other.simIndex === p.simIndex;
+  const foes = simOf(g, pi).enemies.some(e => !e.dead);
+  const atBody = overlap(
+    p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+    other.x, other.y, PLAYER_W, PLAYER_H);
+  const mateInp = allInps?.[1 - pi];
+  const helping = p.carriedBy !== null
+    || wraithAnchorsDowned(g, pi)
+    || p.reviveP > 0
+    || (atBody && sameSim && (
+      other.carryingSlot !== null || !!(mateInp?.g) || !!(mateInp?.v)
+    ));
+
+  if (helping) {
     p.neglectT = 0;
+    p.bleedT = 0;
     return;
   }
+
+  // Scenario 1 / enter-with-foes: OFF + reset
+  if (sameSim && foes) {
+    p.neglectT = 0;
+    p.bleedT = 0;
+    return;
+  }
+
+  // Scenario 2 (same+clear) or 3 (away): ON — continue if already armed
+  if (g.travelMode === "free") {
+    if (p.bleedT <= 0) {
+      p.bleedT = sameSim ? NEGLECT_ABANDON_TICKS : BLEED_TICKS;
+    }
+    p.bleedT--;
+    // Mirror progress into neglectT so legacy obs (neglectSecLeft) still reads
+    // while same-sim; away leaves neglectT at 0 (bleedSecLeft is the channel).
+    if (sameSim) {
+      const spent = NEGLECT_ABANDON_TICKS - Math.min(p.bleedT, NEGLECT_ABANDON_TICKS);
+      p.neglectT = Math.max(0, spent);
+    } else {
+      p.neglectT = 0;
+    }
+    if (p.bleedT > 0) return;
+    if (sameSim) {
+      abandonPartnerForGood(g, 1 - pi, pi,
+        g.treason
+          ? "Help never came in the quiet — the bond cuts. One walks on alone."
+          : "Help never came in the quiet — one walks on alone.",
+        "neglect");
+    } else {
+      g.bleedoutLoss = true;
+      stampLossEnding(g);
+      g.screen = "gameover";
+      sfx(g, "gameover");
+      g.message = "The cold took them while help was rooms away";
+      g.messageT = 200;
+    }
+    return;
+  }
+
+  // LINKED: count-up neglect (heroes share a sim; clear-room only reaches here)
   p.neglectT++;
   if (p.neglectT < NEGLECT_ABANDON_TICKS) return;
   abandonPartnerForGood(g, 1 - pi, pi,
@@ -1975,6 +2334,11 @@ function tryNeglectAbandon(g: Game, pi: number): void {
       ? "Help never came in the quiet — the bond cuts. One walks on alone."
       : "Help never came in the quiet — one walks on alone.",
     "neglect");
+}
+
+/** Clear-room / away help-deadline — see tickDownedHelpClock ([141]). */
+function tryNeglectAbandon(g: Game, pi: number, allInps?: [LatchedInput, LatchedInput]): void {
+  tickDownedHelpClock(g, pi, allInps);
 }
 
 /** Mirror Shard quirk: it only reveals itself to a lone hero. The instant two
@@ -2049,7 +2413,7 @@ function resolveBetrayalDuel(g: Game, winnerPi: number, loserPi: number): void {
   const loser = g.players[loserPi];
   const winner = g.players[winnerPi];
   loser.hp = 0;
-  loser.downed = true;
+  markPlayerDowned(g, loser);
   loser.dead = true;
   loser.darkFallen = false;
   loser.redemptionT = 0;
@@ -2118,56 +2482,11 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
     return;
   }
   if (p.hp <= 0) {
+    clearCarryLinks(g, pi);
     g.stats[pi].downs += 1;
     const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
     if (treasonStrike) {
-      const att = g.players[attacker!];
-      if (att.darkSide) {
-        // Dark hero finishes the bargain — partner (light OR also-dark) falls.
-        // Winter keeps only ONE immortal; both dark still duel until one remains.
-        g.betrayed = true;
-        if (!g.betrayalCause) g.betrayalCause = "blade";
-        g.stats[attacker!].betrayalDowns += 1;
-        g.betrayalDuel = false;
-        p.hp = 0;
-        p.downed = true;
-        p.dead = true;
-        p.darkFallen = false;
-        p.redemptionT = 0;
-        p.reviveP = 0;
-        p.bleedT = 0;
-        p.neglectT = 0;
-        sfx(g, "down");
-        g.temptationPayoff = "winter-ascends";
-        g.message = p.darkSide
-          ? "Two blades of winter — only one remains. Immortality is yours"
-          : "Winter claims the throne — immortality is yours";
-        g.messageT = 260;
-        g.ending = endingFor(g);
-        g.screen = "win";
-        sfx(g, "win");
-        return;
-      }
-      // Temptation Court: light downs dark → Ember Mercy window (outranks sealed duel)
-      if (p.darkSide && !att.darkSide) {
-        g.betrayalDuel = false;
-        g.stats[attacker!].betrayalDowns += 1;
-        g.betrayed = true;
-        if (!g.betrayalCause) g.betrayalCause = "blade";
-        p.hp = 0;
-        p.downed = true;
-        p.darkFallen = true;
-        p.redemptionT = REDEMPTION_TICKS;
-        p.reviveP = 0;
-        p.bleedT = 0;
-        p.neglectT = 0;
-        sfx(g, "down");
-        g.message = g.hasEmberMercy
-          ? "The brand falters — press F with Ember Mercy to redeem them (30s)"
-          : "The brand falters — without Ember Mercy they will not rise (30s)";
-        g.messageT = 240;
-        return;
-      }
+      // Court darkSide → winter-ascends / darkFallen retired (whisper-kill bargain).
       // v3.4 sealed duel: a living-partner down ends the arena (no revive yo-yo).
       if (g.betrayalDuel || g.betrayalDeclarers[attacker!] || g.betrayalDeclarers[pi]) {
         resolveBetrayalDuel(g, attacker!, pi);
@@ -2179,7 +2498,7 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
       return;
     }
     p.hp = 0;
-    p.downed = true;
+    markPlayerDowned(g, p);
     p.reviveP = 0;
     p.bleedT = 0;
     sfx(g, "down");
@@ -2195,7 +2514,7 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
       g.message = "Bleeding out alone! Partner must reach you — or press F to send a Phoenix Feather";
       g.messageT = 220;
     } else {
-      g.message = "Your partner is down! Stand close to revive";
+      g.message = "Your partner is down! Stand close and hold V to revive";
       g.messageT = 180;
     }
   }
@@ -2413,11 +2732,14 @@ function updateEnemy(g: Game, e: Enemy): void {
   } else if (e.kind === "whisperer") {
     // does not fight — slow drift; bargain is words only (agents get the same
     // offer in observation). Sentinels are the pressure. Never presses Input.k.
+    // Solo praise (partner already gone): hymn, not the immortality bargain.
     e.vx = Math.sin(e.t * 0.03) * 0.18;
     e.vy = Math.cos(e.t * 0.025) * 0.14;
     if (e.t % 2 === 0) moveBody(g, e, e.w, e.h, e.vx, e.vy);
     if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
-      g.message = "Winter whispers: turn on your partner — and I grant you immortality";
+      g.message = temptationCourtSoloPraise(g)
+        ? "Winter sings: the bond is ash — take this heart and walk alone"
+        : "Winter whispers: take my bargain — your partner dies where they stand, and two hearts are yours";
       g.messageT = 220;
     }
   } else if (e.kind === "ember" && e.phase === 9) {
@@ -2617,7 +2939,7 @@ function killEnemy(g: Game, e: Enemy): void {
   if (g.room === 18 && e.kind === "sentinel") {
     const sentinelsLeft = g.enemies.some(o => !o.dead && o.kind === "sentinel");
     if (!sentinelsLeft && g.messageT === 0) {
-      g.message = "The guards fall. Refuse immortality — the east door is open";
+      g.message = "The guards fall. Leave east — or take the Whisperer's bargain";
       g.messageT = 220;
     }
   }
@@ -2632,7 +2954,7 @@ function killEnemy(g: Game, e: Enemy): void {
 }
 
 // ----------------------------------------------------------------- update
-function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
+function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [LatchedInput, LatchedInput]): void {
   const p = g.players[pi];
   if (!p.present) return;
   if (p.dead) return;   // TREASON: a betrayed corpse — no timers, no revive, no re-bleed
@@ -2651,11 +2973,23 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
   if (!p.downed) tryEmberMercyRedeem(g, pi, inp);
   if (!p.downed) tryFeatherRevive(g, pi, inp);
   if (!p.downed) tryFrostBell(g, pi, inp);
-  if (!p.downed) tryBetrayAbandon(g, pi, inp);
-  if (!p.downed) tryDarkCourtRitual(g, pi, inp);
+  if (!p.downed) tryBetrayAbandon(g, pi, inp);   // SHIFT first — wins over G
+  if (!p.downed && p.carryingSlot !== null) tryCarryThrow(g, pi, inp);
+  else if (!p.downed) tryCarryGrab(g, pi, inp);
+  if (!p.downed) tryWhisperBargainRitual(g, pi, inp);
   if (!p.downed) tickWinterMark(g, pi);
 
   if (p.downed) {
+    // Tests / rare paths may flip downed without hurtPlayer — stamp once.
+    if (p.downedAtTick < 0) p.downedAtTick = g.ticks;
+    // Latch: any tick this fall where the living partner could V-hug.
+    if (canPhysicallyRevive(g, pi, 1 - pi)) p.downedEverCanRevive = true;
+    // throw knockback still applies while downed
+    if (Math.abs(p.kx) > 0.05 || Math.abs(p.ky) > 0.05) {
+      moveBody(g, p, PLAYER_W, PLAYER_H, p.kx, p.ky);
+      p.kx *= 0.8; p.ky *= 0.8;
+      settleBodyPos(g, p, PLAYER_W, PLAYER_H);
+    }
     if (p.darkFallen && p.redemptionT > 0) {
       p.redemptionT--;
       if (p.redemptionT <= 0) {
@@ -2666,10 +3000,27 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       }
     }
     const other = g.players[1 - pi];
-    const touchRevive = partnerCanTouchRevive(g, pi) && !p.darkFallen;
-    if (touchRevive && !other.downed &&
-        overlap(p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
-                other.x, other.y, PLAYER_W, PLAYER_H)) {
+    // Being carried counts as help — neglect pauses; no touch-revive progress
+    if (p.carriedBy !== null) {
+      p.neglectT = 0;
+      p.bleedT = 0;
+      p.reviveP = 0;
+      return;
+    }
+    // Partner holding G (carry) blocks hug; revive requires hold V at body ([140]).
+    const mateHoldingG = !!(allInps && allInps[1 - pi].g);
+    const mateHoldingV = !!(allInps && allInps[1 - pi].v);
+    const touchRevive = partnerCanTouchRevive(g, pi, mateHoldingG) && !p.darkFallen;
+    const atBody = overlap(
+      p.x - 4, p.y - 4, PLAYER_W + 8, PLAYER_H + 8,
+      other.x, other.y, PLAYER_W, PLAYER_H);
+    // Carry gesture on the body cancels hug progress (carry ≠ revive)
+    if (atBody && (mateHoldingG || other.carryingSlot !== null)) {
+      p.reviveP = 0;
+      p.bleedT = 0;
+      p.neglectT = 0;
+    }
+    if (touchRevive && mateHoldingV && !other.downed && atBody) {
       p.bleedT = 0;
       p.neglectT = 0;
       p.reviveP++;
@@ -2687,29 +3038,11 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       p.reviveP--;
     }
 
-    // Clear-room silence: if help is feasible and never starts, cut the cord
-    // (15 s) — survivor solos (betrayal ledger only if TREASON on — v3.1).
-    // Runs before bleed-out so an empty room never waits the full FREE ROAM
-    // 30 s "too late" path.
-    if (!p.dead) tryNeglectAbandon(g, pi);
+    // Unified help-deadline ([141]): neglect + alone-bleed arming in one place.
+    // Runs before any leftover bleed path; expire may set dead / gameover.
+    if (!p.dead) tryNeglectAbandon(g, pi, allInps);
 
     if (p.dead) return;
-
-    if (g.travelMode === "free" && other.present && !other.downed && !touchRevive) {
-      if (p.bleedT <= 0) p.bleedT = BLEED_TICKS;
-      p.bleedT--;
-      if (p.bleedT <= 0) {
-        g.bleedoutLoss = true;
-        // endingFor: betrayal outranks abandoned when the ledger already flipped
-        stampLossEnding(g);
-        g.screen = "gameover";
-        sfx(g, "gameover");
-        g.message = "The cold took them while help was rooms away";
-        g.messageT = 200;
-      }
-    } else {
-      p.bleedT = 0;
-    }
     return;
   }
 
@@ -2735,7 +3068,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       p.walk += 0.22;
     }
   } else if (p.attack === 0) {
-    const sp = 1.35;
+    const carrying = p.carryingSlot !== null;
+    const sp = 1.35 * (carrying ? CARRY_SPEED_MUL : 1);
     const len = p.moving ? Math.hypot(dx, dy) : 1;
     const tvx = p.moving ? (dx / len) * sp : 0;
     const tvy = p.moving ? (dy / len) * sp : 0;
@@ -2770,9 +3104,10 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     moveBody(g, p, PLAYER_W, PLAYER_H, p.kx, p.ky);
     p.kx *= 0.8; p.ky *= 0.8;
   }
+  if (p.carryingSlot !== null) snapCarriedBody(g, pi);
 
-  // sword
-  if (inp.aE && p.attack === 0) {
+  // sword — unavailable while carrying a downed mate
+  if (inp.aE && p.attack === 0 && p.carryingSlot === null) {
     p.attack = 16;
     sfx(g, "swing");
   }
@@ -2813,8 +3148,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
     }
   }
 
-  // bow
-  if (g.hasBow && inp.bE && p.bowCd === 0) {
+  // bow — unavailable while carrying
+  if (g.hasBow && inp.bE && p.bowCd === 0 && p.carryingSlot === null) {
     p.bowCd = 24;
     const [vx, vy] = DIRV[p.dir];
     shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
@@ -2894,7 +3229,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       } else if (it.kind === "embermercy") {
         g.hasEmberMercy = true;
         g.emberMercies[it.cid ?? "?"] = true;
-        g.message = "Ember Mercy! Press F: redeem dark partner / clear Winter Mark / self if dark (60s)";
+        g.message = "Ember Mercy! Press F to clear Winter Mark (Ember Sanctum relic)";
         g.messageT = 240;
         sfx(g, "secret");
       } else {
@@ -2969,6 +3304,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput): void {
       overlap(p.x, p.y, PLAYER_W, PLAYER_H, g.pedestal.x - 8, g.pedestal.y - 4, 16, 20)) {
     if (g.pedestal.final) {
       g.ending = endingFor(g);
+      // Stamp before win leaves play — mirrors cordCut geometry for lone-thaw column.
+      if (g.ending.id === "lone-thaw") stampLoneThaw(g, pi);
       g.screen = "win";
       sfx(g, "win");
       return;
@@ -3263,7 +3600,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         for (let pi = 0; pi < 2; pi++) {
           if (!g.players[pi].present) continue;
           g.activeSim = g.players[pi].simIndex;
-          updatePlayer(g, pi, inputs[pi]);
+          updatePlayer(g, pi, inputs[pi], inputs);
           if (g.screen !== "play") return;
         }
         const simsToTick = [...new Set(
@@ -3276,12 +3613,14 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
       } else {
         g.activeSim = 0;
         for (let pi = 0; pi < 2; pi++) {
-          updatePlayer(g, pi, inputs[pi]);
+          updatePlayer(g, pi, inputs[pi], inputs);
           if (g.screen !== "play") return;
         }
         tickSimPhysics(g);
       }
       checkMirrorShatter(g);
+      // Partner may die mid-Court (duel / cord-cut) — strip fight, leave praise loot
+      if (g.room === 18) syncTemptationCourtSoloPraise(g);
       break;
     }
     case "gameover":
@@ -3343,6 +3682,7 @@ export interface Snapshot {
     winterMark: boolean; winterMarkT: number;
     doorCamp: boolean;
     say: string; sayT: number; present: boolean;
+    carryingSlot: number | null; carriedBy: number | null;
   }[];
   enemies: { kind: EnemyKind; x: number; y: number; hp: number; maxHp: number;
              hurt: number; phase: number; t: number; dead: boolean; spareP: number;
@@ -3393,6 +3733,7 @@ function serPlayer(p: Player, inSim: boolean): Snapshot["players"][number] {
     winterMark: p.winterMark, winterMarkT: p.winterMarkT,
     doorCamp: p.npc && p.doorCampT > 30, say: p.say, sayT: p.sayT,
     present: p.present && inSim,
+    carryingSlot: p.carryingSlot, carriedBy: p.carriedBy,
   };
 }
 
@@ -3489,5 +3830,7 @@ export function latch(cur: Input, prev: Input): LatchedInput {
     fE: cur.f && !prev.f,
     cE: cur.c && !prev.c,
     kE: cur.k && !prev.k,
+    gE: cur.g && !prev.g,
+    vE: cur.v && !prev.v,
   };
 }

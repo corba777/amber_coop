@@ -213,7 +213,7 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r",
   ArrowUp: "u", KeyW: "u", ArrowDown: "d", KeyS: "d",
   Space: "a", KeyJ: "a", KeyZ: "a",   KeyX: "b", KeyK: "b",
-  KeyF: "f", KeyC: "c",
+  KeyF: "f", KeyC: "c", KeyG: "g", KeyV: "v",
   ShiftLeft: "k", ShiftRight: "k",
   Enter: "st", KeyE: "st",
 };
@@ -1178,6 +1178,15 @@ function render(): void {
   }
   const s = snap;
   music.mode = musicModeFor(s);
+
+  // client prediction (same as 2D) — include carry slowdown when holding a downed mate
+  const nowT = performance.now();
+  if (snap.screen === "play" && !disconnected) {
+    const meP = snap.players[mySlot];
+    stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick,
+      meP?.carryingSlot != null);
+  }
+  lastFrameT = nowT;
 
   // local swing / bow visuals count down every frame — WITHOUT this the own-hero
   // sword sticks at localAttack=16 forever (t=0, a frozen blade) while the partner,

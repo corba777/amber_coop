@@ -15,7 +15,7 @@
  * prediction is never corrected — no backward drag, and (because reconcile adds
  * no motion of its own) nothing can double-count into an overshoot. */
 
-import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID, ICE_ACCEL, ICE_DECEL, SLIDE_SPEED } from "../shared/core";
+import { Input, PLAYER_W, PLAYER_H, TILE, COLS, ROWS, W, H, SOLID, ICE_ACCEL, ICE_DECEL, SLIDE_SPEED, CARRY_SPEED_MUL } from "../shared/core";
 
 /** where our prediction stood when we sent input `seq` — the anchor the server
  *  answers with its own position for the same seq */
@@ -80,13 +80,14 @@ export function movePredicted(tiles: string[], b: { x: number; y: number },
 /** advance a body by dtMs of held input (attack freezes movement, exactly like
  *  the core rule). `slick` mirrors g.slick: on ice tiles the body coasts. */
 export function stepPred(b: Body, tiles: string[], inp: Input,
-                         attacking: boolean, dtMs: number, slick = false): void {
+                         attacking: boolean, dtMs: number, slick = false,
+                         carrying = false): void {
   if (!b.live || attacking) return;   // frozen like core — velocity left untouched
   const dx = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
   const dy = (inp.d ? 1 : 0) - (inp.u ? 1 : 0);
   const moving = dx !== 0 || dy !== 0;
   if (!moving && b.vx === 0 && b.vy === 0) return;   // idle & not coasting
-  const sp = 1.35;
+  const sp = 1.35 * (carrying ? CARRY_SPEED_MUL : 1);
   const len = moving ? Math.hypot(dx, dy) : 1;
   const tvx = moving ? (dx / len) * sp : 0;
   const tvy = moving ? (dy / len) * sp : 0;

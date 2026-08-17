@@ -277,6 +277,8 @@ const KEYMAP: Record<string, keyof Input | undefined> = {
   KeyX: "b", KeyK: "b",
   KeyF: "f",
   KeyC: "c",
+  KeyG: "g",
+  KeyV: "v",
   ShiftLeft: "k", ShiftRight: "k",
   Enter: "st", KeyE: "st",
 };
@@ -825,7 +827,8 @@ function render(): void {
   const alpha = Math.min(1, (nowT - snapTime) / snapInterval);
   if (snap && snap.screen === "play" && !disconnected) {
     const meP = snap.players[mySlot];
-    stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick);
+    stepPred(pred, snap.tiles, state, !!meP && meP.attack > 0, nowT - lastFrameT, !!snap.slick,
+      meP?.carryingSlot != null);
   }
   lastFrameT = nowT;
   if (localAttack > 0) localAttack--;
