@@ -5,4 +5,14 @@ services:
       - "8081:8080"
     env_file:
       - .env
+    volumes:
+      # Host ADC lives next to the repo: ../google_account/application_default_credentials.json
+      # (authorized_user from `gcloud auth application-default login`). Also accept a
+      # service_account.json in the same folder.
+      - ../google_account:/app/google_account:ro
+      # Optional host gcloud ADC (has quota_project_id):
+      # - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /app/google_account/application_default_credentials.json
+      # VERTEX_PROJECT / VERTEX_LOCATION / VERTEX_MODEL also come from .env
     restart: unless-stopped

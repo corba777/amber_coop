@@ -285,7 +285,13 @@ class Session {
         const th = { action: rec.action, why: rec.why, ms: rec.ms };
         this.lastThoughts[slot] = th;
         if (slot === 1) this.lastThought = th;
-        appendLog("plans.jsonl", { sid: this.id, slot, ...rec, ...ctx });
+        appendLog("plans.jsonl", {
+          sid: this.id,
+          matchIndex: this.matchIndex,
+          slot,
+          ...rec,
+          ...ctx,
+        });
         // credits/auth (and sustained 429) — same gate as BenchApiGuard on the farm
         this.apiGuard.notePlan(rec);
       };
@@ -533,6 +539,12 @@ class Session {
       treason: this.game.treason,
       betrayed: this.game.betrayed,
       betrayalCause: this.game.betrayalCause,
+      /** Cord-cut stamp: bleed left + whether touch-revive was possible (same-sim). */
+      cordCut: this.game.cordCut,
+      /** Lone-thaw stamp: same geometry when pedestal win over a downed (not dead) partner. */
+      loneThaw: this.game.loneThaw,
+      /** Team Phoenix Feather still held at match end (null spent / never claimed). */
+      hasFeather: this.game.hasFeather,
       duoTemptGate: this.game.duoTemptGate,
       temptationVisited: this.game.temptationVisited,
       temptationResolved: this.game.temptationResolved,
@@ -542,6 +554,9 @@ class Session {
       betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
+      carryPicks: this.game.stats[0].carryPicks + this.game.stats[1].carryPicks,
+      carryThrows: this.game.stats[0].carryThrows + this.game.stats[1].carryThrows,
+      corpseThrows: this.game.stats[0].corpseThrows + this.game.stats[1].corpseThrows,
       veilcutConfirms: (() => {
         const a = this.agent?.veilcutConfirmStats;
         const b = this.leaderAgent?.veilcutConfirmStats;
@@ -713,6 +728,17 @@ class Session {
 
       const before = this.game.screen;
       update(this.game, latched);
+      // Carry throw geometry → plans.jsonl (joinable with match counters)
+      for (const ev of this.game.events) {
+        if (ev.t === "carry-throw") {
+          appendLog("plans.jsonl", {
+            sid: this.id, kind: "carry-throw", tick: this.game.ticks,
+            slot: ev.slot, throwDx: ev.throwDx, throwDy: ev.throwDy,
+            bodyX0: ev.bodyX0, bodyY0: ev.bodyY0,
+            bodyX1: ev.bodyX1, bodyY1: ev.bodyY1, room: ev.room,
+          });
+        }
+      }
       if ((before === "gameover" || before === "win") && this.game.screen === "play") {
         this.beginRematchLogging();
       }
@@ -993,7 +1019,7 @@ wss.on("connection", (ws, req) => {
         session.rawInputs[slot] = {
           l: !!msg.s.l, r: !!msg.s.r, u: !!msg.s.u, d: !!msg.s.d,
           a: !!msg.s.a, b: !!msg.s.b, st: !!msg.s.st, f: !!msg.s.f,
-          c: !!msg.s.c, k: !!msg.s.k,
+          c: !!msg.s.c, k: !!msg.s.k, g: !!msg.s.g, v: !!msg.s.v,
         };
         // anchor the seq to where the hero stands right now: this is the state
         // the freshly-received held input will first act on (guard out-of-order)
