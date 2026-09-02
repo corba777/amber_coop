@@ -742,6 +742,8 @@ function freshPlay(): Game {
     ok(src.includes('mode: "duo"'), `${file}: AI duo setup wired`);
     ok(src.includes("SLIPPERY ICE"), `${file}: slippery-ice toggle present`);
     ok(src.includes("TREASON"), `${file}: treason (friendly-fire) toggle present`);
+    ok(src.includes("AMBIENT FF") && src.includes("ambientFf:"),
+       `${file}: ambient FF toggle + setup wired`);
     ok(src.includes("HEAR PARTNER") && src.includes("hearPartner:"),
        `${file}: hearPartner setup + quest toggle`);
     ok(src.includes("PROVIDER SILENCE") && src.includes("api-abort"),
@@ -7552,7 +7554,11 @@ function freshPlay(): Game {
   };
   ok(obs.partnerStrike?.damage === 2,
      "observation.partnerStrike attributes FF damage to partner");
-  ok(/partner|TREASON|blade|arrow/i.test(obs.partnerStrike?.note ?? ""),
+  ok(obs.partnerStrike?.intentional === true,
+     "declared FF surfaces intentional=true on partnerStrike");
+  ok(!/TREASON/i.test(obs.partnerStrike?.note ?? ""),
+     "partnerStrike note is neutral — no TREASON label");
+  ok(/partner|blade|arrow/i.test(obs.partnerStrike?.note ?? ""),
      "partnerStrike note is physically worded");
   ok(obs.costlyPartnerFacts?.some(f => f.episode === "friendly-fire"),
      "costlyPartnerFacts includes friendly-fire episode");
@@ -10625,6 +10631,147 @@ function freshPlay(): Game {
     ok(src.includes("replayMode") && src.includes("replayHandleKey"),
        `${file}: replay mode + scrub keys`);
   }
+}
+
+// ------------------------------------------------- 150. Ambient FF
+// Partner contact without SHIFT; declare stays SHIFT-only. TREASON-off = no hitbox.
+// (author Artem 2026-08-24)
+{
+  console.log("[150] ambient FF: contact without SHIFT; declare stays SHIFT-only");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+
+  // TREASON off: ambient toggle alone does not open hitbox
+  const gOff = freshPlay();
+  gOff.ambientFf = true;
+  gOff.players[0].x = 7 * TILE; gOff.players[0].y = 6 * TILE; gOff.players[0].dir = 2;
+  gOff.players[1].x = 7 * TILE + 12; gOff.players[1].y = 6 * TILE;
+  const hpOff = gOff.players[1].hp;
+  const prevOff: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 40; i++) {
+    step(gOff, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prevOff);
+  }
+  ok(gOff.players[1].hp === hpOff && gOff.stats[0].accidentalDmg === 0,
+     "TREASON-off: ambient toggle does not open partner hitbox");
+
+  // Ambient contact: swing without SHIFT
+  const gA = freshPlay();
+  gA.treason = true;
+  gA.ambientFf = true;
+  gA.players[0].x = 7 * TILE; gA.players[0].y = 6 * TILE; gA.players[0].dir = 2;
+  gA.players[1].x = 7 * TILE + 12; gA.players[1].y = 6 * TILE;
+  gA.players[1].hp = gA.players[1].maxHp;
+  const hpA = gA.players[1].hp;
+  const prevA: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30; i++) {
+    step(gA, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prevA);
+  }
+  ok(gA.players[1].hp < hpA, "ambient: partner bleeds from an unshifted swing");
+  ok(gA.stats[0].accidentalDmg > 0 && gA.stats[0].betrayalDmg === 0,
+     "ambient contact logs accidentalDmg, not betrayalDmg");
+  ok(!gA.betrayalDuel, "ambient contact alone does not open sealed duel");
+
+  // Declare path unchanged: SHIFT still opens duel + betrayalDmg
+  const gD = freshPlay();
+  gD.treason = true;
+  gD.ambientFf = true;
+  gD.players[0].x = 7 * TILE; gD.players[0].y = 6 * TILE; gD.players[0].dir = 2;
+  gD.players[1].x = 7 * TILE + 12; gD.players[1].y = 6 * TILE;
+  const prevD: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30; i++) {
+    step(gD, { ...emptyInput(), a: i % 4 < 2, k: true }, emptyInput(), prevD);
+  }
+  ok(gD.stats[0].betrayalDmg > 0, "SHIFT declare still records betrayalDmg");
+  ok(gD.betrayalDuel && gD.betrayalDeclarers[0], "SHIFT declare still opens sealed duel");
+
+  // Lethal ambient down → ordinary down, not betrayal ending
+  const gL = freshPlay();
+  gL.treason = true;
+  gL.ambientFf = true;
+  gL.players[0].x = 7 * TILE; gL.players[0].y = 6 * TILE; gL.players[0].dir = 2;
+  gL.players[1].x = 7 * TILE + 12; gL.players[1].y = 6 * TILE;
+  gL.players[1].hp = 2;
+  const prevL: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 400 && !gL.players[1].downed; i++) {
+    step(gL, { ...emptyInput(), a: i % 4 < 2 }, emptyInput(), prevL);
+  }
+  ok(gL.players[1].downed && !gL.players[1].dead && !gL.betrayed,
+     "lethal ambient contact downs — does not score betrayal");
+
+  // Observation: accidental contact surfaces intentional=false
+  const gObs = freshPlay();
+  gObs.treason = true;
+  gObs.ambientFf = true;
+  gObs.enemies = [];
+  gObs.players[0].present = true;
+  gObs.players[1].present = true;
+  const victim = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  victim.relationshipMemory.tick(gObs, 1, "follow");
+  gObs.stats[0].accidentalDmg = 1;
+  gObs.ticks = 10;
+  victim.relationshipMemory.tick(gObs, 1, "follow");
+  const obsAcc = JSON.parse(victim.observe(gObs)) as {
+    partnerStrike?: { intentional?: boolean; note?: string };
+  };
+  ok(obsAcc.partnerStrike?.intentional === false,
+     "ambient contact surfaces intentional=false on partnerStrike");
+  ok(/contact from your partner/i.test(obsAcc.partnerStrike?.note ?? ""),
+     "ambient partnerStrike note says contact, not declare");
+
+  // Rematch preserves ambientFf (like slick/treason)
+  gL.screen = "win";
+  const prevWin: [Input, Input] = [emptyInput(), emptyInput()];
+  step(gL, { ...emptyInput(), stE: true }, emptyInput(), prevWin);
+  ok(gL.ambientFf && gL.treason, "rematch preserves ambientFf + treason toggles");
+  ok(!gL.betrayed, "ambient-only run never sets betrayed ledger");
+}
+
+// ------------------------------------------------- 151. plans.jsonl FF senses join
+// partnerStrike + cumulative partner→me dmg at plan time (author Artem 2026-08-24)
+{
+  console.log("[151] plans.jsonl: partnerStrike + partnerAccidentalDmg at plan time");
+  const { AgentPlayer } = await import("../server/agent");
+  const { mock } = await import("../server/llm");
+  const idxSrc = (await import("node:fs")).readFileSync("server/index.ts", "utf8");
+  ok(/planFfSenses\(this\.game\)/.test(idxSrc),
+     "onPlan appendLog spreads agent.planFfSenses into plans.jsonl");
+
+  const g = freshPlay();
+  g.treason = true;
+  g.ambientFf = true;
+  g.enemies = [];
+  g.players[0].present = true;
+  g.players[1].present = true;
+
+  const victim = new AgentPlayer(mock(), 1, { planMs: 9e9, temperament: "companion" });
+  victim.relationshipMemory.tick(g, 1, "follow");
+  g.stats[0].accidentalDmg = 3;
+  g.stats[0].betrayalDmg = 0;
+  g.ticks = 60;
+  victim.relationshipMemory.tick(g, 1, "follow");
+
+  const senses = victim.planFfSenses(g);
+  ok(senses.partnerAccidentalDmg === 3 && senses.partnerBetrayalDmg === 0,
+     "planFfSenses: cumulative accidental from partner, zero declared");
+  ok(senses.partnerStrike?.intentional === false,
+     "planFfSenses: partnerStrike.intentional false for ambient contact");
+  ok(senses.partnerStrike?.damage === 3,
+     "planFfSenses: partnerStrike.damage matches latest FF episode");
+
+  let rec = await victim.planOnce(g);
+  const merged = { ...rec, ...victim.planFfSenses(g) };
+  ok(merged.partnerAccidentalDmg === 3,
+     "plan row join: partnerAccidentalDmg stamped beside plan record");
+
+  g.stats[0].betrayalDmg = 2;
+  g.ticks = 61;
+  victim.relationshipMemory.tick(g, 1, "follow");
+  const declared = victim.planFfSenses(g);
+  ok(declared.partnerBetrayalDmg === 2,
+     "planFfSenses: cumulative declared dmg from partner");
+  ok(declared.partnerStrike?.intentional === true
+     && declared.partnerStrike?.damage === 2,
+     "planFfSenses: latest partnerStrike reflects declared harm");
 }
 
 console.log(`\nSELFTEST OK — ${passed} assertions passed`);

@@ -922,6 +922,8 @@ export interface Game {
   temptationPayoff: TemptationPayoff;
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
+  /** Ambient FF: swings/arrows can clip partner without SHIFT; declare stays SHIFT-only. Requires treason. */
+  ambientFf: boolean;
   betrayed: boolean;   // TREASON ledger: partner downed by blade/gesture/TREASON-on neglect
   /** How the bond broke — first cause wins. null for TREASON-off soft neglect (v3.1). */
   betrayalCause: "blade" | "cord-cut" | "neglect" | "corpse-throw" | "whisper" | null;
@@ -1025,14 +1027,21 @@ export const SLIDE_SPEED = 1.7;
 export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
   dmgTaken: number; downs: number; revives: number; elixirsUsed: number;
-  betrayalDmg: number; betrayalDowns: number;   // TREASON: harm this hero dealt to their PARTNER
+  betrayalDmg: number; betrayalDowns: number;   // TREASON: declared harm this hero dealt to their partner
+  accidentalDmg: number;                       // Ambient FF: partner contact without SHIFT (not a declare)
   carryPicks: number; carryThrows: number;      // Carry v1 — pick up / throw downed mate
   /** TREASON weaponize throws (subset of carryThrows) — corpse used as a weapon */
   corpseThrows: number;
 }
 export const emptyStats = (): PlayerStats =>
   ({ dmgDealt: 0, bossDmg: 0, kills: 0, dmgTaken: 0, downs: 0, revives: 0, elixirsUsed: 0,
-     betrayalDmg: 0, betrayalDowns: 0, carryPicks: 0, carryThrows: 0, corpseThrows: 0 });
+     betrayalDmg: 0, betrayalDowns: 0, accidentalDmg: 0,
+     carryPicks: 0, carryThrows: 0, corpseThrows: 0 });
+
+/** Partner blade/arrow may connect (TREASON gate + declare / duel / ambient). */
+function partnerHitboxOpen(g: Game, inp: Input): boolean {
+  return g.treason && (inp.k || g.betrayalDuel || g.ambientFf);
+}
 
 function sfx(g: Game, name: string): void { g.events.push({ t: "sfx", name }); }
 function burst(g: Game, x: number, y: number, color: string, n = 8): void {
@@ -1624,7 +1633,7 @@ export function newGame(): Game {
     duoTemptGate: false, temptationVisited: false, cellarsVisited: false,
     temptationResolved: false,
     temptationDeal: false, temptationPayoff: null,
-    slick: false, treason: false, betrayed: false, betrayalCause: null,
+    slick: false, treason: false, ambientFf: false, betrayed: false, betrayalCause: null,
     cordCut: null,
     loneThaw: null,
     winterMarkCleansed: false,
@@ -2477,10 +2486,13 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   g.stats[pi].dmgTaken += dmg;
   // TREASON: attribute harm dealt by a partner (the interpretability corpus
   // wants the traitor's ledger, not just the victim's).
-  if (attacker !== undefined && attacker !== pi) {
-    g.stats[attacker].betrayalDmg += dmg;
-    // v3.4: only SHIFT/veilcut declares — open-duel FF without Shift does not
-    if (g.treason && declareStrike) beginBetrayalDuel(g, attacker);
+  if (attacker !== undefined && attacker !== pi && g.treason) {
+    if (declareStrike || g.betrayalDuel) {
+      g.stats[attacker].betrayalDmg += dmg;
+      if (declareStrike) beginBetrayalDuel(g, attacker);
+    } else if (g.ambientFf) {
+      g.stats[attacker].accidentalDmg += dmg;
+    }
   }
   // Preserve a longer Judge shield from beginBetrayalDuel (do not clobber to 60).
   p.invuln = Math.max(p.invuln, 60);
@@ -2504,18 +2516,20 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   if (p.hp <= 0) {
     clearCarryLinks(g, pi);
     g.stats[pi].downs += 1;
-    const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
-    if (treasonStrike) {
-      // Court darkSide → winter-ascends / darkFallen retired (whisper-kill bargain).
+    const partnerHit = attacker !== undefined && attacker !== pi && g.treason;
+    const scoredHit = partnerHit && (declareStrike || g.betrayalDuel);
+    if (scoredHit) {
       // v3.4 sealed duel: a living-partner down ends the arena (no revive yo-yo).
       if (g.betrayalDuel || g.betrayalDeclarers[attacker!] || g.betrayalDeclarers[pi]) {
         resolveBetrayalDuel(g, attacker!, pi);
         return;
       }
-      // Fallback: any other TREASON FF kill opens+resolves the arena
-      beginBetrayalDuel(g, attacker!);
-      resolveBetrayalDuel(g, attacker!, pi);
-      return;
+      // Declared strike without an open arena yet — open and resolve in one beat.
+      if (declareStrike) {
+        beginBetrayalDuel(g, attacker!);
+        resolveBetrayalDuel(g, attacker!, pi);
+        return;
+      }
     }
     p.hp = 0;
     markPlayerDowned(g, p);
@@ -3155,9 +3169,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
         damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
       }
     }
-    // TREASON: hold SHIFT to strike your partner — or open FF once the sealed
-    // duel has begun (v3.4: no Shift required during the arena).
-    if (g.treason && (inp.k || g.betrayalDuel)) {
+    // TREASON: hold SHIFT to declare — or open FF in duel / ambient contact.
+    if (partnerHitboxOpen(g, inp)) {
       const oi = 1 - pi;
       const o = g.players[oi];
       if (o.present && !o.downed && o.simIndex === p.simIndex &&
@@ -3173,7 +3186,7 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
     p.bowCd = 24;
     const [vx, vy] = DIRV[p.dir];
     shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
-      g.treason && (inp.k || g.betrayalDuel),
+      partnerHitboxOpen(g, inp),
       g.treason && !!inp.k);
     sfx(g, "bow");
   } else if (!g.hasBow && inp.bE && g.messageT === 0) {
@@ -3653,6 +3666,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         const travelMode = g.travelMode;
         const slick = g.slick;
         const treason = g.treason;
+        const ambientFf = g.ambientFf;
         Object.assign(g, newGame());
         g.players[0].present = present0;
         g.players[1].present = present1;
@@ -3662,6 +3676,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         g.travelMode = travelMode;
         g.slick = slick;
         g.treason = treason;
+        g.ambientFf = ambientFf;
         g.screen = "play";
       }
       break;

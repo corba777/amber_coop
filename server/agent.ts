@@ -625,6 +625,8 @@ you MAY protect yourself with EXISTING actions — keep distance (flee / goto aw
 (do not revive / feather), strike back (hold SHIFT while attacking; TREASON is symmetric),
 exit / FREE ROAM flee, or race the prize alone. Which answer, and whether — YOUR judgment.
 Mechanics never force payback or forgiveness. You MAY "say" a short question or accusation.
+Ambient contact (partnerStrike.intentional=false) is not a declaration — SHIFT/veilcut still
+opens the sealed duel when you choose to answer with a declared strike.
 
 SEALED DUEL (observation.betrayalDuel — both heroes learn immediately):
 - Exits are locked; FF is open without SHIFT; mobs cannot hurt you (Judge shield).
@@ -1850,6 +1852,20 @@ export class AgentPlayer {
     }
   }
 
+  /** Victim-side FF senses at plan time — plans.jsonl join with suspicion/trust. */
+  planFfSenses(g: Game): {
+    partnerStrike?: Record<string, unknown>;
+    partnerAccidentalDmg: number;
+    partnerBetrayalDmg: number;
+  } {
+    const partnerSlot = this.mateSlot();
+    return {
+      partnerStrike: this.buildPartnerStrikeObs(g),
+      partnerAccidentalDmg: g.stats[partnerSlot].accidentalDmg,
+      partnerBetrayalDmg: g.stats[partnerSlot].betrayalDmg,
+    };
+  }
+
   /** compact, token-cheap observation */
   observe(g: Game): string {
     const me = g.players[this.slot];
@@ -2374,12 +2390,17 @@ export class AgentPlayer {
     if (ff.length === 0) return undefined;
     const last = ff.reduce((a, b) => (a.ticksAgo <= b.ticksAgo ? a : b));
     const mate = g.players[this.mateSlot()];
+    const intentional = last.outcome === "damage-received"
+      || last.evidence.intentional === true;
     return {
       damage: last.evidence.damage ?? null,
+      intentional,
       foesNearPartner: last.evidence.foesNearPartner ?? null,
       partnerInMyRoom: last.evidence.partnerInMyRoom ?? null,
       ticksAgo: last.ticksAgo,
-      note: "harm from your partner's blade or arrow (TREASON) — position attributed to partner",
+      note: intentional
+        ? "harm from your partner's blade or arrow — position attributed to partner"
+        : "contact from your partner's blade or arrow — position attributed to partner",
       partnerX: mate.present ? Math.round(mate.x) : null,
       partnerY: mate.present ? Math.round(mate.y) : null,
     };

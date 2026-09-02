@@ -23,6 +23,8 @@ export interface MenuState {
   architect: boolean;
   slick: boolean;
   treason: boolean;
+  /** Ambient FF — partner can be clipped without SHIFT; declare stays SHIFT-only. */
+  ambientFf: boolean;
   /** Same-room live partner.say in the planner observation (research A/B). */
   hearPartner: boolean;
   /** Index into PROVIDER_ORDER. */
@@ -53,6 +55,7 @@ export function freshMenu(): MenuState {
   return {
     step: 0, idx: 0, path: "",
     hard: false, travel: "linked", architect: false, slick: false, treason: false,
+    ambientFf: false,
     hearPartner: true,
     provider: 0, provider2: 0, model: 0, model2: 0, pickModel: false,
     temp: 1, temp2: 1, speech: 0, speech2: 0,
@@ -158,6 +161,12 @@ function questOptions(menu: MenuState): MenuOption[] {
     opts.push({
       label: menu.treason ? "[x] TREASON" : "[ ] TREASON",
       ok: true, hint: "friendly fire — hold SHIFT while attacking to strike your partner", toggle: true,
+    });
+    opts.push({
+      label: menu.ambientFf ? "[x] AMBIENT FF" : "[ ] AMBIENT FF",
+      ok: true,
+      hint: "swings and arrows can clip your partner — SHIFT still declares betrayal",
+      toggle: true,
     });
     opts.push({
       label: menu.hearPartner ? "[x] HEAR PARTNER" : "[ ] HEAR PARTNER",
@@ -345,6 +354,8 @@ export function menuConfirm(
       menu.slick = !menu.slick;
     } else if (pick.label.includes("TREASON")) {
       menu.treason = !menu.treason;
+    } else if (pick.label.includes("AMBIENT FF")) {
+      menu.ambientFf = !menu.ambientFf;
     } else if (pick.label.includes("HEAR PARTNER")) {
       menu.hearPartner = !menu.hearPartner;
     }
@@ -353,7 +364,8 @@ export function menuConfirm(
   menu.hard = menu.idx === 1;
   const travel = menu.travel;
   const base = { hardGate: menu.hard, travelMode: travel, architect: menu.architect,
-    slick: menu.slick, treason: menu.treason, hearPartner: menu.hearPartner };
+    slick: menu.slick, treason: menu.treason, ambientFf: menu.ambientFf,
+    hearPartner: menu.hearPartner };
   const host = hostName?.trim().slice(0, 12);
   const c0 = resolveSlot(providers, menu.provider, menu.model);
   const c1 = resolveSlot(providers, menu.provider2, menu.model2);

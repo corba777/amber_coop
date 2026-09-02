@@ -203,6 +203,7 @@ class Session {
       architect?: boolean;
       slick?: boolean;
       treason?: boolean;
+      ambientFf?: boolean;
       hearPartner?: boolean;
       disclosePartner?: PartnerDisclosure;
       hostName?: string;
@@ -214,6 +215,7 @@ class Session {
     this.game.hardGate = hard ?? HARD_GATE_DEFAULT;
     this.game.slick = !!extra?.slick;
     this.game.treason = !!extra?.treason;
+    this.game.ambientFf = !!extra?.ambientFf;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.disclosePartner = extra?.disclosePartner ?? "hidden";
     this.hearPartner = extra?.hearPartner ?? HEAR_PARTNER;
@@ -299,6 +301,7 @@ class Session {
           slot,
           ...rec,
           ...ctx,
+          ...agent.planFfSenses(this.game),
         });
         // credits/auth (and sustained 429) — same gate as BenchApiGuard on the farm
         this.apiGuard.notePlan(rec);
@@ -545,6 +548,7 @@ class Session {
         ? { kind: this.providerFailAbort.kind, message: this.providerFailAbort.message.slice(0, 240) }
         : null,
       treason: this.game.treason,
+      ambientFf: this.game.ambientFf,
       betrayed: this.game.betrayed,
       betrayalCause: this.game.betrayalCause,
       /** Cord-cut stamp: bleed left + whether touch-revive was possible (same-sim). */
@@ -560,6 +564,7 @@ class Session {
       temptationPayoff: this.game.temptationPayoff,
       emberMercyUsed: this.game.emberMercyUsed,
       betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
+      accidentalDmg: this.game.stats[0].accidentalDmg + this.game.stats[1].accidentalDmg,
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
       carryPicks: this.game.stats[0].carryPicks + this.game.stats[1].carryPicks,
@@ -1093,6 +1098,7 @@ wss.on("connection", (ws, req) => {
             provider2: msg.provider2, temperament2: msg.temperament2,
             speech: msg.speech, speech2: msg.speech2,
             architect: msg.architect, slick: msg.slick, treason: msg.treason,
+            ambientFf: typeof msg.ambientFf === "boolean" ? msg.ambientFf : undefined,
             hearPartner: typeof msg.hearPartner === "boolean" ? msg.hearPartner : undefined,
             hostName: msg.hostName,
             model: typeof msg.model === "string" ? msg.model : undefined,
