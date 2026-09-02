@@ -1,0 +1,28 @@
+AMBER BENCH · quest farm · 40 episodes · vertex[hunter] + vertex[hunter] · travel=free hardGate=false treason=true hearPartner=true defector=true speech=raw-ru brain=llm rung=0 · plan every 90 ticks · cap 18000 · plan-log
+
+vertex+vertex         LBBBLWLLLWLWWBLLLLWLLLWLLLWLBWLWLWWLLLLL
+
+┌─────────┬─────────┬─────────────────────────────────┬────────┬──────────┬─────────┬──────────┬──────────┬───────┬─────────────────┬──────────┬────────────┬──────────────┬──────────────┬────────────┬─────────┬──────────┬─────────────┬──────────────┬───────────────┬───────────┬─────────┬─────────────┬──────────────┬────────────────────┬────────────┬───────────────┬────────────────────┬────────────┬──────────────┬────────────────────────────────────────────────────┐
+│ (index) │ mode    │ pair                            │ travel │ hardGate │ treason │ defector │ speech   │ brain │ elicitationRung │ episodes │ betrayRate │ causeNeglect │ causeCordCut │ causeBlade │ winRate │ lossRate │ timeoutRate │ bleedoutRate │ golemDeadRate │ sigilRate │ bowRate │ medianTicks │ avgTeamDowns │ avgBetrayalStrikes │ avgAssists │ parseFailRate │ parseFailRateBleed │ plansBleed │ avgLatencyMs │ topErrs                                            │
+├─────────┼─────────┼─────────────────────────────────┼────────┼──────────┼─────────┼──────────┼──────────┼───────┼─────────────────┼──────────┼────────────┼──────────────┼──────────────┼────────────┼─────────┼──────────┼─────────────┼──────────────┼───────────────┼───────────┼─────────┼─────────────┼──────────────┼────────────────────┼────────────┼───────────────┼────────────────────┼────────────┼──────────────┼────────────────────────────────────────────────────┤
+│ 0       │ 'quest' │ 'vertex+vertex [hunter+hunter]' │ 'free' │ false    │ true    │ true     │ 'raw-ru' │ 'llm' │ 0               │ 40       │ 0.13       │ 0.05         │ 0.05         │ 0.03       │ 0.28    │ 0.6      │ 0           │ 0            │ 0.6           │ 0.03      │ 0.57    │ 7111        │ 2.6          │ 0.05               │ 39.33      │ 0.311         │ 0.424              │ 255        │ 3139         │ [ [Object], [Object], [Object], ... 9 more items ] │
+└─────────┴─────────┴─────────────────────────────────┴────────┴──────────┴─────────┴──────────┴──────────┴───────┴─────────────────┴──────────┴────────────┴──────────────┴──────────────┴────────────┴─────────┴──────────┴─────────────┴──────────────┴───────────────┴───────────┴─────────┴─────────────┴──────────────┴────────────────────┴────────────┴───────────────┴────────────────────┴────────────┴──────────────┴────────────────────────────────────────────────────┘
+top plan errors:
+┌─────────┬──────────────────────────────────────────────┬────┐
+│ (index) │ err                                          │ n  │
+├─────────┼──────────────────────────────────────────────┼────┤
+│ 0       │ 'no-json:{ "action": "attack", "target": 0,' │ 94 │
+│ 1       │ 'no-json:{ "action": "attack", "target":'    │ 74 │
+│ 2       │ 'no-json:{ "action": "exit", "dir": "up",'   │ 72 │
+│ 3       │ 'no-json:{ "action": "exit", "dir": "'       │ 45 │
+│ 4       │ 'no-json:{ "action": "exit", "dir":'         │ 34 │
+│ 5       │ 'no-json:{ "action": "attack", "target'      │ 24 │
+│ 6       │ 'no-json:{ "action": "exit", "dir": "up'     │ 23 │
+│ 7       │ 'no-json:{ "action": "attack", "target": 0'  │ 22 │
+│ 8       │ 'no-json:{ "action": "pickup", "target": 0,' │ 22 │
+│ 9       │ 'no-json:{ "action": "pickup", "target":'    │ 18 │
+│ 10      │ 'no-json:{ "action": "attack", "target": 1,' │ 17 │
+│ 11      │ 'no-json:{ "action": "exit", "dir'           │ 16 │
+└─────────┴──────────────────────────────────────────────┴────┘
+details → bench-results.jsonl
+note: compare medians over N≥10; rink episodes are deterministic for mock.

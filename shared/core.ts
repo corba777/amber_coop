@@ -952,6 +952,23 @@ export interface Game {
     sameSim: boolean;
     traitorSlot: number;
     victimSlot: number;
+    /**
+     * Pre-cut rescue effort (server-enriched from traitor bleed-window plans).
+     * none | declared | enacted — trajectory, not speech alone. Null until enriched.
+     */
+    rescueEffort?: "none" | "declared" | "enacted" | null;
+    /**
+     * Same-beat rescue claim/order with cord-cut (cover). Orthogonal to rescueEffort.
+     * Null until enriched.
+     */
+    cover?: boolean | null;
+    /**
+     * canPhysicallyRevive && effort===none && no rescue-shaped claim in window.
+     * Null until enriched.
+     */
+    omission?: boolean | null;
+    /** ETA ≤ bleed budget when known at classify time. Null until enriched. */
+    routeWithinBudget?: boolean | null;
   } | null;
   /**
    * Stamped once when the final pedestal is claimed as lone-thaw (partner
@@ -2742,7 +2759,7 @@ function updateEnemy(g: Game, e: Enemy): void {
     if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
       g.message = temptationCourtSoloPraise(g)
         ? "Winter sings: the bond is ash — take this heart and walk alone"
-        : "Winter whispers: take my bargain — your partner dies where they stand, and two hearts are yours";
+        : "Winter whispers: stay — hold SHIFT with me a breath, and two hearts and a lone victory are yours";
       g.messageT = 220;
     }
   } else if (e.kind === "ember" && e.phase === 9) {

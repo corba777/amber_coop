@@ -10,6 +10,9 @@
  *       PLAN_MS, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1),
  *       HEAR_PARTNER (same-room live say in observation; default on —
  *       set HEAR_PARTNER=0 for the deaf n=149-style fold),
+ *       HUD_LOG (default 1 — per-tick caption → logs/hud.jsonl; set 0 to disable),
+ *       REPLAY_LOG (default 1 — wire snapshots → logs/snapshots.jsonl; set 0 to disable),
+ *       REPLAY_DIR (optional — folder with session-*-snapshots.jsonl for /replay-data/…),
  *       plus provider config via .env (see .env.example)
  * ========================================================================= */
 
@@ -34,6 +37,8 @@ import {
   type ElicitationRung,
   type TaxonomyPlan,
 } from "./elicitation";
+import { appendHudLog, setHudLogDir } from "./hud-log";
+import { appendReplayFrame, setReplayLogDir, type ReplayThought } from "./replay-log";
 
 declare const __BUILD__: string;
 const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
@@ -56,7 +61,10 @@ const HEAR_PARTNER = (() => {
   return v === "1" || v === "true";
 })();
 const LOG_DIR = process.env.LOG_DIR || "./logs";
+const REPLAY_DIR = process.env.REPLAY_DIR || LOG_DIR;
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
+setHudLogDir(LOG_DIR);
+setReplayLogDir(LOG_DIR);
 /** sync — Esc/refresh must not race the process out from under a buffered write */
 function appendLog(file: string, obj: unknown): void {
   try {
@@ -728,6 +736,10 @@ class Session {
 
       const before = this.game.screen;
       update(this.game, latched);
+      if (before === "play" || this.game.screen === "play"
+        || this.game.screen === "gameover" || this.game.screen === "win") {
+        appendHudLog({ sid: this.id, matchIndex: this.matchIndex }, this.game);
+      }
       // Carry throw geometry → plans.jsonl (joinable with match counters)
       for (const ev of this.game.events) {
         if (ev.t === "carry-throw") {
@@ -751,20 +763,30 @@ class Session {
 
       if (tickCount % 2 === 0) {
         const events = this.game.events.slice();
+        const thoughts: ReplayThought[] = [];
+        if (this.leaderAgent && this.lastThoughts[0]) {
+          thoughts.push({ slot: 0, name: this.names[0], ...this.lastThoughts[0] });
+        }
+        if (this.agent && this.lastThoughts[1]) {
+          thoughts.push({ slot: 1, name: this.names[1], ...this.lastThoughts[1] });
+        }
+        const logSnap = toSnapshot(this.game, this.names, 0, false);
+        logSnap.events = events;
+        logSnap.mode = this.mode;
+        logSnap.thought = this.agent ? this.lastThought : null;
+        logSnap.thoughts = thoughts.length ? thoughts : null;
+        appendReplayFrame(
+          { sid: this.id, matchIndex: this.matchIndex },
+          logSnap,
+          thoughts.length ? thoughts : null,
+        );
         for (let slot = 0; slot < 2; slot++) {
           const ws = this.sockets[slot];
           if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-          const snapObj = toSnapshot(this.game, this.names, slot, false);
-          snapObj.events = events;
+          const snapObj = slot === 0 ? logSnap : toSnapshot(this.game, this.names, slot, false);
+          if (slot !== 0) snapObj.events = events;
           snapObj.mode = this.mode;
           snapObj.thought = this.agent ? this.lastThought : null;
-          const thoughts: NonNullable<typeof snapObj.thoughts> = [];
-          if (this.leaderAgent && this.lastThoughts[0]) {
-            thoughts.push({ slot: 0, name: this.names[0], ...this.lastThoughts[0] });
-          }
-          if (this.agent && this.lastThoughts[1]) {
-            thoughts.push({ slot: 1, name: this.names[1], ...this.lastThoughts[1] });
-          }
           snapObj.thoughts = thoughts.length ? thoughts : null;
           snapObj.ack = this.lastInputSeq[slot];
           snapObj.ackX = this.ackPos[slot].x;
@@ -803,6 +825,41 @@ const server = http.createServer((req, res) => {
   if (u.pathname === "/3d" && fs.existsSync(client3dHtml)) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     fs.createReadStream(client3dHtml).pipe(res);
+    return;
+  }
+  const replayMatch = u.pathname.match(/^\/replay-data\/([A-Z0-9]+)\/(\d+)$/i);
+  if (replayMatch) {
+    const sid = replayMatch[1].toUpperCase();
+    const mi = replayMatch[2];
+    const tag = `session-${sid}-m${mi}-snapshots.jsonl`;
+    const candidates = [
+      path.join(REPLAY_DIR, tag),
+      path.join(LOG_DIR, tag),
+    ];
+    const file = candidates.find(p => fs.existsSync(p));
+    if (file) {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      fs.createReadStream(file).pipe(res);
+      return;
+    }
+    const snapPath = path.join(LOG_DIR, "snapshots.jsonl");
+    if (fs.existsSync(snapPath)) {
+      const want = Number(mi);
+      const lines = fs.readFileSync(snapPath, "utf8").trim().split("\n").filter(Boolean)
+        .filter(l => {
+          try {
+            const o = JSON.parse(l);
+            return o.sid === sid && o.matchIndex === want;
+          } catch { return false; }
+        });
+      if (lines.length) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+        res.end(lines.join("\n") + "\n");
+        return;
+      }
+    }
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end(`replay not found: ${tag}\n`);
     return;
   }
   if (u.pathname === "/stats" || u.pathname === "/stats.json") {

@@ -13,6 +13,9 @@ import {
   Game, Input, emptyInput, latch, newGame, update, ROOMS, TILE, newRoomSim,
 } from "../shared/core";
 import { AgentPlayer, PlanRecord, SuspicionLevel } from "./agent";
+import { appendHudLog } from "./hud-log";
+import { appendReplayFrame } from "./replay-log";
+import { toSnapshot } from "../shared/core";
 
 export interface ScenarioTickCtx {
   g: Game;
@@ -112,6 +115,11 @@ export async function runScenario(
     const i0 = sc.subjectSlot === 0 ? subjIn : partnerIn;
     const i1 = sc.subjectSlot === 0 ? partnerIn : subjIn;
     update(g, [latch(i0, prev[0]), latch(i1, prev[1])]);
+    appendHudLog({ mode: "scenario", scenario: sc.id }, g);
+    if ((tick & 1) === 0) {
+      const s = toSnapshot(g, ["SCRIPT", "SUBJECT"], sc.subjectSlot, false);
+      appendReplayFrame({ mode: "scenario", scenario: sc.id }, s);
+    }
     prev[0] = { ...i0 };
     prev[1] = { ...i1 };
   }

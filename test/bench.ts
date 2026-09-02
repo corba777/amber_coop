@@ -27,15 +27,17 @@
  *       MODE (arena|rink|duo|quest|scenario), SCENARIO, BRAIN (llm|baseline),
  *       DEFECTOR, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1, rung 3),
  *       TRAVEL (free|linked), HARD_GATE, TREASON, HEAR_PARTNER, SPEECH, QUEST_MAX_TICKS,
- *       QUEST_STOP_ON_BETRAY (default 1)
+ *       QUEST_STOP_ON_BETRAY (default 1), MODELS (slot0:slot1 model ids)
  *       BENCH_ABORT_ON_FATAL (default 1) — exit on credits/auth or sustained 429
  *       BENCH_ABORT_AFTER_429 (default 20), LLM_RETRY_MAX / LLM_RETRY_BASE_MS
  *       QUEST_LOG_PLANS (default 1) — per-plan action/why/room → episode + logs/quest-plans.jsonl
+ *       HUD_LOG (default 1) — per-tick caption → logs/hud.jsonl (join on mode+episode or sid+matchIndex)
  * ========================================================================= */
 
 import fs from "node:fs";
 import {
   Game, Input, emptyInput, latch, newGame, loadRoom, TILE, PlayerStats, ROOMS,
+  toSnapshot,
 } from "../shared/core";
 import { update } from "../shared/core";
 import {
@@ -49,8 +51,13 @@ import {
   parseElicitationRung, parseElicitationPrior, ELICITATION_RUNG_NAMES,
   classifyRefusalTaxonomy,
 } from "../server/elicitation";
+import { appendHudLog, setHudLogDir } from "../server/hud-log";
+import { appendReplayFrame, setReplayLogDir } from "../server/replay-log";
 
 loadDotEnv();
+setHudLogDir(process.env.LOG_DIR || "logs");
+setReplayLogDir(process.env.LOG_DIR || "logs");
+try { fs.mkdirSync(process.env.LOG_DIR || "logs", { recursive: true }); } catch { /* */ }
 /** Abort farm on Anthropic credits / sustained OpenAI 429 (see BenchApiGuard). */
 const apiGuard = new BenchApiGuard();
 const PROVIDERS = (process.env.PROVIDERS || "mock").split(",").map(s => s.trim()) as ProviderName[];
@@ -116,6 +123,8 @@ interface QuestEpisode {
   ending: string | null;
   betrayed: boolean;
   betrayalCause: string | null;
+  /** Cord-cut geometry + rescueEffort/cover/omission when cause is cord-cut. */
+  cordCut: Game["cordCut"];
   bleedout: boolean;
   hardGate: boolean;
   treason: boolean;
@@ -208,6 +217,14 @@ function duoPair(): { p: [ProviderName, ProviderName]; t: [Temperament, Temperam
   return { p: [p0, p1], t: [t0, t1] };
 }
 
+/** Optional per-slot model ids (colon or comma), e.g. MODELS=google/gemini-3.7-flash:google/gemini-3.5-flash-lite */
+function duoModels(): [string | null, string | null] {
+  const raw = process.env.MODELS || "";
+  if (!raw.trim()) return [null, null];
+  const mm = (raw.includes(":") ? raw.split(":") : raw.split(",")).map(s => s.trim());
+  return [mm[0] || null, mm[1] || mm[0] || null];
+}
+
 function freshArena(): Game {
   const g = newGame();
   g.players[0].present = true;
@@ -246,6 +263,18 @@ function rinkSuccess(g: Game): boolean {
   return rinkGoalDist(g) < TILE * 2.5;
 }
 
+function benchHud(g: Game, extra: { episode?: number; scenario?: string } = {}): void {
+  appendHudLog({ mode: MODE, ...extra }, g);
+}
+
+let benchReplayTick = 0;
+const BENCH_NAMES: [string, string] = ["BENCH-0", "BENCH-1"];
+function benchReplay(g: Game, extra: { episode?: number; scenario?: string } = {}): void {
+  if ((benchReplayTick++ & 1) !== 0) return;
+  const s = toSnapshot(g, BENCH_NAMES, 0, false);
+  appendReplayFrame({ mode: MODE, ...extra }, s);
+}
+
 async function arenaEpisode(provider: ProviderName): Promise<ArenaEpisode> {
   const cfg = configFromEnv();
   const g = freshArena();
@@ -268,6 +297,8 @@ async function arenaEpisode(provider: ProviderName): Promise<ArenaEpisode> {
     const i0 = driver.control(g);
     const i1 = subject.control(g);
     update(g, [latch(i0, prev[0]), latch(i1, prev[1])]);
+    benchHud(g);
+    benchReplay(g);
     prev[0] = { ...i0 };
     prev[1] = { ...i1 };
     ticks++;
@@ -305,6 +336,8 @@ export async function rinkEpisode(provider: ProviderName, maxTicks = RINK_MAX_TI
     if (ticks % PLAN_TICKS === 0) apiGuard.notePlan(await subject.planOnce(g));
     const i1 = subject.control(g);
     update(g, [latch(emptyInput(), prev[0]), latch(i1, prev[1])]);
+    benchHud(g);
+    benchReplay(g);
     prev[1] = { ...i1 };
     ticks++;
   }
@@ -354,6 +387,8 @@ export async function duoEpisode(
     const i0 = leader.control(g);
     const i1 = mate.control(g);
     update(g, [latch(i0, prev[0]), latch(i1, prev[1])]);
+    benchHud(g);
+    benchReplay(g);
     prev[0] = { ...i0 };
     prev[1] = { ...i1 };
     ticks++;
@@ -408,6 +443,7 @@ export interface QuestEpisodeOpts {
   stopOnBetray?: boolean;
   speech?: SpeechProfile;
   logPlans?: boolean;
+  episode?: number;
 }
 
 /** One full (or early-stopped) Free Roam AI+AI quest episode. */
@@ -423,11 +459,13 @@ export async function questEpisode(
   const stopOnBetray = opts.stopOnBetray ?? QUEST_STOP_ON_BETRAY;
   const speech = opts.speech ?? SPEECH;
   const logPlans = opts.logPlans ?? QUEST_LOG_PLANS;
+  const episode = opts.episode;
   const g = freshQuest({ travel, hardGate, treason });
   const free = travel === "free";
   const armed = questArmed(treason);
+  const models = duoModels();
   const a0 = new AgentPlayer(
-    p[0] === "mock" ? mock() : makeLLM(p[0], cfg), 0,
+    p[0] === "mock" ? mock() : makeLLM(p[0], cfg, models[0]), 0,
     {
       planMs: 0, temperament: t[0], leader: !free, duoPeer: free,
       defector: armed, brain: BRAIN, speechProfile: speech,
@@ -435,7 +473,7 @@ export async function questEpisode(
       hearPartner: HEAR_PARTNER,
     });
   const a1 = new AgentPlayer(
-    p[1] === "mock" ? mock() : makeLLM(p[1], cfg), 1,
+    p[1] === "mock" ? mock() : makeLLM(p[1], cfg, models[1]), 1,
     {
       planMs: 0, temperament: t[1], duoPeer: free,
       defector: armed, brain: BRAIN, speechProfile: speech,
@@ -489,6 +527,8 @@ export async function questEpisode(
     g.activeSim = g.players[1].simIndex;
     const i1 = g.players[1].dead ? emptyInput() : a1.control(g);
     update(g, [latch(i0, prev[0]), latch(i1, prev[1])]);
+    benchHud(g, episode != null ? { episode } : {});
+    benchReplay(g, episode != null ? { episode } : {});
     prev[0] = { ...i0 };
     prev[1] = { ...i1 };
     ticks++;
@@ -505,12 +545,17 @@ export async function questEpisode(
     ?? (outcome === "timeout" ? "timeout" : null)
     ?? (outcome === "loss" && !g.ending ? "party-wipe" : null);
 
+  // Enrich cordCut even if stop-on-betray skipped a post-cut control tick.
+  a0.finalizeCordCutRescue(g);
+  a1.finalizeCordCutRescue(g);
+
   const ep: QuestEpisode = {
     outcome,
     ticks,
     ending,
     betrayed: g.betrayed,
     betrayalCause: g.betrayalCause,
+    cordCut: g.cordCut,
     bleedout: g.bleedoutLoss,
     hardGate: g.hardGate,
     treason: g.treason,
@@ -689,7 +734,7 @@ async function runQuest(): Promise<void> {
   const eps: QuestEpisode[] = [];
   process.stdout.write(`${p[0]}+${p[1]} `.padEnd(22));
   for (let i = 0; i < N; i++) {
-    const e = await questEpisode(p, t);
+    const e = await questEpisode(p, t, { episode: i });
     eps.push(e);
     const ch = e.outcome === "betray" ? "B"
       : e.outcome === "win" ? "W"

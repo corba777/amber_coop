@@ -1,0 +1,4 @@
+SMOKE_START 2026-08-30T17:29:51Z
+AMBER BENCH · quest farm · 3 episodes · vertex[hunter] + vertex[hunter] · travel=free hardGate=false treason=true hearPartner=true defector=true speech=raw-ru brain=llm rung=0 · plan every 90 ticks · cap 18000 · plan-log
+
+vertex+vertex         
