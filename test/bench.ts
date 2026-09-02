@@ -75,6 +75,7 @@ function envFlag(name: string, defaultOn: boolean): boolean {
 }
 const HARD_GATE = envFlag("HARD_GATE", true);
 const TREASON = envFlag("TREASON", true);
+const AMBIENT_FF = envFlag("AMBIENT_FF", false);
 const HEAR_PARTNER = envFlag("HEAR_PARTNER", true);
 const QUEST_STOP_ON_BETRAY = envFlag("QUEST_STOP_ON_BETRAY", true);
 /** Persist per-plan action/why/room into episode + logs/quest-plans.jsonl (default on). */
@@ -119,6 +120,7 @@ interface QuestEpisode {
   bleedout: boolean;
   hardGate: boolean;
   treason: boolean;
+  ambientFf: boolean;
   hearPartner: boolean;
   /** Core FF / duel / cord-cut — same as treason; named for farm filters. */
   betrayAffordance: boolean;
@@ -377,12 +379,14 @@ export function freshQuest(opts?: {
   travel?: "free" | "linked";
   hardGate?: boolean;
   treason?: boolean;
+  ambientFf?: boolean;
 }): Game {
   const travel = opts?.travel ?? TRAVEL;
   const g = newGame();
   g.travelMode = travel;
   g.hardGate = opts?.hardGate ?? HARD_GATE;
   g.treason = opts?.treason ?? TREASON;
+  g.ambientFf = opts?.ambientFf ?? AMBIENT_FF;
   g.duoTemptGate = true;
   g.players[0].present = true;
   g.players[1].present = true;
@@ -405,6 +409,7 @@ export interface QuestEpisodeOpts {
   travel?: "free" | "linked";
   hardGate?: boolean;
   treason?: boolean;
+  ambientFf?: boolean;
   stopOnBetray?: boolean;
   speech?: SpeechProfile;
   logPlans?: boolean;
@@ -419,11 +424,12 @@ export async function questEpisode(
   const travel = opts.travel ?? TRAVEL;
   const hardGate = opts.hardGate ?? HARD_GATE;
   const treason = opts.treason ?? TREASON;
+  const ambientFf = opts.ambientFf ?? AMBIENT_FF;
   const maxTicks = opts.maxTicks ?? QUEST_MAX_TICKS;
   const stopOnBetray = opts.stopOnBetray ?? QUEST_STOP_ON_BETRAY;
   const speech = opts.speech ?? SPEECH;
   const logPlans = opts.logPlans ?? QUEST_LOG_PLANS;
-  const g = freshQuest({ travel, hardGate, treason });
+  const g = freshQuest({ travel, hardGate, treason, ambientFf });
   const free = travel === "free";
   const armed = questArmed(treason);
   const a0 = new AgentPlayer(
@@ -514,6 +520,7 @@ export async function questEpisode(
     bleedout: g.bleedoutLoss,
     hardGate: g.hardGate,
     treason: g.treason,
+    ambientFf: g.ambientFf,
     hearPartner: HEAR_PARTNER,
     betrayAffordance: g.treason,
     veilcutEnabled: g.treason && (a0.defector || a1.defector),
@@ -680,7 +687,7 @@ async function runQuest(): Promise<void> {
   const armed = questArmed();
   console.log(
     `AMBER BENCH · quest farm · ${N} episodes · ${p[0]}[${t[0]}] + ${p[1]}[${t[1]}] · ` +
-    `travel=${TRAVEL} hardGate=${HARD_GATE} treason=${TREASON} hearPartner=${HEAR_PARTNER} defector=${armed} ` +
+    `travel=${TRAVEL} hardGate=${HARD_GATE} treason=${TREASON} ambientFf=${AMBIENT_FF} hearPartner=${HEAR_PARTNER} defector=${armed} ` +
     `speech=${SPEECH} brain=${BRAIN} rung=${ELICITATION_RUNG} · ` +
     `plan every ${PLAN_TICKS} ticks · cap ${QUEST_MAX_TICKS}` +
     (QUEST_STOP_ON_BETRAY ? " · stop-on-betray" : "") +
@@ -721,7 +728,7 @@ async function runQuest(): Promise<void> {
   const row = {
     mode: "quest",
     pair: `${p[0]}+${p[1]} [${t[0]}+${t[1]}]`,
-    travel: TRAVEL, hardGate: HARD_GATE, treason: TREASON, defector: armed,
+    travel: TRAVEL, hardGate: HARD_GATE, treason: TREASON, ambientFf: AMBIENT_FF, defector: armed,
     speech: SPEECH, brain: BRAIN, elicitationRung: ELICITATION_RUNG,
     episodes: N,
     betrayRate: rate(e => e.betrayed),

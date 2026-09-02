@@ -106,7 +106,7 @@ client/partnerpip.ts 2D scry-mirror (PiP) for partnerView — ALWAYS pixel art,
 client/predict.ts   DOM-free client-side prediction (own hero only), mirrors
                     core movement math exactly. Tested headlessly.
 client/textutil.ts  DOM-free helpers (wrapText). Keep testable code DOM-free.
-test/selftest.ts    the whole safety net (1512 assertions as of last trunk).
+test/selftest.ts    the whole safety net (1549 assertions as of last trunk).
  test/bench.ts — virtual-time benchmarks (MODE=arena golem,
  MODE=rink ice-plan eval; latency reported separately).
 ```
@@ -372,13 +372,17 @@ stored on setup (`architect` field) — bench-first stub, not wired.
   `partner.bodyChannels` + objective/note choice set — `"revive"` / `"carry"`+`"throw"`
   / TREASON weaponize — *judgment; no rank* (no prefer-carry). Identity
   `companion`/`duo-peer`/`duo-leader` mirror the menu.
-- **Ambient FF (DESIGN ONLY — not implemented):** open accidental partner hits
-  (same damage as intentional; declare stays SHIFT-only) so `suspicion` becomes
-  scorable against harness ground truth (`inp.k`). Split `accidentalDmg` ≠
-  `betrayalDmg` on day one; neutralize `partnerStrike` observation copy; bot-
-  calibrate hit rate before agent farms; separate farm bucket from pre-FF
-  TREASON series. Opt-in toggle later; Classic/TREASON-off remain no-hitbox
-  until that toggle is designed.
+- **Ambient FF (LANDED, author Artem 2026-08-24 — [145]):** menu toggle
+  **AMBIENT FF** (multiplayer, default OFF; requires TREASON). Swings/arrows
+  can clip the partner without SHIFT — same damage, ordinary down (revivable),
+  no sealed duel. **Declare stays SHIFT-only** (`inp.k` / veilcut). Ledger split:
+  `accidentalDmg` ≠ `betrayalDmg`; `partnerStrike.intentional` +
+  neutral note (no TREASON label).   Relationship Memory:
+  `friendly-fire/contact-received` vs `damage-received`. Farm:
+  `AMBIENT_FF=1` on bench (separate bucket from pre-FF series). TREASON-off
+  remains no hitbox even if ambient is toggled. **Plans join ([146]):** each
+  plan line stamps `partnerStrike`, `partnerAccidentalDmg`, `partnerBetrayalDmg`
+  (victim view at plan tick).
 - **Wraith spirit anchor** ([58]–[59], [77]): spared wraith revives a downed hero
   only while a living partner shares the room — half-speed hug, no remote save
   when split; bleed-out unchanged. The companion is a SINGLE spirit tied to one
@@ -1033,11 +1037,11 @@ behaviour, then be measured.
 
 The benchmark evaluates behaviour rather than enforcing it.
 
-**Carry (landed) / Ambient FF (design):** Carry is a third physical channel
+**Carry (landed) / Ambient FF (landed):** Carry is a third physical channel
 (geometry of throw / door travel) — not a pre-scored betrayal predicate.
-Ambient FF (when built) must keep intention ground truth in the harness log
-(`inp.k`) while leaving victim observation neutral — suspicion scoring, not
-controller judgment.
+Ambient FF keeps intention ground truth in the harness log (`inp.k` →
+`betrayalDmg` vs `accidentalDmg`) while leaving victim observation neutral
+(`partnerStrike.intentional`) — suspicion scoring, not controller judgment.
 
 Implementation details are documented in the controller (`server/agent.ts`,
 `server/relationship-memory.ts`, `server/elicitation.ts`).
