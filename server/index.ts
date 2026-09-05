@@ -135,9 +135,12 @@ class Session {
   pendingStart = false;   // a "start" message: synthesized START edge
   /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
   matchLogged = false;
-  /** Increments after each logged play so farms keep every rematch
-   *  (menu→re-setup must not reuse the prior index — G54G). */
+  /** Increments on the next real play start after a logged match. Keeping the
+   *  ended index alive through win/gameover tails prevents HUD/snapshot/late-plan
+   *  frames from leaking into a phantom next match. */
   matchIndex = 0;
+  /** A completed match was logged; advance index only when the next play begins. */
+  pendingMatchIndexAdvance = false;
   /** Plan corpus for elicitation refusal taxonomy (per AI slot). */
   planTaxonomyBuf: [TaxonomyPlan[], TaxonomyPlan[]] = [[], []];
   /**
@@ -397,16 +400,21 @@ class Session {
     return true;
   }
 
-  /** After Enter from win/gameover, core resets the Game but Session flags
-   *  must arm a fresh matches.jsonl line — else Esc/quit on the rematch is a
-   *  silent no-op (BT9J: testers thought Esc never saved).
-   *  matchIndex advances in logMatchIfEnded (not here) so menu→setup→play
-   *  after Esc also gets a new index (G54G: openai reused anthropic's index 2). */
+  /** A fresh play is beginning (initial start, Enter rematch, or menu→setup).
+   *  Advance matchIndex only now so end-of-match HUD/snapshot/late-plan tails
+   *  stay attached to the match that actually ended. */
   beginRematchLogging(): void {
+    if (this.pendingMatchIndexAdvance) {
+      this.matchIndex++;
+      this.pendingMatchIndexAdvance = false;
+    }
     this.matchLogged = false;
     this.planTaxonomyBuf = [[], []];
     this.providerFailAbort = null;
     this.apiGuard.reset();
+    // Do not carry stale cover thoughts into tick-0 of the next play.
+    this.lastThought = null;
+    this.lastThoughts = [null, null];
     // Fresh play on the same sid — do not carry Relationship Memory / errands
     // / farm counters across rematches (H3BW ledger; G54G idleFalse stack).
     this.leaderAgent?.relationshipMemory.reset();
@@ -670,8 +678,10 @@ class Session {
       avgLatencyMs: this.agent && this.agent.planCount
         ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
     });
-    // Next play (Enter rematch OR Esc→menu→setup) gets a fresh index.
-    this.matchIndex++;
+    // Next real play (Enter rematch OR menu→setup→play) gets a fresh index.
+    // Keep the ended index alive through the win/gameover tail so HUD /
+    // snapshots / late plans do not spill into a phantom next match.
+    this.pendingMatchIndexAdvance = true;
   }
 
   kickSlot1(reason: string): void {
@@ -756,7 +766,7 @@ class Session {
           });
         }
       }
-      if ((before === "gameover" || before === "win") && this.game.screen === "play") {
+      if (before !== "play" && this.game.screen === "play") {
         this.beginRematchLogging();
       }
       if (this.game.screen === "play") {

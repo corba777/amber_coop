@@ -5717,9 +5717,12 @@ function freshPlay(): Game {
   const src = readFileSync("server/index.ts", "utf8");
   ok(/beginRematchLogging/.test(src),
      "Session.beginRematchLogging exists (clears matchLogged after Enter restart)");
-  ok(/before === \"gameover\"[\s\S]{0,80}before === \"win\"[\s\S]{0,120}beginRematchLogging/.test(src)
-     || /\(before === \"gameover\" \|\| before === \"win\"\) && this\.game\.screen === \"play\"/.test(src),
-     "tick arms rematch logging when core restarts play from gameover/win");
+  ok(src.includes('if (before !== "play" && this.game.screen === "play") {'),
+     "tick arms rematch logging on any non-play to play transition");
+  ok(src.includes("pendingMatchIndexAdvance = true"),
+     "completed matches defer match index advance until the next play starts");
+  ok(/beginRematchLogging\(\): void \{[\s\S]{0,220}pendingMatchIndexAdvance[\s\S]{0,220}this\.matchIndex\+\+/.test(src),
+     "beginRematchLogging consumes the deferred match index advance");
   ok(/episodeTrackers\[slot\]\?\.onPlan/.test(src),
      "onPlan reads episodeTrackers by slot (rematch can swap tracker)");
 }
