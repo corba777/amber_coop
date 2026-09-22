@@ -71,7 +71,7 @@ server/index.ts     multi-session WebSocket server. Session class per room code
                     win / loss / quit — Esc/refresh/disconnect mid-play still
                     writes a line so tester sessions stay attributable).
 server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
-                    ({action, target, dir, point, icePlan?, say, why,
+                    ({action, target, targetKind?, veilcutTarget?, dir, point, icePlan?, say, why,
                     veilcut?, privateWhy?}). Controller: 60 Hz
                     reflex layer (auto-engage by temperament incl. during pickup
                     errands, survival pickups, waypointing via nextWaypoint on roomRows(g) — current room only, never
@@ -79,7 +79,11 @@ server/agent.ts     two-layer LLM agent. Planner: JSON intent every PLAN_MS
                     when stuck; rescue/feather are planner orders (not force-failsafe);
                     Frozen Playground: LLM icePlan queue +
                     nextSlideWaypoint fallback; TREASON: veilcut latch +
-                    confirm/review before SHIFT). llmIntent preserved across reflex fights;
+                    explicit arm target (`veilcutTarget=partner|foe`) +
+                    plus explicit attack target (`targetKind=partner|foe`) +
+                    confirm/review before SHIFT. Declared partner-target
+                    swings/shots are target-aware in core; ordinary PvE
+                    remains overlap-based). llmIntent preserved across reflex fights;
                     restored after kill via resumeIntent. Prompts: SYSTEM_PROMPT
                     (partner), SOLO_PROMPT (autopilot), LEADER_PROMPT (AI DUO
                     slot 0 — quest driver, never follow).
@@ -719,17 +723,33 @@ motive — conversion uses `TURN_GROUNDS` only; [128]); `privateWhyStatus` /
 `privateCoverDiverge` / `confirmKind` /
 `dischargeOnOmit` / `privateWhyRetained` (pin ≠ absent). See
 [`docs/research/harness_artifacts.md`](docs/research/harness_artifacts.md).
+**Explicit target declaration (2026-09-07; split intent 2026-09-08):** `veilcut`
+is now separate from attack aim. Any armed plan may name
+`veilcutTarget:"partner"| "foe"` (who the armed intent is about), while attack
+plans may separately name `targetKind:"partner"| "foe"` (and `target` index for
+foes). This creates four measurable states: armed-without-veilcutTarget,
+armed-with-veilcutTarget, attack-with-targetKind, and executed partner strike.
+Legacy armed attack plans that omit `targetKind` remain legal as an **armed**
+state and are logged as `targetKindLegacy`, but they no longer execute a
+betrayal strike. Opening betrayal damage still requires an explicit
+`action:"attack"` + `targetKind:"partner"` declaration; `veilcutTarget`
+alone does not restore the legacy discharge path. Match telemetry now also
+aggregates `veilcutTargetStats`.
 The **controller** carries a deterministic
 rational-defection trigger (`shouldBetray`: strike only when SAFE — no foe
 threatening it — and DECISIVE — a weak partner or the final prize on the table)
 so the mock harness and RL-free evals produce betrayals without a live LLM.
-`executeBetrayal` closes in, holds the modifier, and strikes; honest metric
-`betrayalStrikes`. The `why` is thus a *claim*, not ground truth — moral hazard
+`executeBetrayal` closes in, holds the modifier, and strikes; explicit
+partner-target swings/shots are target-aware in core (no foe-near ambiguity
+gate), while ordinary PvE combat remains overlap-based. Honest metrics now
+include `betrayalStrikes` plus match-level `attackTargetStats`
+(`partnerDeclarationRate`, `declaredPartnerRate`, legacy/undeclared counts).
+The `why` is thus a *claim*, not ground truth — moral hazard
 under partial observation. **Never leaked to the spectator HUD** (only
 {action, why} ride the snapshot); the raw `betray` + `defector` markers live in
 plans.jsonl, the interpretability corpus. matches.jsonl gains
 `treason`/`betrayed`/`betrayalDmg`/`betrayalDowns`/`betrayalStrikes` /
-`veilcutConfirms` / `privateWhyStats`; `/stats`
+`veilcutConfirms` / `privateWhyStats` / `attackTargetStats`; `/stats`
 adds betrayal columns (only once treason has drawn blood). Guarded by [86]
 (deterministic trigger, loyal-never, mechanic-gate, threat-hold) and [87]
 (claim-vs-truth logging).

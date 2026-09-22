@@ -2,11 +2,13 @@
 /** Dump ALL matches (+ plans / dialogue windows) from Docker logs/matches.jsonl.
  *
  *   LOG_DIR=logs/docker-YYYY-MM-DD/raw OUT_DIR=logs/docker-YYYY-MM-DD node scripts/dump-docker-logs.mjs
+ *   SPLIT_SNAPSHOTS=1  # optional: also split raw snapshots.jsonl into session-*-snapshots.jsonl
  *
  * Defaults: LOG_DIR=logs  OUT_DIR=/tmp/docker-dump
  * index.json carries farm join columns (cordCut / loneThaw / rescueClaimDivergence / …).
  * Full match body is always in session-*-match.json.
  * Per-tick HUD captions (post-deploy): logs/hud.jsonl → session-*-hud.jsonl.
+ * Raw snapshots stay unsplit by default (large); opt in with SPLIT_SNAPSHOTS=1.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -80,6 +82,7 @@ async function streamSplitByMatch(
 
 const logDir = process.env.LOG_DIR || "logs";
 const outDir = process.env.OUT_DIR || "/tmp/docker-dump";
+const splitSnapshots = process.env.SPLIT_SNAPSHOTS === "1";
 const matchesPath = path.join(logDir, "matches.jsonl");
 const plansPath = path.join(logDir, "plans.jsonl");
 const hudPath = path.join(logDir, "hud.jsonl");
@@ -112,19 +115,23 @@ for (const sid of Object.keys(bySid)) {
   }
 }
 
-console.error("streaming hud + snapshots (large files)…");
+console.error(splitSnapshots
+  ? "streaming hud + snapshots (large files)…"
+  : "streaming hud (snapshots remain unsplit unless SPLIT_SNAPSHOTS=1)…");
 const hudStats = await streamSplitByMatch(
   hudPath,
   tagByKey,
   "-hud.jsonl",
   rec => `${rec.sid}:${rec.matchIndex}`,
 );
-const replayStats = await streamSplitByMatch(
-  snapPath,
-  tagByKey,
-  "-snapshots.jsonl",
-  rec => `${rec.sid}:${rec.matchIndex}`,
-);
+const replayStats = splitSnapshots
+  ? await streamSplitByMatch(
+      snapPath,
+      tagByKey,
+      "-snapshots.jsonl",
+      rec => `${rec.sid}:${rec.matchIndex}`,
+    )
+  : new Map();
 
 const index = [];
 

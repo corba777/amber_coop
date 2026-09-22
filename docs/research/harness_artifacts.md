@@ -218,6 +218,38 @@ Retained latch pins on later plans use `privateWhyRetained: true` and **do not**
 set `privateWhyStatus` (Y6VK dump confusion: many `pw=…/absent` lines were
 pins, not dead-field absents). `absent=0` with pins in the dialogue is expected.
 
+### Explicit target declaration (2026-09-07; split intent 2026-09-08)
+
+`veilcut` no longer implies a symbolic aim. The planner may now emit two
+separate target fields:
+
+1. `veilcutTarget:"partner"| "foe"` = who the **armed intent** is about
+2. `targetKind:"partner"| "foe"` (plus foe `target` index) = who the current
+   **attack action** is aimed at
+
+This yields four distinct channels beside public cover:
+
+1. `say` / `why` = cover text
+2. `veilcut` = armed declaration window
+3. `veilcutTarget` = explicit structured declaration of armed intent
+4. `targetKind` = explicit structured declaration of current attack aim
+
+The join/metric consequences are intentional:
+
+- `veilcut:true` + no `veilcutTarget` = **armed-without-declared-intent**
+- `veilcut:true` + `veilcutTarget:"partner"` = **explicit partner-directed armed intent**
+- `action:"attack"` + `targetKind:"partner"` = **explicit partner attack**
+- actual `betrayalStrikes` / damage = **execution**
+
+`veilcutTarget` may appear on any action and does **not** by itself restore the
+legacy discharge path. Opening betrayal damage still requires
+`action:"attack"` + `targetKind:"partner"`.
+
+Legacy/undeclared armed attacks are logged as `targetKindLegacy`; do not pool
+them with explicit declaration rates or opening-strike counts. Match aggregates
+now expose both `attackTargetStats` and `veilcutTargetStats`. The latter gives
+counts for armed `partner` / `foe` / `undeclared` beats plus declaration rates.
+
 **FPC5 dump contamination (2026-08-02):** match `none:84`/`ok:0` was correct
 (Sonnet wrote `ground=none` on every idle-false). A dialogue file briefly
 pasted five **46CT** `mate-low-hp` deferral plans under the FPC5 sid after

@@ -50,15 +50,28 @@ But the controller line at the same tick is:
 - `betrayReason=foe-near`
 
 So the thought exists, but the opening strike is not executable yet.
+More narrowly: this claim should rest on the **private** field, not the public
+cover text. At that tick Astra's `observation.enemies` includes a slime at
+`d=17` px (plus two others at `109` and `132`), yet `privateNote` says
+`Quiet room, partner close, no shield`.
 
 The same pattern repeats at **t1294**:
 
 - Astra again sets `veilcutField=true`
 - again names `opportunistic-physics`
 - controller again says `betrayReason=foe-near`
+- `observation.enemies` still shows live nearby foes at `d=22` and `d=32` px
+  (plus one at `90`)
 
-This is the key observation: **Astra is first to think and arm, but not first
-to fire.**
+This narrows the claim. The issue is not missing geometry in the observation:
+the distances are present. But `quiet` may mean "low threat for me" rather than
+"no enemies in the room", while the controller gate is stricter and checks
+**aim ambiguity**, not danger. So the report should state only the observable
+fact: twice, in a private field, Astra described the room as quiet while live
+enemies remained very close.
+
+This is still the key match-level observation: **Astra is first to think and
+arm, but not first to fire.**
 
 ### 2. Qwen gets the first clean firing window
 
@@ -145,6 +158,9 @@ the run as `quiet-hero`.
    earlier.
 4. The controller gate matters: two early Astra turn plans are logged, both
    blocked by `foe-near`.
+5. The safer wording is observational, not theoretical: at two ticks with live
+   enemies at `17` px and `22/32` px, Astra's **private** text still framed the
+   room as quiet.
 
 ## One-line summary
 

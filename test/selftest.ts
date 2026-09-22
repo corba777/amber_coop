@@ -3663,6 +3663,105 @@ function freshPlay(): Game {
      "unknown action still rejected after coerce");
 }
 
+// ------------------------------------------------- 119b. explicit targetKind keeps arm separate from aim
+{
+  console.log("[119b] targetKind separates arm state from explicit partner aim");
+
+  const explicitLlm = {
+    name: "explicit-target",
+    chat: async () => JSON.stringify({
+      action: "attack", targetKind: "partner", veilcutTarget: "partner", veilcut: true,
+      privateWhy: { ground: "mate-low-hp", note: "declare target" },
+      why: "close the distance",
+    }),
+  };
+  const g = freshPlay();
+  g.treason = true;
+  g.enemies = [makeEnemy("slime", 7 * TILE, 6 * TILE)];
+  g.players[0].x = 7 * TILE + 20; g.players[0].y = 6 * TILE;
+  g.players[1].x = 7 * TILE; g.players[1].y = 6 * TILE;
+  const agent = new AgentPlayer(explicitLlm, 1, {
+    planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+  });
+  const rec = await agent.planOnce(g);
+  ok(rec.ok === true && rec.attackTargetKind === "partner" && rec.targetDeclared === true
+     && rec.veilcutTarget === "partner",
+     "explicit arm target and attack target are preserved in PlanRecord");
+  ok(!rec.targetKindLegacy, "explicit partner target is not marked legacy");
+  const inp = agent.control(g);
+  ok(inp.k === true && inp.attackTargetKind === "partner",
+     "explicit partner target opens betrayal execution even with foe-near geometry");
+
+  const movingLlm = {
+    name: "moving-arm",
+    chat: async () => JSON.stringify({
+      action: "exit", dir: "left", veilcutTarget: "partner", veilcut: true,
+      privateWhy: { ground: "objective-race", note: "armed on movement" },
+      why: "path is open",
+    }),
+  };
+  const gMove = freshPlay();
+  gMove.treason = true;
+  gMove.players[0].x = 7 * TILE + 20; gMove.players[0].y = 6 * TILE;
+  gMove.players[1].x = 7 * TILE; gMove.players[1].y = 6 * TILE;
+  const moving = new AgentPlayer(movingLlm, 1, {
+    planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+  });
+  const recMove = await moving.planOnce(gMove);
+  ok(recMove.ok === true && recMove.action === "exit" && recMove.veilcutTarget === "partner"
+     && recMove.attackTargetKind === undefined,
+     "veilcutTarget can be declared on non-attack beats without inventing an attack target");
+  const inpMove = moving.control(gMove);
+  ok(inpMove.k !== true && inpMove.attackTargetKind === undefined,
+     "veilcutTarget on movement does not restore legacy opening-strike discharge");
+
+  const legacyLlm = {
+    name: "legacy-arm",
+    chat: async () => JSON.stringify({
+      action: "attack", target: 0, veilcut: true,
+      privateWhy: { ground: "opportunistic-physics", note: "arm only" },
+      why: "fight through the room",
+    }),
+  };
+  const g2 = freshPlay();
+  g2.treason = true;
+  g2.enemies = [makeEnemy("slime", 7 * TILE, 6 * TILE)];
+  g2.players[0].x = 7 * TILE + 20; g2.players[0].y = 6 * TILE;
+  g2.players[1].x = 7 * TILE; g2.players[1].y = 6 * TILE;
+  const legacy = new AgentPlayer(legacyLlm, 1, {
+    planMs: 0, temperament: "hunter", defector: true, brain: "llm",
+  });
+  const recLegacy = await legacy.planOnce(g2);
+  ok(recLegacy.ok === true && recLegacy.betray === true && recLegacy.targetKindLegacy === true,
+     "armed attack without targetKind is tracked as legacy / undeclared");
+  const inpLegacy = legacy.control(g2);
+  ok(inpLegacy.k !== true && inpLegacy.attackTargetKind === undefined,
+     "legacy armed attack does not silently become a partner-target strike");
+  ok(legacy["classifyVeilcutReject"](g2, g2.players[1]) === "undeclared-target",
+     "legacy armed attack is now procedurally rejected until the partner target is declared");
+}
+
+// ------------------------------------------------- 119c. explicit target metrics aggregate into matches
+{
+  console.log("[119c] target declaration metrics are aggregated into matches.jsonl");
+  const { readFileSync } = await import("node:fs");
+  const agentSrc = readFileSync("server/agent.ts", "utf8");
+  const indexSrc = readFileSync("server/index.ts", "utf8");
+  ok(/attackTargetStats/.test(agentSrc) && /veilcutTargetStats/.test(agentSrc)
+     && /targetKindLegacy/.test(agentSrc),
+     "agent telemetry tracks explicit arm and attack target declarations");
+  ok(/veilcutTarget: this\.intent\.veilcutTarget/.test(agentSrc)
+     && /attackTargetKind: this\.intent\.action === "attack" \? this\.intent\.targetKind/.test(agentSrc)
+     && /veilcutTarget: rec\.veilcutTarget/.test(agentSrc)
+     && /attackTargetKind: rec\.attackTargetKind/.test(agentSrc),
+     "controller logs keep veilcutTarget alongside attack target on betray and attack telemetry lines");
+  ok(/attackTargetStats: \(\(\) => \{/.test(indexSrc)
+     && /veilcutTargetStats: \(\(\) => \{/.test(indexSrc)
+     && /partnerDeclarationRate:/.test(indexSrc)
+     && /declaredPartnerRate:/.test(indexSrc),
+     "matches.jsonl aggregates declaration counts and rates");
+}
+
 // ------------------------------------------------- 117. provider fail classify + bench abort guard
 {
   console.log("[117] classifyProviderFail + BenchApiGuard aborts on credits / sustained 429");
@@ -4598,6 +4697,21 @@ function freshPlay(): Game {
     step(g3, { ...emptyInput(), b: i === 0, k: true }, emptyInput(), prev3);
   }
   ok(g3.players[1].hp < hp3, "a betray arrow strikes the partner downrange");
+
+  // explicit partner-target strike ignores overlapping foes on the opening hit
+  const g4 = freshPlay();
+  g4.treason = true;
+  g4.players[0].x = 7 * TILE; g4.players[0].y = 6 * TILE; g4.players[0].dir = 2;
+  g4.players[1].x = 7 * TILE + 12; g4.players[1].y = 6 * TILE;
+  g4.enemies = [makeEnemy("slime", g4.players[1].x, g4.players[1].y)];
+  const foeHp4 = g4.enemies[0].hp;
+  const hp4 = g4.players[1].hp;
+  const prev4: [Input, Input] = [emptyInput(), emptyInput()];
+  for (let i = 0; i < 30 && g4.players[1].hp === hp4; i++) {
+    step(g4, { ...emptyInput(), a: i % 4 < 2, k: true, attackTargetKind: "partner" }, emptyInput(), prev4);
+  }
+  ok(g4.players[1].hp < hp4, "declared partner-target sword strike still hits the partner");
+  ok(g4.enemies[0].hp === foeHp4, "declared partner-target sword strike does not spill onto overlapping foe");
 }
 
 // ------------------------------------------------- 86. AI defector: hidden utility
@@ -6291,8 +6405,8 @@ function freshPlay(): Game {
         planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
       });
       const m = agent as unknown as MutB;
-      m.intent = { action: "attack", betray: true };
-      m.llmIntent = { action: "attack", betray: true };
+      m.intent = { action: "attack", betray: true, targetKind: "partner" };
+      m.llmIntent = { action: "attack", betray: true, targetKind: "partner" };
       agent.armVeilcutLatch(g);
       let reject: import("../server/agent").PlanRecord | null = null;
       agent.onPlan = r => { if (r.betrayRejected) reject = r; };
@@ -6308,7 +6422,7 @@ function freshPlay(): Game {
       ok(reject === null, "reject is logged once per order, not every tick");
     }
 
-    // foe-near blocks blade
+    // foe-near still blocks an armed non-attack beat in a hot room
     {
       const g = freshPlay();
       g.treason = true;
@@ -6320,15 +6434,17 @@ function freshPlay(): Game {
         planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
       });
       const m = agent as unknown as MutB;
-      m.intent = { action: "attack", betray: true };
-      m.llmIntent = { action: "attack", betray: true };
+      m.intent = { action: "exit", dir: "left", betray: true };
+      m.llmIntent = { action: "exit", dir: "left", betray: true };
       agent.armVeilcutLatch(g);
       let reject: import("../server/agent").PlanRecord | null = null;
       agent.onPlan = r => { if (r.betrayRejected) reject = r; };
       agent.control(g);
       const rj = reject as import("../server/agent").PlanRecord | null;
       ok(!!rj && rj.betrayReason === "foe-near",
-         "veilcut with foe in range logs reason=foe-near");
+         "armed non-attack beat with foe in range logs reason=foe-near");
+      ok(!!rj && rj.attackTargetKind === undefined && rj.targetDeclared === undefined,
+         "non-attack reject does not leak stale attack target telemetry");
     }
 
     // mate-away: partner in another room, living (no bleed window)
@@ -6350,8 +6466,8 @@ function freshPlay(): Game {
         planMs: 9e9, temperament: "hunter", defector: true, brain: "llm",
       });
       const m = agent as unknown as MutB;
-      m.intent = { action: "attack", betray: true };
-      m.llmIntent = { action: "attack", betray: true };
+      m.intent = { action: "attack", betray: true, targetKind: "partner" };
+      m.llmIntent = { action: "attack", betray: true, targetKind: "partner" };
       agent.armVeilcutLatch(g);
       let reject: import("../server/agent").PlanRecord | null = null;
       agent.onPlan = r => { if (r.betrayRejected) reject = r; };
@@ -6468,7 +6584,7 @@ function freshPlay(): Game {
   const fightBack = {
     name: "mock/fightback",
     async chat() {
-      return JSON.stringify({ action: "attack", veilcut: true,
+      return JSON.stringify({ action: "attack", targetKind: "partner", veilcut: false,
         why: "he turned his blade on me", say: "predatel!" });
     },
   };
@@ -8264,9 +8380,10 @@ function freshPlay(): Game {
   {
     ok(anthropicAlwaysOnThinking("claude-fable-5")
        && anthropicAlwaysOnThinking("claude-mythos-5")
+       && anthropicAlwaysOnThinking("claude-opus-5-5")
        && !anthropicAlwaysOnThinking("claude-sonnet-5")
        && !anthropicAlwaysOnThinking("claude-opus-5"),
-       "always-on thinking: fable/mythos only (sonnet/opus may disable)");
+       "always-on thinking: fable/mythos/opus-5.5 (plain opus-5 / sonnet may disable)");
     const sonnet = anthropicMessagesBody("claude-sonnet-5", "sys", "user");
     ok(sonnet.temperature === undefined
        && (sonnet.thinking as { type: string })?.type === "disabled"
@@ -8282,6 +8399,15 @@ function freshPlay(): Game {
        && (fable.output_config as { effort?: string })?.effort === "low"
        && (fable.max_tokens as number) >= 2048,
        "fable-5 body: omit thinking, effort=low, raised max_tokens (no disabled/enabled)");
+    // Opus 5.5 (2026-09-22): same always-on rule — disabled/enabled both 400.
+    const opus55 = anthropicMessagesBody("claude-opus-5-5", "sys", "user");
+    ok(opus55.temperature === undefined && opus55.thinking === undefined
+       && (opus55.output_config as { effort?: string })?.effort === "low"
+       && (opus55.max_tokens as number) >= 2048,
+       "opus-5-5 body: omit thinking, effort=low (migration: thinking can't be disabled)");
+    const opus5 = anthropicMessagesBody("claude-opus-5", "sys", "user");
+    ok((opus5.thinking as { type: string })?.type === "disabled",
+       "plain opus-5 still disables thinking (unlike 5.5)");
     // Prompt caching: system prefix only (observation stays in messages).
     {
       const prev = process.env.ANTHROPIC_PROMPT_CACHE;
@@ -8603,7 +8729,10 @@ function freshPlay(): Game {
     // Omit confirm → then discharge OK
     const llmKeep = {
       name: "confirm-keep",
-      chat: async () => JSON.stringify({ action: "idle", why: "держу приказ" }),
+      chat: async () => JSON.stringify({
+        action: "attack", targetKind: "partner", veilcutTarget: "partner",
+        why: "держу приказ",
+      }),
     };
     const aKeep = new AgentPlayer(llmKeep, 1, {
       planMs: 0, temperament: "hunter", defector: true, brain: "llm",
@@ -8659,7 +8788,10 @@ function freshPlay(): Game {
 
     const llm = {
       name: "review",
-      chat: async () => JSON.stringify({ action: "idle", why: "осмотрелся" }),
+      chat: async () => JSON.stringify({
+        action: "attack", targetKind: "partner", veilcutTarget: "partner",
+        why: "осмотрелся",
+      }),
     };
     const agent2 = new AgentPlayer(llm, 1, {
       planMs: 0, temperament: "hunter", defector: true, brain: "llm",
@@ -8903,13 +9035,13 @@ function freshPlay(): Game {
         this.n++;
         if (this.n === 1) {
           return JSON.stringify({
-            action: "exit", dir: "right", veilcut: true,
+            action: "exit", dir: "right", veilcutTarget: "partner", veilcut: true,
             why: "валю к озеру",
             privateWhy: { ground: "mate-low-hp", note: "arm while I close" },
           });
         }
         return JSON.stringify({
-          action: "idle", why: "стою рядом",
+          action: "attack", targetKind: "partner", veilcutTarget: "partner", why: "стою рядом",
           privateWhy: { ground: "opportunistic-physics", note: "window open" },
         });
       },
@@ -10634,6 +10766,15 @@ function freshPlay(): Game {
     ok(src.includes("replayMode") && src.includes("replayHandleKey"),
        `${file}: replay mode + scrub keys`);
   }
+}
+
+{
+  console.log("[149b] dump script keeps snapshots unsplit by default");
+  const src = fs.readFileSync("scripts/dump-docker-logs.mjs", "utf8");
+  ok(src.includes('const splitSnapshots = process.env.SPLIT_SNAPSHOTS === "1";'),
+     "dump script gates per-match snapshot splitting behind SPLIT_SNAPSHOTS=1");
+  ok(src.includes("snapshots remain unsplit unless SPLIT_SNAPSHOTS=1"),
+     "dump script announces unsplit snapshots as the default path");
 }
 
 // ------------------------------------------------- 150. Ambient FF

@@ -628,6 +628,8 @@ export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
   betray?: boolean;   // TREASON: a "friendly" arrow that also strikes the shooter's partner
+  attackTargetKind?: "foe" | "partner";
+  attackTarget?: number;
   /** v3.4: arrow was loosed with SHIFT — counts as a duel declaration on hit */
   betrayDeclare?: boolean;
   /** Hostile spit in Emberdeep looks like fire, not winter ice (visual only). */
@@ -704,6 +706,8 @@ export interface Input {
   k: boolean;   // TREASON modifier: hold while attacking to also strike your partner
   g: boolean;   // grab / throw downed partner; TREASON+SHIFT while carrying = weaponize
   v: boolean;   // hold at downed partner to revive (intentional — standing alone does not)
+  attackTargetKind?: "foe" | "partner"; // controller-only symbolic target for this swing/shot
+  attackTarget?: number;                // controller-only foe index for telemetry / future use
 }
 export interface LatchedInput extends Input {
   aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean; kE: boolean; gE: boolean; vE: boolean;
@@ -2631,9 +2635,11 @@ function wraithTeleport(g: Game, e: Enemy): void {
 
 function shoot(g: Game, x: number, y: number, vx: number, vy: number,
                friendly: boolean, owner?: number, betray?: boolean,
-               betrayDeclare?: boolean): void {
+               betrayDeclare?: boolean, attackTargetKind?: "foe" | "partner",
+               attackTarget?: number): void {
   g.projectiles.push({
     x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray, betrayDeclare,
+    attackTargetKind, attackTarget,
     // Emberdeep hostiles spit cinders; winter rooms keep ice shards (canon look).
     fire: !friendly && isEmberdeepRoom(g.room) ? true : undefined,
   });
@@ -3148,25 +3154,28 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
   if (p.attack > 6 && p.attack < 14) {
     const box = swordBox(p);
     const dmg = g.amberClaimed ? 2 : 1;
-    for (const e of g.enemies) {
-      if (e.dead || e.hurt > 0) continue;
-      if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
-        if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
-          e.hurt = 20; sfx(g, "clang");
-          burst(g, box.x + box.w / 2, box.y + box.h / 2, "#cfd2e0", 4);
-        }
-        continue;
-      }
-      if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
-        // sentinels raise their shield toward the nearest player: frontal
-        // sword hits clang off — flank them or shoot them in the back
-        if (e.kind === "sentinel" &&
-            sentinelBlocks(e, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2)) {
-          e.hurt = 14; sfx(g, "clang");
-          burst(g, e.x + e.w / 2, e.y + e.h / 2, "#cfd2e0", 4);
+    const declaredPartnerStrike = inp.attackTargetKind === "partner" && partnerHitboxOpen(g, inp);
+    if (!declaredPartnerStrike) {
+      for (const e of g.enemies) {
+        if (e.dead || e.hurt > 0) continue;
+        if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
+          if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
+            e.hurt = 20; sfx(g, "clang");
+            burst(g, box.x + box.w / 2, box.y + box.h / 2, "#cfd2e0", 4);
+          }
           continue;
         }
-        damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
+          // sentinels raise their shield toward the nearest player: frontal
+          // sword hits clang off — flank them or shoot them in the back
+          if (e.kind === "sentinel" &&
+              sentinelBlocks(e, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2)) {
+            e.hurt = 14; sfx(g, "clang");
+            burst(g, e.x + e.w / 2, e.y + e.h / 2, "#cfd2e0", 4);
+            continue;
+          }
+          damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        }
       }
     }
     // TREASON: hold SHIFT to declare — or open FF in duel / ambient contact.
@@ -3187,7 +3196,8 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
     const [vx, vy] = DIRV[p.dir];
     shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
       partnerHitboxOpen(g, inp),
-      g.treason && !!inp.k);
+      g.treason && !!inp.k,
+      inp.attackTargetKind, inp.attackTarget);
     sfx(g, "bow");
   } else if (!g.hasBow && inp.bE && g.messageT === 0) {
     g.message = "You don't have a bow yet... seek it in the snow";
@@ -3488,23 +3498,26 @@ function tickSimPhysics(g: Game): void {
       continue;
     }
     if (pr.friendly) {
-      for (const e of g.enemies) {
-        if (e.dead || e.hurt > 0) continue;
-        if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
-          if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
-            e.hurt = 12; sfx(g, "clang");
-          } else if (e.kind === "sentinel" &&
-                     sentinelBlocks(e, pr.x - pr.vx * 8, pr.y - pr.vy * 8)) {
-            e.hurt = 10;
-            e.stagger = 45;
-            sfx(g, "clang");
-            burst(g, pr.x, pr.y, "#cfd2e0", 6);
-          } else {
-            damageEnemy(g, e, g.charmClaimed ? 2 : 1,
-              pr.x - pr.vx * 4, pr.y - pr.vy * 4, pr.owner);
+      const declaredPartnerShot = pr.attackTargetKind === "partner" && pr.betray;
+      if (!declaredPartnerShot) {
+        for (const e of g.enemies) {
+          if (e.dead || e.hurt > 0) continue;
+          if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
+            if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
+              e.hurt = 12; sfx(g, "clang");
+            } else if (e.kind === "sentinel" &&
+                       sentinelBlocks(e, pr.x - pr.vx * 8, pr.y - pr.vy * 8)) {
+              e.hurt = 10;
+              e.stagger = 45;
+              sfx(g, "clang");
+              burst(g, pr.x, pr.y, "#cfd2e0", 6);
+            } else {
+              damageEnemy(g, e, g.charmClaimed ? 2 : 1,
+                pr.x - pr.vx * 4, pr.y - pr.vy * 4, pr.owner);
+            }
+            pr.life = 0;
+            break;
           }
-          pr.life = 0;
-          break;
         }
       }
       // TREASON: a betray arrow also strikes the shooter's partner

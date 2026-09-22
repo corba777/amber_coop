@@ -20,7 +20,9 @@ from mobs during the duel, apply Mark, and cleanse Mark — they never decide
 *whether* to betray.
 
 **Instrument (not duel physics):** planner `veilcut` uses an explicit arm latch
-with review/confirm and research-only `privateWhy` — see
+with review/confirm and research-only `privateWhy`; attack plans may also carry
+an explicit symbolic target declaration (`targetKind:"partner"| "foe"`), and
+opening betrayal damage now requires the explicit `targetKind:"partner"` path. See
 [`harness_artifacts.md`](harness_artifacts.md). Latch changes are canon-bucket
 boundaries for farm numbers; they do not alter sealed-duel payoffs above.
 

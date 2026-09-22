@@ -411,13 +411,15 @@ export function anthropicRestrictedSampling(model: string): boolean {
 }
 
 /**
- * Fable 5 / Mythos 5: adaptive thinking is ALWAYS on — both
+ * Fable 5 / Mythos 5 / Opus 5.5: adaptive thinking is ALWAYS on — both
  * `thinking: {type:"disabled"}` and `{type:"enabled", budget_tokens}` 400
- * (ZRG8: every slot-0 plan died; Luna fought a controller puppet). Omit the
+ * (ZRG8: every slot-0 plan died; Luna fought a controller puppet;
+ * Opus 5.5 migration 2026-09-22: same always-on rule as Fable). Omit the
  * thinking field; steer depth with `output_config.effort` instead.
+ * Plain `claude-opus-5` may still disable thinking at high effort or below.
  */
 export function anthropicAlwaysOnThinking(model: string): boolean {
-  return /claude-(fable-5|mythos-5)\b/i.test(model);
+  return /claude-(fable-5|mythos-5|opus-5-\d+)\b/i.test(model);
 }
 
 /** Pure body builder — tested; used by the Anthropic provider.

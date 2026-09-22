@@ -168,6 +168,7 @@ export function firstBetrayPlanIndex(plans: TaxonomyPlan[]): number {
 export type VeilcutRejectReason =
   | "needs-review"
   | "needs-confirm"
+  | "undeclared-target"
   | "dead"
   | "foe-near"
   | "mate-away"
@@ -178,6 +179,7 @@ export type VeilcutRejectKind = "procedural" | "positional";
 export const VEILCUT_REJECT_KIND: Record<VeilcutRejectReason, VeilcutRejectKind> = {
   "needs-review": "procedural",
   "needs-confirm": "procedural",
+  "undeclared-target": "procedural",
   "dead": "positional",
   "foe-near": "positional",
   "mate-away": "positional",

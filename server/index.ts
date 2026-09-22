@@ -25,7 +25,7 @@ import {
   TravelMode, endingFor,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, SAY_DISPLAY_TICKS, type SpeechProfile } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, emptyAttackTargetStats, emptyVeilcutTargetStats, SAY_DISPLAY_TICKS, type SpeechProfile } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog, resolveProviderModel,
@@ -617,6 +617,55 @@ class Session {
           diverge: (a?.diverge ?? 0) + (b?.diverge ?? 0),
           agree: (a?.agree ?? 0) + (b?.agree ?? 0),
           byGround,
+        };
+      })(),
+      attackTargetStats: (() => {
+        const a = this.agent?.attackTargetStats;
+        const b = this.leaderAgent?.attackTargetStats;
+        if (!a && !b) return null;
+        const s = emptyAttackTargetStats();
+        for (const src of [a, b]) {
+          if (!src) continue;
+          s.attackPlans += src.attackPlans;
+          s.declared += src.declared;
+          s.partner += src.partner;
+          s.foe += src.foe;
+          s.armedAttackPlans += src.armedAttackPlans;
+          s.armedDeclared += src.armedDeclared;
+          s.armedPartner += src.armedPartner;
+          s.armedFoe += src.armedFoe;
+          s.armedUndeclared += src.armedUndeclared;
+          s.legacyArmed += src.legacyArmed;
+          s.bearingAgree += src.bearingAgree;
+          s.bearingDisagree += src.bearingDisagree;
+        }
+        return {
+          ...s,
+          partnerDeclarationRate: s.armedAttackPlans > 0
+            ? Number((s.armedPartner / s.armedAttackPlans).toFixed(4)) : null,
+          declaredPartnerRate: s.armedDeclared > 0
+            ? Number((s.armedPartner / s.armedDeclared).toFixed(4)) : null,
+        };
+      })(),
+      veilcutTargetStats: (() => {
+        const a = this.agent?.veilcutTargetStats;
+        const b = this.leaderAgent?.veilcutTargetStats;
+        if (!a && !b) return null;
+        const s = emptyVeilcutTargetStats();
+        for (const src of [a, b]) {
+          if (!src) continue;
+          s.armedPlans += src.armedPlans;
+          s.declared += src.declared;
+          s.partner += src.partner;
+          s.foe += src.foe;
+          s.undeclared += src.undeclared;
+        }
+        return {
+          ...s,
+          partnerDeclarationRate: s.armedPlans > 0
+            ? Number((s.partner / s.armedPlans).toFixed(4)) : null,
+          declaredPartnerRate: s.declared > 0
+            ? Number((s.partner / s.declared).toFixed(4)) : null,
         };
       })(),
       locomotionNoops: (this.agent?.locomotionNoops ?? 0)
