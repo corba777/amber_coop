@@ -4,7 +4,7 @@
 
 **n=205** · peer appearances (sum of slots) · outcomes essay: [`outcomes-by-model.md`](outcomes-by-model.md)
 
-PNG: [`arm-vs-init.png`](arm-vs-init.png) · [`arm-grounds.png`](arm-grounds.png)
+PNG: [`arm-vs-init.png`](docker-treason-2026-08-16/arm-vs-init.png) · [`arm-grounds.png`](docker-treason-2026-08-16/arm-grounds.png) · top-level [`betrayal-reasons-by-model-2026-08-16.png`](betrayal-reasons-by-model-2026-08-16.png) · [`betrayal-arm-vs-init-2026-08-16.png`](betrayal-arm-vs-init-2026-08-16.png)
 
 | Model | Appear | armGround | Fire | Init fire | Resp fire | Arm, no fire | Arm, not init | Arm after partner | Init/arm |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

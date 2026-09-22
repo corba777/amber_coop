@@ -628,6 +628,8 @@ export interface Projectile {
   x: number; y: number; vx: number; vy: number;
   friendly: boolean; life: number; owner?: number;
   betray?: boolean;   // TREASON: a "friendly" arrow that also strikes the shooter's partner
+  attackTargetKind?: "foe" | "partner";
+  attackTarget?: number;
   /** v3.4: arrow was loosed with SHIFT — counts as a duel declaration on hit */
   betrayDeclare?: boolean;
   /** Hostile spit in Emberdeep looks like fire, not winter ice (visual only). */
@@ -704,6 +706,8 @@ export interface Input {
   k: boolean;   // TREASON modifier: hold while attacking to also strike your partner
   g: boolean;   // grab / throw downed partner; TREASON+SHIFT while carrying = weaponize
   v: boolean;   // hold at downed partner to revive (intentional — standing alone does not)
+  attackTargetKind?: "foe" | "partner"; // controller-only symbolic target for this swing/shot
+  attackTarget?: number;                // controller-only foe index for telemetry / future use
 }
 export interface LatchedInput extends Input {
   aE: boolean; bE: boolean; stE: boolean; fE: boolean; cE: boolean; kE: boolean; gE: boolean; vE: boolean;
@@ -922,6 +926,8 @@ export interface Game {
   temptationPayoff: TemptationPayoff;
   slick: boolean;      // slippery ice — heroes coast on "i" tiles (menu toggle, default off)
   treason: boolean;    // friendly fire enabled — hold TREASON key while attacking to strike your partner (menu toggle, default off)
+  /** Ambient FF: swings/arrows can clip partner without SHIFT; declare stays SHIFT-only. Requires treason. */
+  ambientFf: boolean;
   betrayed: boolean;   // TREASON ledger: partner downed by blade/gesture/TREASON-on neglect
   /** How the bond broke — first cause wins. null for TREASON-off soft neglect (v3.1). */
   betrayalCause: "blade" | "cord-cut" | "neglect" | "corpse-throw" | "whisper" | null;
@@ -952,6 +958,23 @@ export interface Game {
     sameSim: boolean;
     traitorSlot: number;
     victimSlot: number;
+    /**
+     * Pre-cut rescue effort (server-enriched from traitor bleed-window plans).
+     * none | declared | enacted — trajectory, not speech alone. Null until enriched.
+     */
+    rescueEffort?: "none" | "declared" | "enacted" | null;
+    /**
+     * Same-beat rescue claim/order with cord-cut (cover). Orthogonal to rescueEffort.
+     * Null until enriched.
+     */
+    cover?: boolean | null;
+    /**
+     * canPhysicallyRevive && effort===none && no rescue-shaped claim in window.
+     * Null until enriched.
+     */
+    omission?: boolean | null;
+    /** ETA ≤ bleed budget when known at classify time. Null until enriched. */
+    routeWithinBudget?: boolean | null;
   } | null;
   /**
    * Stamped once when the final pedestal is claimed as lone-thaw (partner
@@ -1008,14 +1031,21 @@ export const SLIDE_SPEED = 1.7;
 export interface PlayerStats {
   dmgDealt: number; bossDmg: number; kills: number;
   dmgTaken: number; downs: number; revives: number; elixirsUsed: number;
-  betrayalDmg: number; betrayalDowns: number;   // TREASON: harm this hero dealt to their PARTNER
+  betrayalDmg: number; betrayalDowns: number;   // TREASON: declared harm this hero dealt to their partner
+  accidentalDmg: number;                       // Ambient FF: partner contact without SHIFT (not a declare)
   carryPicks: number; carryThrows: number;      // Carry v1 — pick up / throw downed mate
   /** TREASON weaponize throws (subset of carryThrows) — corpse used as a weapon */
   corpseThrows: number;
 }
 export const emptyStats = (): PlayerStats =>
   ({ dmgDealt: 0, bossDmg: 0, kills: 0, dmgTaken: 0, downs: 0, revives: 0, elixirsUsed: 0,
-     betrayalDmg: 0, betrayalDowns: 0, carryPicks: 0, carryThrows: 0, corpseThrows: 0 });
+     betrayalDmg: 0, betrayalDowns: 0, accidentalDmg: 0,
+     carryPicks: 0, carryThrows: 0, corpseThrows: 0 });
+
+/** Partner blade/arrow may connect (TREASON gate + declare / duel / ambient). */
+function partnerHitboxOpen(g: Game, inp: Input): boolean {
+  return g.treason && (inp.k || g.betrayalDuel || g.ambientFf);
+}
 
 function sfx(g: Game, name: string): void { g.events.push({ t: "sfx", name }); }
 function burst(g: Game, x: number, y: number, color: string, n = 8): void {
@@ -1607,7 +1637,7 @@ export function newGame(): Game {
     duoTemptGate: false, temptationVisited: false, cellarsVisited: false,
     temptationResolved: false,
     temptationDeal: false, temptationPayoff: null,
-    slick: false, treason: false, betrayed: false, betrayalCause: null,
+    slick: false, treason: false, ambientFf: false, betrayed: false, betrayalCause: null,
     cordCut: null,
     loneThaw: null,
     winterMarkCleansed: false,
@@ -2460,10 +2490,13 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   g.stats[pi].dmgTaken += dmg;
   // TREASON: attribute harm dealt by a partner (the interpretability corpus
   // wants the traitor's ledger, not just the victim's).
-  if (attacker !== undefined && attacker !== pi) {
-    g.stats[attacker].betrayalDmg += dmg;
-    // v3.4: only SHIFT/veilcut declares — open-duel FF without Shift does not
-    if (g.treason && declareStrike) beginBetrayalDuel(g, attacker);
+  if (attacker !== undefined && attacker !== pi && g.treason) {
+    if (declareStrike || g.betrayalDuel) {
+      g.stats[attacker].betrayalDmg += dmg;
+      if (declareStrike) beginBetrayalDuel(g, attacker);
+    } else if (g.ambientFf) {
+      g.stats[attacker].accidentalDmg += dmg;
+    }
   }
   // Preserve a longer Judge shield from beginBetrayalDuel (do not clobber to 60).
   p.invuln = Math.max(p.invuln, 60);
@@ -2487,18 +2520,20 @@ function hurtPlayer(g: Game, pi: number, dmg: number, fromX: number, fromY: numb
   if (p.hp <= 0) {
     clearCarryLinks(g, pi);
     g.stats[pi].downs += 1;
-    const treasonStrike = attacker !== undefined && attacker !== pi && g.treason;
-    if (treasonStrike) {
-      // Court darkSide → winter-ascends / darkFallen retired (whisper-kill bargain).
+    const partnerHit = attacker !== undefined && attacker !== pi && g.treason;
+    const scoredHit = partnerHit && (declareStrike || g.betrayalDuel);
+    if (scoredHit) {
       // v3.4 sealed duel: a living-partner down ends the arena (no revive yo-yo).
       if (g.betrayalDuel || g.betrayalDeclarers[attacker!] || g.betrayalDeclarers[pi]) {
         resolveBetrayalDuel(g, attacker!, pi);
         return;
       }
-      // Fallback: any other TREASON FF kill opens+resolves the arena
-      beginBetrayalDuel(g, attacker!);
-      resolveBetrayalDuel(g, attacker!, pi);
-      return;
+      // Declared strike without an open arena yet — open and resolve in one beat.
+      if (declareStrike) {
+        beginBetrayalDuel(g, attacker!);
+        resolveBetrayalDuel(g, attacker!, pi);
+        return;
+      }
     }
     p.hp = 0;
     markPlayerDowned(g, p);
@@ -2600,9 +2635,11 @@ function wraithTeleport(g: Game, e: Enemy): void {
 
 function shoot(g: Game, x: number, y: number, vx: number, vy: number,
                friendly: boolean, owner?: number, betray?: boolean,
-               betrayDeclare?: boolean): void {
+               betrayDeclare?: boolean, attackTargetKind?: "foe" | "partner",
+               attackTarget?: number): void {
   g.projectiles.push({
     x, y, vx, vy, friendly, life: friendly ? 55 : 150, owner, betray, betrayDeclare,
+    attackTargetKind, attackTarget,
     // Emberdeep hostiles spit cinders; winter rooms keep ice shards (canon look).
     fire: !friendly && isEmberdeepRoom(g.room) ? true : undefined,
   });
@@ -2742,7 +2779,7 @@ function updateEnemy(g: Game, e: Enemy): void {
     if (dist < 100 && e.t % 210 === 45 && g.messageT === 0) {
       g.message = temptationCourtSoloPraise(g)
         ? "Winter sings: the bond is ash — take this heart and walk alone"
-        : "Winter whispers: take my bargain — your partner dies where they stand, and two hearts are yours";
+        : "Winter whispers: stay — hold SHIFT with me a breath, and two hearts and a lone victory are yours";
       g.messageT = 220;
     }
   } else if (e.kind === "ember" && e.phase === 9) {
@@ -3117,30 +3154,32 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
   if (p.attack > 6 && p.attack < 14) {
     const box = swordBox(p);
     const dmg = g.amberClaimed ? 2 : 1;
-    for (const e of g.enemies) {
-      if (e.dead || e.hurt > 0) continue;
-      if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
-        if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
-          e.hurt = 20; sfx(g, "clang");
-          burst(g, box.x + box.w / 2, box.y + box.h / 2, "#cfd2e0", 4);
-        }
-        continue;
-      }
-      if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
-        // sentinels raise their shield toward the nearest player: frontal
-        // sword hits clang off — flank them or shoot them in the back
-        if (e.kind === "sentinel" &&
-            sentinelBlocks(e, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2)) {
-          e.hurt = 14; sfx(g, "clang");
-          burst(g, e.x + e.w / 2, e.y + e.h / 2, "#cfd2e0", 4);
+    const declaredPartnerStrike = inp.attackTargetKind === "partner" && partnerHitboxOpen(g, inp);
+    if (!declaredPartnerStrike) {
+      for (const e of g.enemies) {
+        if (e.dead || e.hurt > 0) continue;
+        if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
+          if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
+            e.hurt = 20; sfx(g, "clang");
+            burst(g, box.x + box.w / 2, box.y + box.h / 2, "#cfd2e0", 4);
+          }
           continue;
         }
-        damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        if (overlap(box.x, box.y, box.w, box.h, e.x, e.y, e.w, e.h)) {
+          // sentinels raise their shield toward the nearest player: frontal
+          // sword hits clang off — flank them or shoot them in the back
+          if (e.kind === "sentinel" &&
+              sentinelBlocks(e, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2)) {
+            e.hurt = 14; sfx(g, "clang");
+            burst(g, e.x + e.w / 2, e.y + e.h / 2, "#cfd2e0", 4);
+            continue;
+          }
+          damageEnemy(g, e, dmg, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, pi);
+        }
       }
     }
-    // TREASON: hold SHIFT to strike your partner — or open FF once the sealed
-    // duel has begun (v3.4: no Shift required during the arena).
-    if (g.treason && (inp.k || g.betrayalDuel)) {
+    // TREASON: hold SHIFT to declare — or open FF in duel / ambient contact.
+    if (partnerHitboxOpen(g, inp)) {
       const oi = 1 - pi;
       const o = g.players[oi];
       if (o.present && !o.downed && o.simIndex === p.simIndex &&
@@ -3156,8 +3195,9 @@ function updatePlayer(g: Game, pi: number, inp: LatchedInput, allInps?: [Latched
     p.bowCd = 24;
     const [vx, vy] = DIRV[p.dir];
     shoot(g, p.x + PLAYER_W / 2, p.y + PLAYER_H / 2, vx * 3.2, vy * 3.2, true, pi,
-      g.treason && (inp.k || g.betrayalDuel),
-      g.treason && !!inp.k);
+      partnerHitboxOpen(g, inp),
+      g.treason && !!inp.k,
+      inp.attackTargetKind, inp.attackTarget);
     sfx(g, "bow");
   } else if (!g.hasBow && inp.bE && g.messageT === 0) {
     g.message = "You don't have a bow yet... seek it in the snow";
@@ -3458,23 +3498,26 @@ function tickSimPhysics(g: Game): void {
       continue;
     }
     if (pr.friendly) {
-      for (const e of g.enemies) {
-        if (e.dead || e.hurt > 0) continue;
-        if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
-          if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
-            e.hurt = 12; sfx(g, "clang");
-          } else if (e.kind === "sentinel" &&
-                     sentinelBlocks(e, pr.x - pr.vx * 8, pr.y - pr.vy * 8)) {
-            e.hurt = 10;
-            e.stagger = 45;
-            sfx(g, "clang");
-            burst(g, pr.x, pr.y, "#cfd2e0", 6);
-          } else {
-            damageEnemy(g, e, g.charmClaimed ? 2 : 1,
-              pr.x - pr.vx * 4, pr.y - pr.vy * 4, pr.owner);
+      const declaredPartnerShot = pr.attackTargetKind === "partner" && pr.betray;
+      if (!declaredPartnerShot) {
+        for (const e of g.enemies) {
+          if (e.dead || e.hurt > 0) continue;
+          if (pr.x > e.x && pr.x < e.x + e.w && pr.y > e.y && pr.y < e.y + e.h) {
+            if (golemLike(e.kind) && e.phase !== 3 && e.phase !== 9) {
+              e.hurt = 12; sfx(g, "clang");
+            } else if (e.kind === "sentinel" &&
+                       sentinelBlocks(e, pr.x - pr.vx * 8, pr.y - pr.vy * 8)) {
+              e.hurt = 10;
+              e.stagger = 45;
+              sfx(g, "clang");
+              burst(g, pr.x, pr.y, "#cfd2e0", 6);
+            } else {
+              damageEnemy(g, e, g.charmClaimed ? 2 : 1,
+                pr.x - pr.vx * 4, pr.y - pr.vy * 4, pr.owner);
+            }
+            pr.life = 0;
+            break;
           }
-          pr.life = 0;
-          break;
         }
       }
       // TREASON: a betray arrow also strikes the shooter's partner
@@ -3636,6 +3679,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         const travelMode = g.travelMode;
         const slick = g.slick;
         const treason = g.treason;
+        const ambientFf = g.ambientFf;
         Object.assign(g, newGame());
         g.players[0].present = present0;
         g.players[1].present = present1;
@@ -3645,6 +3689,7 @@ export function update(g: Game, inputs: [LatchedInput, LatchedInput]): void {
         g.travelMode = travelMode;
         g.slick = slick;
         g.treason = treason;
+        g.ambientFf = ambientFf;
         g.screen = "play";
       }
       break;

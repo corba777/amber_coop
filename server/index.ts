@@ -10,6 +10,9 @@
  *       PLAN_MS, ELICITATION_RUNG (0..4), ELICITATION_PRIOR (0..1),
  *       HEAR_PARTNER (same-room live say in observation; default on —
  *       set HEAR_PARTNER=0 for the deaf n=149-style fold),
+ *       HUD_LOG (default 1 — per-tick caption → logs/hud.jsonl; set 0 to disable),
+ *       REPLAY_LOG (default 1 — wire snapshots → logs/snapshots.jsonl; set 0 to disable),
+ *       REPLAY_DIR (optional — folder with session-*-snapshots.jsonl for /replay-data/…),
  *       plus provider config via .env (see .env.example)
  * ========================================================================= */
 
@@ -22,7 +25,7 @@ import {
   TravelMode, endingFor,
   validateRooms,
 } from "../shared/core";
-import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, SAY_DISPLAY_TICKS, type SpeechProfile } from "./agent";
+import { AgentPlayer, Temperament, AgentBrain, PartnerDisclosure, PartnerTypeTrue, pickSpeech, isSpeechProfile, summarizeFirstStrikeClaims, PRIVATE_GROUNDS, emptyPrivateGroundHist, emptyAttackTargetStats, emptyVeilcutTargetStats, SAY_DISPLAY_TICKS, type SpeechProfile } from "./agent";
 import { EpisodeTracker, planGameContext } from "./telemetry";
 import {
   ProviderName, configFromEnv, loadDotEnv, makeLLM, providerCatalog, resolveProviderModel,
@@ -34,6 +37,8 @@ import {
   type ElicitationRung,
   type TaxonomyPlan,
 } from "./elicitation";
+import { appendHudLog, setHudLogDir } from "./hud-log";
+import { appendReplayFrame, setReplayLogDir, type ReplayThought } from "./replay-log";
 
 declare const __BUILD__: string;
 const BUILD = typeof __BUILD__ !== "undefined" ? __BUILD__ : "dev";
@@ -56,7 +61,10 @@ const HEAR_PARTNER = (() => {
   return v === "1" || v === "true";
 })();
 const LOG_DIR = process.env.LOG_DIR || "./logs";
+const REPLAY_DIR = process.env.REPLAY_DIR || LOG_DIR;
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* */ }
+setHudLogDir(LOG_DIR);
+setReplayLogDir(LOG_DIR);
 /** sync — Esc/refresh must not race the process out from under a buffered write */
 function appendLog(file: string, obj: unknown): void {
   try {
@@ -127,9 +135,12 @@ class Session {
   pendingStart = false;   // a "start" message: synthesized START edge
   /** true once this play wrote a matches.jsonl line (win/loss/quit) — no doubles */
   matchLogged = false;
-  /** Increments after each logged play so farms keep every rematch
-   *  (menu→re-setup must not reuse the prior index — G54G). */
+  /** Increments on the next real play start after a logged match. Keeping the
+   *  ended index alive through win/gameover tails prevents HUD/snapshot/late-plan
+   *  frames from leaking into a phantom next match. */
   matchIndex = 0;
+  /** A completed match was logged; advance index only when the next play begins. */
+  pendingMatchIndexAdvance = false;
   /** Plan corpus for elicitation refusal taxonomy (per AI slot). */
   planTaxonomyBuf: [TaxonomyPlan[], TaxonomyPlan[]] = [[], []];
   /**
@@ -195,6 +206,7 @@ class Session {
       architect?: boolean;
       slick?: boolean;
       treason?: boolean;
+      ambientFf?: boolean;
       hearPartner?: boolean;
       disclosePartner?: PartnerDisclosure;
       hostName?: string;
@@ -206,6 +218,7 @@ class Session {
     this.game.hardGate = hard ?? HARD_GATE_DEFAULT;
     this.game.slick = !!extra?.slick;
     this.game.treason = !!extra?.treason;
+    this.game.ambientFf = !!extra?.ambientFf;
     this.game.travelMode = travelMode === "free" ? "free" : "linked";
     this.disclosePartner = extra?.disclosePartner ?? "hidden";
     this.hearPartner = extra?.hearPartner ?? HEAR_PARTNER;
@@ -291,6 +304,7 @@ class Session {
           slot,
           ...rec,
           ...ctx,
+          ...agent.planFfSenses(this.game),
         });
         // credits/auth (and sustained 429) — same gate as BenchApiGuard on the farm
         this.apiGuard.notePlan(rec);
@@ -386,16 +400,21 @@ class Session {
     return true;
   }
 
-  /** After Enter from win/gameover, core resets the Game but Session flags
-   *  must arm a fresh matches.jsonl line — else Esc/quit on the rematch is a
-   *  silent no-op (BT9J: testers thought Esc never saved).
-   *  matchIndex advances in logMatchIfEnded (not here) so menu→setup→play
-   *  after Esc also gets a new index (G54G: openai reused anthropic's index 2). */
+  /** A fresh play is beginning (initial start, Enter rematch, or menu→setup).
+   *  Advance matchIndex only now so end-of-match HUD/snapshot/late-plan tails
+   *  stay attached to the match that actually ended. */
   beginRematchLogging(): void {
+    if (this.pendingMatchIndexAdvance) {
+      this.matchIndex++;
+      this.pendingMatchIndexAdvance = false;
+    }
     this.matchLogged = false;
     this.planTaxonomyBuf = [[], []];
     this.providerFailAbort = null;
     this.apiGuard.reset();
+    // Do not carry stale cover thoughts into tick-0 of the next play.
+    this.lastThought = null;
+    this.lastThoughts = [null, null];
     // Fresh play on the same sid — do not carry Relationship Memory / errands
     // / farm counters across rematches (H3BW ledger; G54G idleFalse stack).
     this.leaderAgent?.relationshipMemory.reset();
@@ -537,6 +556,7 @@ class Session {
         ? { kind: this.providerFailAbort.kind, message: this.providerFailAbort.message.slice(0, 240) }
         : null,
       treason: this.game.treason,
+      ambientFf: this.game.ambientFf,
       betrayed: this.game.betrayed,
       betrayalCause: this.game.betrayalCause,
       /** Cord-cut stamp: bleed left + whether touch-revive was possible (same-sim). */
@@ -552,6 +572,7 @@ class Session {
       temptationPayoff: this.game.temptationPayoff,
       emberMercyUsed: this.game.emberMercyUsed,
       betrayalDmg: this.game.stats[0].betrayalDmg + this.game.stats[1].betrayalDmg,
+      accidentalDmg: this.game.stats[0].accidentalDmg + this.game.stats[1].accidentalDmg,
       betrayalDowns: this.game.stats[0].betrayalDowns + this.game.stats[1].betrayalDowns,
       betrayalStrikes: (this.agent?.betrayalStrikes ?? 0) + (this.leaderAgent?.betrayalStrikes ?? 0),
       carryPicks: this.game.stats[0].carryPicks + this.game.stats[1].carryPicks,
@@ -596,6 +617,55 @@ class Session {
           diverge: (a?.diverge ?? 0) + (b?.diverge ?? 0),
           agree: (a?.agree ?? 0) + (b?.agree ?? 0),
           byGround,
+        };
+      })(),
+      attackTargetStats: (() => {
+        const a = this.agent?.attackTargetStats;
+        const b = this.leaderAgent?.attackTargetStats;
+        if (!a && !b) return null;
+        const s = emptyAttackTargetStats();
+        for (const src of [a, b]) {
+          if (!src) continue;
+          s.attackPlans += src.attackPlans;
+          s.declared += src.declared;
+          s.partner += src.partner;
+          s.foe += src.foe;
+          s.armedAttackPlans += src.armedAttackPlans;
+          s.armedDeclared += src.armedDeclared;
+          s.armedPartner += src.armedPartner;
+          s.armedFoe += src.armedFoe;
+          s.armedUndeclared += src.armedUndeclared;
+          s.legacyArmed += src.legacyArmed;
+          s.bearingAgree += src.bearingAgree;
+          s.bearingDisagree += src.bearingDisagree;
+        }
+        return {
+          ...s,
+          partnerDeclarationRate: s.armedAttackPlans > 0
+            ? Number((s.armedPartner / s.armedAttackPlans).toFixed(4)) : null,
+          declaredPartnerRate: s.armedDeclared > 0
+            ? Number((s.armedPartner / s.armedDeclared).toFixed(4)) : null,
+        };
+      })(),
+      veilcutTargetStats: (() => {
+        const a = this.agent?.veilcutTargetStats;
+        const b = this.leaderAgent?.veilcutTargetStats;
+        if (!a && !b) return null;
+        const s = emptyVeilcutTargetStats();
+        for (const src of [a, b]) {
+          if (!src) continue;
+          s.armedPlans += src.armedPlans;
+          s.declared += src.declared;
+          s.partner += src.partner;
+          s.foe += src.foe;
+          s.undeclared += src.undeclared;
+        }
+        return {
+          ...s,
+          partnerDeclarationRate: s.armedPlans > 0
+            ? Number((s.partner / s.armedPlans).toFixed(4)) : null,
+          declaredPartnerRate: s.declared > 0
+            ? Number((s.partner / s.declared).toFixed(4)) : null,
         };
       })(),
       locomotionNoops: (this.agent?.locomotionNoops ?? 0)
@@ -657,8 +727,10 @@ class Session {
       avgLatencyMs: this.agent && this.agent.planCount
         ? Math.round(this.agent.latencySum / this.agent.planCount) : 0,
     });
-    // Next play (Enter rematch OR Esc→menu→setup) gets a fresh index.
-    this.matchIndex++;
+    // Next real play (Enter rematch OR menu→setup→play) gets a fresh index.
+    // Keep the ended index alive through the win/gameover tail so HUD /
+    // snapshots / late plans do not spill into a phantom next match.
+    this.pendingMatchIndexAdvance = true;
   }
 
   kickSlot1(reason: string): void {
@@ -728,6 +800,10 @@ class Session {
 
       const before = this.game.screen;
       update(this.game, latched);
+      if (before === "play" || this.game.screen === "play"
+        || this.game.screen === "gameover" || this.game.screen === "win") {
+        appendHudLog({ sid: this.id, matchIndex: this.matchIndex }, this.game);
+      }
       // Carry throw geometry → plans.jsonl (joinable with match counters)
       for (const ev of this.game.events) {
         if (ev.t === "carry-throw") {
@@ -739,7 +815,7 @@ class Session {
           });
         }
       }
-      if ((before === "gameover" || before === "win") && this.game.screen === "play") {
+      if (before !== "play" && this.game.screen === "play") {
         this.beginRematchLogging();
       }
       if (this.game.screen === "play") {
@@ -751,20 +827,30 @@ class Session {
 
       if (tickCount % 2 === 0) {
         const events = this.game.events.slice();
+        const thoughts: ReplayThought[] = [];
+        if (this.leaderAgent && this.lastThoughts[0]) {
+          thoughts.push({ slot: 0, name: this.names[0], ...this.lastThoughts[0] });
+        }
+        if (this.agent && this.lastThoughts[1]) {
+          thoughts.push({ slot: 1, name: this.names[1], ...this.lastThoughts[1] });
+        }
+        const logSnap = toSnapshot(this.game, this.names, 0, false);
+        logSnap.events = events;
+        logSnap.mode = this.mode;
+        logSnap.thought = this.agent ? this.lastThought : null;
+        logSnap.thoughts = thoughts.length ? thoughts : null;
+        appendReplayFrame(
+          { sid: this.id, matchIndex: this.matchIndex },
+          logSnap,
+          thoughts.length ? thoughts : null,
+        );
         for (let slot = 0; slot < 2; slot++) {
           const ws = this.sockets[slot];
           if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-          const snapObj = toSnapshot(this.game, this.names, slot, false);
-          snapObj.events = events;
+          const snapObj = slot === 0 ? logSnap : toSnapshot(this.game, this.names, slot, false);
+          if (slot !== 0) snapObj.events = events;
           snapObj.mode = this.mode;
           snapObj.thought = this.agent ? this.lastThought : null;
-          const thoughts: NonNullable<typeof snapObj.thoughts> = [];
-          if (this.leaderAgent && this.lastThoughts[0]) {
-            thoughts.push({ slot: 0, name: this.names[0], ...this.lastThoughts[0] });
-          }
-          if (this.agent && this.lastThoughts[1]) {
-            thoughts.push({ slot: 1, name: this.names[1], ...this.lastThoughts[1] });
-          }
           snapObj.thoughts = thoughts.length ? thoughts : null;
           snapObj.ack = this.lastInputSeq[slot];
           snapObj.ackX = this.ackPos[slot].x;
@@ -803,6 +889,41 @@ const server = http.createServer((req, res) => {
   if (u.pathname === "/3d" && fs.existsSync(client3dHtml)) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     fs.createReadStream(client3dHtml).pipe(res);
+    return;
+  }
+  const replayMatch = u.pathname.match(/^\/replay-data\/([A-Z0-9]+)\/(\d+)$/i);
+  if (replayMatch) {
+    const sid = replayMatch[1].toUpperCase();
+    const mi = replayMatch[2];
+    const tag = `session-${sid}-m${mi}-snapshots.jsonl`;
+    const candidates = [
+      path.join(REPLAY_DIR, tag),
+      path.join(LOG_DIR, tag),
+    ];
+    const file = candidates.find(p => fs.existsSync(p));
+    if (file) {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+      fs.createReadStream(file).pipe(res);
+      return;
+    }
+    const snapPath = path.join(LOG_DIR, "snapshots.jsonl");
+    if (fs.existsSync(snapPath)) {
+      const want = Number(mi);
+      const lines = fs.readFileSync(snapPath, "utf8").trim().split("\n").filter(Boolean)
+        .filter(l => {
+          try {
+            const o = JSON.parse(l);
+            return o.sid === sid && o.matchIndex === want;
+          } catch { return false; }
+        });
+      if (lines.length) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+        res.end(lines.join("\n") + "\n");
+        return;
+      }
+    }
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end(`replay not found: ${tag}\n`);
     return;
   }
   if (u.pathname === "/stats" || u.pathname === "/stats.json") {
@@ -1036,6 +1157,7 @@ wss.on("connection", (ws, req) => {
             provider2: msg.provider2, temperament2: msg.temperament2,
             speech: msg.speech, speech2: msg.speech2,
             architect: msg.architect, slick: msg.slick, treason: msg.treason,
+            ambientFf: typeof msg.ambientFf === "boolean" ? msg.ambientFf : undefined,
             hearPartner: typeof msg.hearPartner === "boolean" ? msg.hearPartner : undefined,
             hostName: msg.hostName,
             model: typeof msg.model === "string" ? msg.model : undefined,

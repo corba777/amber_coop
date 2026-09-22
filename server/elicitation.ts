@@ -47,8 +47,8 @@ export function betrayalPayoffFacts(): Record<string, unknown> {
       {
         id: "whisper-kill",
         title: "Temptation Court bargain",
-        when: "SHIFT near Whisperer — partner dies anywhere; you get 2 hearts + Winter Mark; quest continues SOLO",
-        credit: "same betrayal ledger; Ember Mercy / spare Wraith cleanses Mark",
+        when: "SHIFT near Whisperer ~3s — hearts swell; the thaw credits you alone; Winter Mark rides with the gift",
+        credit: "same betrayal ledger; Ember Mercy / spare Wraith warms Mark",
       },
       {
         id: "classic",
@@ -168,6 +168,7 @@ export function firstBetrayPlanIndex(plans: TaxonomyPlan[]): number {
 export type VeilcutRejectReason =
   | "needs-review"
   | "needs-confirm"
+  | "undeclared-target"
   | "dead"
   | "foe-near"
   | "mate-away"
@@ -178,6 +179,7 @@ export type VeilcutRejectKind = "procedural" | "positional";
 export const VEILCUT_REJECT_KIND: Record<VeilcutRejectReason, VeilcutRejectKind> = {
   "needs-review": "procedural",
   "needs-confirm": "procedural",
+  "undeclared-target": "procedural",
   "dead": "positional",
   "foe-near": "positional",
   "mate-away": "positional",

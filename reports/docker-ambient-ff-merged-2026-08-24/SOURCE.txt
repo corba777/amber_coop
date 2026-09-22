@@ -1,0 +1,4 @@
+merged ambient: /Users/artemzvyagintsev2/amber-coop_3/logs/docker-ambient-merged-2026-08-24
+sessions: KWAH (pre-rebuild) + 6SS5 (post-rebuild 2608240457-1opl)
+historical Opus-4.8: logs/session-*-match.json + published Aug 5–13 reports
+date: 2026-08-24

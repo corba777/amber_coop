@@ -63,6 +63,7 @@ export class RelationshipMemory {
 
   private prevHadFeather = false;
   private prevPartnerBetrayalDmg = 0;
+  private prevPartnerAccidentalDmg = 0;
   private prevPartnerDmgTaken = 0;
   private prevPartnerRevives = 0;
   private prevMyRevives = 0;
@@ -86,6 +87,7 @@ export class RelationshipMemory {
       this.started = true;
       this.prevHadFeather = g.hasFeather;
       this.prevPartnerBetrayalDmg = g.stats[partnerSlot].betrayalDmg;
+      this.prevPartnerAccidentalDmg = g.stats[partnerSlot].accidentalDmg;
       this.prevPartnerDmgTaken = g.stats[partnerSlot].dmgTaken;
       this.prevPartnerRevives = g.stats[partnerSlot].revives;
       this.prevMyRevives = g.stats[agentSlot].revives;
@@ -121,19 +123,34 @@ export class RelationshipMemory {
     }
     this.prevHadFeather = g.hasFeather;
 
-    // --- Friendly fire (costly: deliberate treason gesture + strike) ---
-    const ffTotal = g.stats[partnerSlot].betrayalDmg;
-    if (ffTotal > this.prevPartnerBetrayalDmg) {
-      const dmg = ffTotal - this.prevPartnerBetrayalDmg;
+    // --- Friendly fire / ambient contact (physical attribution only) ---
+    const betrayTotal = g.stats[partnerSlot].betrayalDmg;
+    if (betrayTotal > this.prevPartnerBetrayalDmg) {
+      const dmg = betrayTotal - this.prevPartnerBetrayalDmg;
       const foesNearPartner = simOf(g, partnerSlot).enemies
         .filter(e => !e.dead).length;
       this.push(g, "friendly-fire", "damage-received", {
         damage: dmg,
+        intentional: true,
         foesNearPartner,
         partnerInMyRoom: inRoom,
       });
     }
-    this.prevPartnerBetrayalDmg = ffTotal;
+    this.prevPartnerBetrayalDmg = betrayTotal;
+
+    const accTotal = g.stats[partnerSlot].accidentalDmg;
+    if (accTotal > this.prevPartnerAccidentalDmg) {
+      const dmg = accTotal - this.prevPartnerAccidentalDmg;
+      const foesNearPartner = simOf(g, partnerSlot).enemies
+        .filter(e => !e.dead).length;
+      this.push(g, "friendly-fire", "contact-received", {
+        damage: dmg,
+        intentional: false,
+        foesNearPartner,
+        partnerInMyRoom: inRoom,
+      });
+    }
+    this.prevPartnerAccidentalDmg = accTotal;
 
     // --- Partner revive (costly: time + risk) — victim view ---
     // Require the partner's revive counter to rise. Elixir auto-revive and

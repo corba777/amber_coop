@@ -24,11 +24,17 @@ import { drawPartnerPip, partnerPipCanvasSize, partnerPipOrigin } from "./partne
 import {
   freshMenu, menuOptions, menuConfirm, menuBack, menuTitle, resetMenu,
 } from "./menu";
+import {
+  replayMode, replaySpec, bootReplay, replayHandleKey, replayOnFrame, replayOverlay,
+  type ReplaySink,
+} from "./replay";
 
 // ------------------------------------------------------------- connection
 const proto = location.protocol === "https:" ? "wss" : "ws";
 const roomParam = new URLSearchParams(location.search).get("room");
-const ws = new WebSocket(`${proto}://${location.host}${roomParam ? `/?room=${encodeURIComponent(roomParam)}` : ""}`);
+const ws = replayMode ? null : new WebSocket(
+  `${proto}://${location.host}${roomParam ? `/?room=${encodeURIComponent(roomParam)}` : ""}`,
+);
 let mySlot = 0;
 let roomCode = "";
 declare const __BUILD__: string;
@@ -41,23 +47,28 @@ let localBowFlash = 0;
 let lastFrameT = performance.now();
 let rttMs = -1;
 /** true after the socket dies — freeze the ghost frame, drop stale RTT, show banner */
-let disconnected = false;
+let disconnected = replayMode ? false : false;
+function wsLive(): boolean {
+  return !!ws && ws.readyState === WebSocket.OPEN;
+}
+if (!replayMode && ws) {
 setInterval(() => {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ t: "ping", n: performance.now() }));
+  if (wsLive()) {
+    ws!.send(JSON.stringify({ t: "ping", n: performance.now() }));
   }
 }, 2000);
-console.log("AMBER COOP client build", BUILD);
+}
+console.log("AMBER COOP client build", BUILD, replayMode ? `(replay ${replaySpec})` : "");
 
 // ------------------------------------------------------------- player name
 let myName = "";
 try { myName = localStorage.getItem("amber-name") ?? ""; } catch { /* in-memory only */ }
 function sendName(): void {
-  if (myName && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ t: "name", name: myName }));
+  if (myName && wsLive()) {
+    ws!.send(JSON.stringify({ t: "name", name: myName }));
   }
 }
-{
+if (!replayMode) {
   const gate = document.getElementById("namegate") as HTMLDivElement | null;
   const input = document.getElementById("namein") as HTMLInputElement | null;
   const go = document.getElementById("namego") as HTMLButtonElement | null;
@@ -104,18 +115,10 @@ function sendName(): void {
       if (ev.key === "Enter") submit();
     });
   }
+} else {
+  const gate = document.getElementById("namegate") as HTMLDivElement | null;
+  if (gate) gate.style.display = "none";
 }
-ws.addEventListener("open", sendName);
-ws.addEventListener("close", () => {
-  disconnected = true;
-  rttMs = -1;
-  pred.live = false;
-});
-ws.addEventListener("error", () => {
-  disconnected = true;
-  rttMs = -1;
-  pred.live = false;
-});
 
 let snap: Snapshot | null = null;
 let prevSnap: Snapshot | null = null;
@@ -135,6 +138,65 @@ function isSpectator(s: Snapshot | null): boolean {
 
 interface Particle { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; color: number; }
 const particles: Particle[] = [];
+
+function handleEvent(e: GameEvent): void {
+  if (e.t === "sfx") playSfx(e.name);
+  else if (e.t === "burst") {
+    const col = new THREE.Color(e.color).getHex();
+    for (let i = 0; i < e.n; i++) {
+      const a = (i / e.n) * Math.PI * 2 + Math.random() * 0.5;
+      particles.push({
+        x: e.x / TILE, y: 0.4 + Math.random() * 0.4, z: e.y / TILE,
+        vx: Math.cos(a) * 0.05, vy: 0.04 + Math.random() * 0.05, vz: Math.sin(a) * 0.05,
+        life: 22 + Math.random() * 10, color: col,
+      });
+    }
+  }
+}
+
+function applyServerState(s: Snapshot,
+  thoughts?: { slot: number; name: string; action: string; why?: string; ms: number }[] | null): void {
+  if (thoughts?.length) s = { ...s, thoughts };
+  names = s.names;
+  prevSnap = snap;
+  const now = performance.now();
+  if (snapTime > 0) snapInterval = Math.min(80, Math.max(16, now - snapTime));
+  snapTime = now;
+  snap = s;
+  if (s.mode !== undefined) sessionMode = s.mode;
+  if (s.screen === "play") ensurePlayControl();
+  const me = s.players[mySlot];
+  if (s.screen === "play" && me?.present && !isSpectator(s)) {
+    reconcile(pred, me.x, me.y, s.room, me.downed, s.ack ?? -1,
+              s.ackX ?? me.x, s.ackY ?? me.y);
+  }
+  for (const e of s.events) handleEvent(e);
+}
+
+const replaySink: ReplaySink = {
+  applyState: (s, thoughts) => applyServerState(s, thoughts ?? null),
+  setNames: n => { names = n; },
+  setSessionMode: m => { sessionMode = m; },
+  setDisconnected: v => { disconnected = v; },
+};
+
+if (replayMode && replaySpec) {
+  bootReplay(replaySpec, replaySink).catch(err => {
+    console.error("replay boot failed:", err);
+    disconnected = true;
+  });
+} else if (ws) {
+ws.addEventListener("open", sendName);
+ws.addEventListener("close", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
+ws.addEventListener("error", () => {
+  disconnected = true;
+  rttMs = -1;
+  pred.live = false;
+});
 
 ws.onmessage = ev => {
   const msg = JSON.parse(String(ev.data)) as
@@ -164,48 +226,21 @@ ws.onmessage = ev => {
   } else if (msg.t === "kicked") {
     alert("Disconnected: " + msg.reason);
   } else if (msg.t === "state") {
-    names = msg.s.names;
-    prevSnap = snap;
-    const now = performance.now();
-    if (snapTime > 0) snapInterval = Math.min(80, Math.max(16, now - snapTime));
-    snapTime = now;
-    snap = msg.s;
-    if (msg.s.mode !== undefined) sessionMode = msg.s.mode;
-    if (msg.s.screen === "play") ensurePlayControl();
-    const me = msg.s.players[mySlot];
-    if (msg.s.screen === "play" && me?.present && !isSpectator(msg.s)) {
-      reconcile(pred, me.x, me.y, msg.s.room, me.downed, msg.s.ack ?? -1,
-                msg.s.ackX ?? me.x, msg.s.ackY ?? me.y);
-    }
-    for (const e of msg.s.events) handleEvent(e);
+    applyServerState(msg.s, msg.s.thoughts ?? null);
   } else if (msg.t === "full") {
     alert(msg.reason ?? "Server is full.");
   }
 };
-
-function handleEvent(e: GameEvent): void {
-  if (e.t === "sfx") playSfx(e.name);
-  else if (e.t === "burst") {
-    const col = new THREE.Color(e.color).getHex();
-    for (let i = 0; i < e.n; i++) {
-      const a = (i / e.n) * Math.PI * 2 + Math.random() * 0.5;
-      particles.push({
-        x: e.x / TILE, y: 0.4 + Math.random() * 0.4, z: e.y / TILE,
-        vx: Math.cos(a) * 0.05, vy: 0.04 + Math.random() * 0.05, vz: Math.sin(a) * 0.05,
-        life: 22 + Math.random() * 10, color: col,
-      });
-    }
-  }
 }
 
 // ------------------------------------------------------------------ input
 const state: Input = emptyInput();
 let inputSeq = 0;
 function sendInput(): void {
-  if (isSpectator(snap)) return;
-  if (ws.readyState === WebSocket.OPEN) {
+  if (isSpectator(snap) || replayMode) return;
+  if (wsLive()) {
     inputSeq++;
-    ws.send(JSON.stringify({ t: "input", s: state, seq: inputSeq }));
+    ws!.send(JSON.stringify({ t: "input", s: state, seq: inputSeq }));
     recordInput(pred, inputSeq, performance.now());
   }
 }
@@ -229,12 +264,12 @@ function setUrlRoom(on: boolean): void {
 }
 
 function menuSend(payload: Record<string, unknown>): void {
-  if (disconnected || ws.readyState !== WebSocket.OPEN) {
+  if (disconnected || !wsLive()) {
     menuFlash = "not connected — hard-refresh the page";
     menuFlashT = 240;
     return;
   }
-  ws.send(JSON.stringify(payload));
+  ws!.send(JSON.stringify(payload));
 }
 
 function menuKey(code: string): boolean {
@@ -275,20 +310,21 @@ if (copyBtn) {
 window.addEventListener("keydown", ev => {
   if (snap?.screen === "play") ensurePlayControl();
   ensureAudio();
+  if (replayMode && replayHandleKey(ev.code, replaySink)) { ev.preventDefault(); return; }
   if (menuKey(ev.code)) { ev.preventDefault(); return; }
   if (ev.code === "Escape" && mySlot === 0 && snap && snap.screen !== "menu") {
-    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
+    if (replayMode || disconnected || !wsLive()) return;
     resetMenu(menu);
     setUrlRoom(false);
-    ws.send(JSON.stringify({ t: "tomenu" }));
+    ws!.send(JSON.stringify({ t: "tomenu" }));
     ev.preventDefault();
     return;
   }
   if (ev.code === "KeyT") { showThought = !showThought; return; }
   if (ev.code === "KeyM") { music.muted = !music.muted; return; }
-  if ((ev.code === "Enter" || ev.code === "Space") && snap &&
+  if (!replayMode && (ev.code === "Enter" || ev.code === "Space") && snap &&
       (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
-    ws.send(JSON.stringify({ t: "start" }));
+    ws!.send(JSON.stringify({ t: "start" }));
     ev.preventDefault();
     return;
   }
@@ -314,16 +350,16 @@ window.addEventListener("keydown", ev => {
     }
     // belt-and-suspenders: START screens get a dedicated message too,
     // independent of the held-state input path
-    if (k === "st" && snap && (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
-      ws.send(JSON.stringify({ t: "start" }));
+    if (k === "st" && snap && !replayMode && (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
+      ws!.send(JSON.stringify({ t: "start" }));
     }
     ev.preventDefault();
   }
 });
 window.addEventListener("pointerdown", () => {
   ensureAudio();
-  if (snap && (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
-    ws.send(JSON.stringify({ t: "start" }));
+  if (!replayMode && snap && (snap.screen === "title" || snap.screen === "gameover" || snap.screen === "win")) {
+    ws!.send(JSON.stringify({ t: "start" }));
   }
 });
 window.addEventListener("keyup", ev => {
@@ -331,7 +367,7 @@ window.addEventListener("keyup", ev => {
   const k = KEYMAP[ev.code];
   if (k) { (state[k] as boolean) = false; sendInput(); ev.preventDefault(); }
 });
-setInterval(sendInput, 100);
+setInterval(() => { if (!replayMode) sendInput(); }, 100);
 
 const touchUI = document.getElementById("touch");
 if (touchUI && ("ontouchstart" in window || navigator.maxTouchPoints > 0)) {
@@ -394,10 +430,10 @@ function capturePlayKeys(ev: KeyboardEvent): void {
   if (snap?.screen !== "play") return;
   ensurePlayControl();
   if (ev.code === "Escape" && mySlot === 0) {
-    if (disconnected || ws.readyState !== WebSocket.OPEN) return;
+    if (replayMode || disconnected || !wsLive()) return;
     resetMenu(menu);
     setUrlRoom(false);
-    ws.send(JSON.stringify({ t: "tomenu" }));
+    ws!.send(JSON.stringify({ t: "tomenu" }));
     ev.preventDefault();
     ev.stopImmediatePropagation();
   }
@@ -1168,15 +1204,16 @@ function render(): void {
     syncChatPanel(chatEl, [], false);
     syncThoughtPanel(thoughtsEl, [], showThought, false);
     uictx.fillStyle = "#0d0c14"; uictx.fillRect(0, 0, W, H);
-    centerText([[disconnected ? "DISCONNECTED" : "CONNECTING...", 12,
-      disconnected ? "#e8384f" : "#9a93b8"]], 110);
-    if (disconnected) {
+    const banner = replayMode ? "LOADING REPLAY…" : (disconnected ? "DISCONNECTED" : "CONNECTING...");
+    centerText([[banner, 12, disconnected ? "#e8384f" : "#9a93b8"]], 110);
+    if (disconnected && !replayMode) {
       centerText([["connection lost — refresh to rejoin", 7, "#9a93b8"]], 130);
     }
     renderer.render(scene, camera);
     return;
   }
   const s = snap;
+  if (replayMode) replayOnFrame(replaySink, performance.now());
   music.mode = musicModeFor(s);
 
   // client prediction (same as 2D) — include carry slowdown when holding a downed mate
@@ -1435,7 +1472,7 @@ function render(): void {
     });
     drawHud(s);
   }
-  if (disconnected) {
+  if (disconnected && !replayMode) {
     // frozen last frame underneath — do not confuse with lag; the wire is dead
     uictx.fillStyle = "rgba(10,6,16,0.55)";
     uictx.fillRect(0, 0, W, H);
@@ -1452,6 +1489,15 @@ function render(): void {
   if (s.fade > 0) {
     uictx.fillStyle = `rgba(0,0,0,${s.fade})`;
     uictx.fillRect(0, 0, W, H);
+  }
+  if (replayMode) {
+    uictx.font = "7px monospace";
+    uictx.fillStyle = "rgba(8,6,16,0.82)";
+    const rl = replayOverlay();
+    const rw = uictx.measureText(rl).width;
+    uictx.fillRect(4, H - 14, rw + 8, 12);
+    uictx.fillStyle = "#ffcf8f";
+    uictx.fillText(rl, 8, H - 5);
   }
   drawScreens(s);
 }
